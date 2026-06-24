@@ -1,0 +1,214 @@
+:root {
+  --bg: #f6f7fb;
+  --card: rgba(255, 255, 255, 0.78);
+  --text: #171717;
+  --muted: #70707a;
+  --line: rgba(0, 0, 0, 0.08);
+  --accent: #111827;
+  --danger: #b42318;
+  --shadow: 0 20px 60px rgba(15, 23, 42, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(99, 102, 241, 0.16), transparent 32rem),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.12), transparent 28rem),
+    var(--bg);
+  color: var(--text);
+}
+
+.app {
+  width: min(920px, calc(100% - 32px));
+  margin: 48px auto;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  color: var(--muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+h1 {
+  font-size: clamp(36px, 8vw, 72px);
+  line-height: 0.95;
+  margin: 0;
+}
+
+h2 {
+  margin: 0 0 18px;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 16px 0 0;
+}
+
+.card {
+  background: var(--card);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 28px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.hidden {
+  display: none;
+}
+
+label {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+  border-radius: 18px;
+  padding: 14px 16px;
+  font: inherit;
+  color: var(--text);
+  outline: none;
+}
+
+textarea {
+  min-height: 130px;
+  resize: vertical;
+  border-radius: 22px;
+}
+
+input:focus,
+textarea:focus {
+  border-color: rgba(17, 24, 39, 0.38);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.row input {
+  flex: 1;
+}
+
+button {
+  border: none;
+  background: var(--accent);
+  color: white;
+  padding: 13px 18px;
+  border-radius: 999px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button.ghost {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.status,
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.list {
+  display: grid;
+  gap: 14px;
+}
+
+.note {
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 18px;
+}
+
+.note-content {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  margin-bottom: 14px;
+}
+
+.note-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag {
+  background: rgba(17, 24, 39, 0.06);
+  border-radius: 999px;
+  padding: 4px 9px;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 48px 12px;
+}
+
+@media (max-width: 640px) {
+  .app {
+    margin: 28px auto;
+  }
+
+  .hero,
+  .row,
+  .toolbar,
+  .note-meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  button {
+    width: 100%;
+  }
+}
