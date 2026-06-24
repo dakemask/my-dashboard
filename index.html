@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>碎片想法</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Thoughts</p>
+        <h1>碎片想法</h1>
+        <p class="subtitle">快速记录，随时搜索，数据同步到你的 GitHub 私有仓库。</p>
+      </div>
+      <button id="settingsBtn" class="ghost">设置</button>
+    </header>
+
+    <section id="settingsPanel" class="card hidden">
+      <h2>同步设置</h2>
+
+      <label>
+        GitHub 用户名
+        <input id="ownerInput" placeholder="例如 airuma2048" />
+      </label>
+
+      <label>
+        数据仓库名
+        <input id="repoInput" value="thought-data" />
+      </label>
+
+      <label>
+        分支
+        <input id="branchInput" value="main" />
+      </label>
+
+      <label>
+        数据文件路径
+        <input id="pathInput" value="data/thoughts.json" />
+      </label>
+
+      <label>
+        Fine-grained Token
+        <input id="tokenInput" type="password" placeholder="github_pat_..." />
+      </label>
+
+      <div class="row">
+        <button id="saveSettingsBtn">保存设置</button>
+        <button id="clearSettingsBtn" class="danger ghost">清除本机设置</button>
+      </div>
+
+      <p class="hint">
+        Token 只保存在当前浏览器。换浏览器或换设备时，需要重新填一次。
+      </p>
+    </section>
+
+    <section class="composer card">
+      <textarea id="thoughtInput" placeholder="写下一个碎片想法..."></textarea>
+      <div class="row">
+        <input id="tagInput" placeholder="标签，可选，例如 产品, 灵感, 生活" />
+        <button id="addBtn">保存想法</button>
+      </div>
+    </section>
+
+    <section class="toolbar">
+      <input id="searchInput" placeholder="搜索..." />
+      <button id="refreshBtn" class="ghost">刷新</button>
+    </section>
+
+    <p id="status" class="status"></p>
+
+    <section id="list" class="list"></section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
