@@ -4,23 +4,27 @@
 
 This repository is a personal dashboard for multiple small, user-owned tools. Each tool should live as a separate feature module while sharing the same dashboard entry page, build system, and deployment pipeline.
 
-The app is deployed to GitHub Pages. Source code stays in the repository; GitHub Actions runs a workflow that installs dependencies, builds the Vite output into `dist/`, and deploys that generated artifact to Pages. Do not commit `dist/`.
+The app is deployed to GitHub Pages. Source code stays in the repository; GitHub Actions runs a workflow that installs dependencies, builds the Vite output in GitHub Pages' temporary working directory, and deploys the generated artifact to Pages. The local `dist/` directory is only for local testing and is not uploaded to GitHub.
 
 Persistent private data is stored outside this app repository. Modules that need persistence should read and write JSON files in a user-owned private GitHub repository through the GitHub Contents API. This keeps the dashboard app deployable as static files while keeping personal data separate from the public Pages site.
 
 ## Development Principles
 
-Keep modules decoupled early. When logic starts mixing independent responsibilities, extract it before it becomes a large file problem. Common boundaries include UI rendering, browser storage, remote API access, data normalization, pure domain operations, and page-level orchestration.
+1. Keep modules decoupled early. When logic starts mixing independent responsibilities, extract it before it becomes a large file problem, and prefer small, typed modules. Common boundaries include UI rendering, browser storage, remote API access, data normalization, pure domain operations, and page-level orchestration.
 
-Ask before making important choices. If there are meaningful options, unclear requirements, user-visible behavior changes, deployment changes, public route changes, data format changes, or privacy/security tradeoffs, use the custom user-input tool before editing. Do not silently choose for the user in those cases.
+2. Ask before making important choices. If you encounter:
 
-Preserve public behavior unless the user explicitly asks to change it. Existing routes, localStorage keys, JSON data shapes, and deployment assumptions should be treated as compatibility surfaces.
+- User requirements that have several different solutions, where the different options significantly affect later real-world operations;
+- Unclear user requirements;
+- User requirements that need major project changes.
 
-Prefer small, typed modules. TypeScript types should describe persisted data, settings, API responses, and module contracts. Avoid `any` unless there is a clear boundary where unknown external data is being validated.
+Use the custom user-input tool before editing. Do not silently choose for the user in those cases.
 
-Use safe DOM patterns. Render user-provided content with `textContent` or explicit DOM nodes instead of HTML string templates.
+3. Preserve public behavior unless the user explicitly asks to change it. Existing routes, localStorage keys, JSON data shapes, and deployment assumptions should be treated as compatibility surfaces.
 
-Keep UI text consistent with the app. The current product UI is Chinese, so new user-facing copy should normally be Chinese unless the user asks otherwise.
+4. TypeScript types should describe persisted data, settings, API responses, and module contracts. Avoid `any` unless there is a clear boundary where unknown external data is being validated.
+
+5. Use safe DOM patterns. Render user-provided content with `textContent` or explicit DOM nodes instead of HTML string templates.
 
 ## Current Feature Modules
 
@@ -28,14 +32,7 @@ Keep UI text consistent with the app. The current product UI is Chinese, so new 
 
 Route: `/modules/thoughts/`
 
-This module lets the user quickly record short thoughts, attach optional tags, search locally in the loaded list, and sync the JSON data file to a private GitHub data repository.
-
-Current persistence behavior:
-
-- Settings are stored in the browser with existing `thought_*` localStorage keys.
-- The data file defaults to `data/thoughts.json` in the configured private repository.
-- The browser uses the user-provided fine-grained GitHub token to read and update that JSON file.
-- Older records should remain readable even if optional fields such as `tags` or `updatedAt` are missing.
+This module lets the user quickly record short thoughts, attach optional tags, and search locally in the loaded list.
 
 ## Architecture
 
@@ -101,15 +98,13 @@ The Vite `base` path is derived from `GITHUB_REPOSITORY` during Actions builds, 
 
 ## Private JSON Data Repository
 
-Private user data should not be stored in this dashboard repository. For modules that need persistence:
+Private user data is not stored in this dashboard repository. For modules that need persistence:
 
 - Store data as JSON files in a separate private GitHub repository.
 - Access those files from the browser through GitHub's Contents API.
 - Use a fine-grained token limited to the private data repository and Contents read/write access.
-- Store the token only in the user's browser settings. Never commit tokens, bake them into builds, or put them in GitHub Actions secrets for client-side use.
-- Treat the JSON format as a compatibility contract. If the format needs to change, ask the user first and provide a migration path or backward-compatible reader.
-
-This model provides privacy by separating public static app assets from private data. It does not make browser localStorage a secure vault; anyone with access to the user's browser profile may be able to read the token.
+- Store the token only in the user's browser settings.
+- Treat the JSON format as a compatibility contract. If the format needs to change, ask the user first.
 
 ## Checks And Testing
 
@@ -119,4 +114,4 @@ Use these commands for code-level verification:
 - `npm run build`: required before handing off code changes. This runs TypeScript checking and the production Vite build.
 - `npm run preview`: optional production preview only when the user explicitly asks for it.
 
-Do not start `npm run dev` unless the user explicitly asks. Browser-based runtime testing, layout review, and user acceptance testing are the user's responsibility. If a change needs manual verification, explain what the user should check instead of launching the dev server yourself.
+`npm run dev`, browser-based runtime testing, layout review, and user acceptance testing are the user's responsibility. Do not start the development server yourself.
