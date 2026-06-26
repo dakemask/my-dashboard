@@ -31,7 +31,7 @@ function setStatus(message) {
 function getSettings() {
   return {
     owner: localStorage.getItem("thought_owner") || "",
-    repo: localStorage.getItem("thought_repo") || "thought-data",
+    repo: localStorage.getItem("thought_repo") || "my-dashboard-data",
     branch: localStorage.getItem("thought_branch") || "main",
     path: localStorage.getItem("thought_path") || "data/thoughts.json",
     token: localStorage.getItem("thought_token") || "",
