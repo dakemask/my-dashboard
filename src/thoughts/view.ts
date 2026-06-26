@@ -1,5 +1,6 @@
 import { queryRequired } from "../shared/dom";
-import type { ThoughtNote, ThoughtSettings } from "./types";
+import type { PrivateDataSettings } from "../shared/privateData/types";
+import type { ThoughtNote } from "./types";
 
 export interface ThoughtsElements {
   settingsBtn: HTMLButtonElement;
@@ -45,7 +46,7 @@ export function setStatus(elements: ThoughtsElements, message = ""): void {
   elements.status.textContent = message;
 }
 
-export function fillSettingsForm(elements: ThoughtsElements, settings: ThoughtSettings): void {
+export function fillSettingsForm(elements: ThoughtsElements, settings: PrivateDataSettings): void {
   elements.ownerInput.value = settings.owner;
   elements.repoInput.value = settings.repo;
   elements.branchInput.value = settings.branch;
@@ -53,7 +54,7 @@ export function fillSettingsForm(elements: ThoughtsElements, settings: ThoughtSe
   elements.tokenInput.value = settings.token;
 }
 
-export function readSettingsForm(elements: ThoughtsElements): ThoughtSettings {
+export function readSettingsForm(elements: ThoughtsElements): PrivateDataSettings {
   return {
     owner: elements.ownerInput.value.trim(),
     repo: elements.repoInput.value.trim(),

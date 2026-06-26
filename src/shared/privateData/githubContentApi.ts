@@ -1,5 +1,5 @@
-import { base64ToText, textToBase64 } from "../shared/base64";
-import type { ThoughtSettings } from "./types";
+import { base64ToText, textToBase64 } from "../base64";
+import type { PrivateDataSettings } from "./types";
 
 interface GitHubContentResponse {
   sha: string;
@@ -12,7 +12,7 @@ interface GitHubUpdateResponse {
   };
 }
 
-interface UpdateFileInput {
+interface UpdateTextFileInput {
   message: string;
   text: string;
   sha: string | null;
@@ -28,12 +28,12 @@ export class GitHubApiError extends Error {
   }
 }
 
-export function buildContentsUrl(settings: ThoughtSettings): string {
+export function buildContentsUrl(settings: PrivateDataSettings): string {
   const path = encodeURIComponent(settings.path).replaceAll("%2F", "/");
   return `https://api.github.com/repos/${settings.owner}/${settings.repo}/contents/${path}`;
 }
 
-export async function readFile(settings: ThoughtSettings): Promise<{ sha: string; text: string }> {
+export async function readTextFile(settings: PrivateDataSettings): Promise<{ sha: string; text: string }> {
   const json = await githubFetch<GitHubContentResponse>(
     settings,
     `${buildContentsUrl(settings)}?ref=${encodeURIComponent(settings.branch)}`,
@@ -45,7 +45,7 @@ export async function readFile(settings: ThoughtSettings): Promise<{ sha: string
   };
 }
 
-export async function updateFile(settings: ThoughtSettings, input: UpdateFileInput): Promise<string> {
+export async function updateTextFile(settings: PrivateDataSettings, input: UpdateTextFileInput): Promise<string> {
   const body: {
     message: string;
     content: string;
@@ -70,7 +70,7 @@ export async function updateFile(settings: ThoughtSettings, input: UpdateFileInp
 }
 
 async function githubFetch<T>(
-  settings: ThoughtSettings,
+  settings: PrivateDataSettings,
   url: string,
   options: RequestInit = {},
 ): Promise<T> {

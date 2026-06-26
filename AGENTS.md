@@ -26,28 +26,52 @@ Use the custom user-input tool before editing. Do not silently choose for the us
 
 5. Use safe DOM patterns. Render user-provided content with `textContent` or explicit DOM nodes instead of HTML string templates.
 
-## Current Feature Modules
+## Project Architecture
+
+The app is a Vite multi-page TypeScript project. HTML files define stable public page shells, while TypeScript under `src/` provides behavior and styling imports.
+
+Important project paths:
+
+- `index.html`: dashboard home page shell.
+- `src/home/`: dashboard home page implementation.
+- `src/home/modules.ts`: registry of dashboard modules shown on the home page.
+- `src/shared/`: utilities that are small and genuinely shared across modules.
+- `src/shared/privateData/`: shared private GitHub repository settings, GitHub Contents API access, and JSON file persistence.
+- `vite.config.ts`: Vite build configuration and multi-page inputs.
+- `.github/workflows/pages.yml`: GitHub Pages deployment workflow.
+
+## Feature Modules
 
 ### Fragment Thoughts
 
 Route: `/modules/thoughts/`
 
-This module lets the user quickly record short thoughts, attach optional tags, and search locally in the loaded list.
+HTML shell: `modules/thoughts/index.html`
 
-## Architecture
+Source: `src/thoughts/`
 
-The app is a Vite multi-page TypeScript project. HTML files define stable public page shells, while TypeScript under `src/` provides behavior and styling imports.
+Purpose: quickly record short thoughts, attach optional tags, and search locally in the loaded list.
 
-Important paths:
+Responsibilities:
 
-- `index.html`: dashboard home page shell.
-- `modules/thoughts/index.html`: Fragment Thoughts page shell. Keep this route stable.
-- `src/home/`: dashboard home page implementation.
-- `src/home/modules.ts`: registry of dashboard modules shown on the home page.
-- `src/shared/`: utilities that are small and genuinely shared across modules.
-- `src/thoughts/`: Fragment Thoughts module implementation.
-- `vite.config.ts`: Vite build configuration and multi-page inputs.
-- `.github/workflows/pages.yml`: GitHub Pages deployment workflow.
+- `thoughtRepository.ts`: module JSON persistence, parsing, validation, and backward-compatible normalization.
+- `notes.ts`: pure thought operations such as create, update, delete, filter, sort, and parse.
+- `types.ts`: thought-specific persisted data and module state types.
+- `view.ts`: DOM lookup, rendering, and UI state updates.
+- `main.ts`: page controller, event wiring, and orchestration between the other layers.
+- `style.css`: module-specific presentation.
+
+Persistence:
+
+- Uses shared private JSON repository helpers under `src/shared/privateData/`.
+- Keeps thought-specific JSON compatibility and normalization local to this module.
+
+Compatibility:
+
+- Keep `/modules/thoughts/` stable.
+- Preserve existing localStorage keys and JSON data shapes unless explicitly changing them.
+
+## Adding A Feature Module
 
 When adding a new feature module, keep the same pattern:
 
@@ -57,7 +81,7 @@ When adding a new feature module, keep the same pattern:
 - Add the HTML entry to `vite.config.ts` so production builds include it.
 - Keep module-specific storage, API clients, data operations, rendering, and orchestration separated.
 
-## Code Responsibilities
+## Module Design Rules
 
 For feature modules, use clear responsibility layers rather than a single page script:
 
@@ -68,16 +92,7 @@ For feature modules, use clear responsibility layers rather than a single page s
 - View layer: DOM lookup, rendering, and UI state updates.
 - Page controller: event wiring and orchestration between the other layers.
 
-The thoughts module currently follows this structure:
-
-- `src/thoughts/settings.ts`
-- `src/thoughts/githubContentApi.ts`
-- `src/thoughts/thoughtRepository.ts`
-- `src/thoughts/notes.ts`
-- `src/thoughts/view.ts`
-- `src/thoughts/main.ts`
-
-Avoid importing view code into pure data modules, and avoid calling GitHub or localStorage APIs from rendering code.
+Avoid importing view code into pure data modules, and avoid calling GitHub or localStorage APIs from rendering code. Feature modules should keep their own JSON shape normalization local, while shared private-data modules handle repository settings, file transport, and generic JSON read/write behavior.
 
 ## GitHub Pages Deployment
 
@@ -105,6 +120,8 @@ Private user data is not stored in this dashboard repository. For modules that n
 - Use a fine-grained token limited to the private data repository and Contents read/write access.
 - Store the token only in the user's browser settings.
 - Treat the JSON format as a compatibility contract. If the format needs to change, ask the user first.
+
+Shared private-data persistence code belongs under `src/shared/privateData/`. Module-specific repositories should call the shared JSON file helpers and keep module-specific data normalization in the feature module.
 
 ## Checks And Testing
 

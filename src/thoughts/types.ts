@@ -1,11 +1,3 @@
-export interface ThoughtSettings {
-  owner: string;
-  repo: string;
-  branch: string;
-  path: string;
-  token: string;
-}
-
 export interface ThoughtNote {
   id: string;
   content: string;

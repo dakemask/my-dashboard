@@ -5,9 +5,15 @@ import {
   getVisibleNotes,
   parseTags,
 } from "./notes";
-import { clearSettings, hasCompleteSettings, loadSettings, saveSettings } from "./settings";
+import {
+  clearPrivateDataSettings,
+  hasCompletePrivateDataSettings,
+  loadPrivateDataSettings,
+  savePrivateDataSettings,
+} from "../shared/privateData/settings";
+import type { PrivateDataSettings } from "../shared/privateData/types";
 import { loadThoughtData, saveThoughtData } from "./thoughtRepository";
-import type { ThoughtSettings, ThoughtState } from "./types";
+import type { ThoughtState } from "./types";
 import {
   clearComposer,
   fillSettingsForm,
@@ -18,6 +24,10 @@ import {
 } from "./view";
 import "./style.css";
 
+const DEFAULT_THOUGHTS_DATA_SETTINGS: Partial<PrivateDataSettings> = {
+  path: "data/thoughts.json",
+};
+
 const elements = getThoughtsElements();
 let state: ThoughtState = {
   sha: null,
@@ -26,10 +36,14 @@ let state: ThoughtState = {
   },
 };
 
-function requireSettings(): ThoughtSettings | null {
+function loadSettings(): PrivateDataSettings {
+  return loadPrivateDataSettings(DEFAULT_THOUGHTS_DATA_SETTINGS);
+}
+
+function requireSettings(): PrivateDataSettings | null {
   const settings = loadSettings();
 
-  if (!hasCompleteSettings(settings)) {
+  if (!hasCompletePrivateDataSettings(settings)) {
     elements.settingsPanel.classList.remove("hidden");
     setStatus(elements, "请先完成同步设置。");
     return null;
@@ -123,7 +137,7 @@ elements.settingsBtn.addEventListener("click", () => {
 });
 
 elements.saveSettingsBtn.addEventListener("click", async () => {
-  saveSettings(readSettingsForm(elements));
+  savePrivateDataSettings(readSettingsForm(elements));
   setStatus(elements, "设置已保存。");
 
   try {
@@ -134,7 +148,7 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
 });
 
 elements.clearSettingsBtn.addEventListener("click", () => {
-  clearSettings();
+  clearPrivateDataSettings();
   fillSettingsForm(elements, loadSettings());
   setStatus(elements, "已清除当前浏览器里的设置。");
 });

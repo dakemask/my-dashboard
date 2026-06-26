@@ -1,41 +1,20 @@
-import { GitHubApiError, readFile, updateFile } from "./githubContentApi";
-import type { ThoughtData, ThoughtNote, ThoughtSettings } from "./types";
+import { loadJsonFile, saveJsonFile } from "../shared/privateData/jsonFileRepository";
+import type { LoadedJsonFile, PrivateDataSettings } from "../shared/privateData/types";
+import type { ThoughtData, ThoughtNote } from "./types";
 
 export async function loadThoughtData(
-  settings: ThoughtSettings,
-): Promise<{ data: ThoughtData; sha: string | null; created: boolean }> {
-  try {
-    const file = await readFile(settings);
-
-    return {
-      data: normalizeThoughtData(JSON.parse(file.text)),
-      sha: file.sha,
-      created: false,
-    };
-  } catch (error) {
-    if (error instanceof GitHubApiError && error.status === 404) {
-      return {
-        data: createEmptyData(),
-        sha: null,
-        created: true,
-      };
-    }
-
-    throw error;
-  }
+  settings: PrivateDataSettings,
+): Promise<LoadedJsonFile<ThoughtData>> {
+  return loadJsonFile(settings, normalizeThoughtData, createEmptyData);
 }
 
 export async function saveThoughtData(
-  settings: ThoughtSettings,
+  settings: PrivateDataSettings,
   data: ThoughtData,
   sha: string | null,
   message: string,
 ): Promise<string> {
-  return updateFile(settings, {
-    message,
-    sha,
-    text: JSON.stringify(data, null, 2),
-  });
+  return saveJsonFile(settings, data, sha, message);
 }
 
 function normalizeThoughtData(value: unknown): ThoughtData {
@@ -44,7 +23,7 @@ function normalizeThoughtData(value: unknown): ThoughtData {
   }
 
   return {
-    notes: value.notes.map(normalizeThoughtNote).filter((note) => note !== null),
+    notes: value.notes.map(normalizeThoughtNote).filter((note): note is ThoughtNote => note !== null),
   };
 }
 
