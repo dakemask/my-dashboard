@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>思维导图</title>
+  </head>
+  <body>
+    <main class="mind-map-app">
+      <header class="topbar">
+        <div class="title-block">
+          <a class="home-link" href="../../">首页</a>
+          <h1>思维导图</h1>
+        </div>
+
+        <div class="toolbar" aria-label="思维导图工具栏">
+          <button id="addNodeBtn" type="button">新建框</button>
+          <button id="connectBtn" type="button" class="secondary" aria-pressed="false">
+            画箭头
+          </button>
+          <button id="saveBtn" type="button" class="secondary">保存</button>
+          <button id="refreshBtn" type="button" class="secondary">刷新</button>
+          <button id="settingsBtn" type="button" class="secondary">设置</button>
+        </div>
+      </header>
+
+      <section id="settingsPanel" class="settings-panel hidden">
+        <label>
+          GitHub 用户名
+          <input id="ownerInput" />
+        </label>
+
+        <label>
+          数据仓库名
+          <input id="repoInput" value="my-dashboard-data" />
+        </label>
+
+        <label>
+          分支
+          <input id="branchInput" value="main" />
+        </label>
+
+        <label>
+          数据文件路径
+          <input id="pathInput" value="data/mind-map.json" />
+        </label>
+
+        <label>
+          Fine-grained Token
+          <input id="tokenInput" type="password" placeholder="github_pat_..." />
+        </label>
+
+        <div class="settings-actions">
+          <button id="saveSettingsBtn" type="button">保存设置</button>
+          <button id="clearSettingsBtn" type="button" class="danger secondary">
+            清除本机设置
+          </button>
+        </div>
+      </section>
+
+      <section class="workspace" aria-label="思维导图画布">
+        <div id="canvasHost" class="canvas-host"></div>
+      </section>
+
+      <p id="status" class="status" aria-live="polite"></p>
+
+      <nav id="contextMenu" class="context-menu hidden" aria-label="对象菜单">
+        <button id="contextDeleteBtn" type="button" class="danger">删除</button>
+      </nav>
+    </main>
+
+    <script type="module" src="/src/mind-map/main.ts"></script>
+  </body>
+</html>

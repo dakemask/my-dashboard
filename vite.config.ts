@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         home: resolve(projectRoot, "index.html"),
         thoughts: resolve(projectRoot, "modules/thoughts/index.html"),
+        mindMap: resolve(projectRoot, "modules/mind-map/index.html"),
       },
     },
   },
