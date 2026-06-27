@@ -6,6 +6,8 @@ import {
   deleteArrow as deleteArrowFromData,
   deleteNode as deleteNodeFromData,
   findNode,
+  DEFAULT_NODE_HEIGHT,
+  DEFAULT_NODE_WIDTH,
   updateNodeFrame,
   updateNodeText,
 } from "./mindMap";
@@ -18,7 +20,7 @@ import {
 } from "../shared/privateData/settings";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import { loadMindMapData, saveMindMapData } from "./mindMapRepository";
-import { fitNodeFrameToText } from "./textLayout";
+import { fitNewNodeFrameToText, fitNodeFrameHeightToText } from "./textLayout";
 import type { MindMapEndpoint, MindMapSelection, MindMapState, NodeFrame } from "./types";
 import {
   fillSettingsForm,
@@ -57,6 +59,8 @@ let state: MindMapState = {
   },
 };
 let connectMode = false;
+let undoStack: MindMapState["data"][] = [];
+let redoStack: MindMapState["data"][] = [];
 
 function loadSettings(): PrivateDataSettings {
   return loadPrivateDataSettings(DEFAULT_MIND_MAP_DATA_SETTINGS, SETTINGS_STORAGE_OPTIONS);
@@ -66,8 +70,7 @@ function requireSettings(): PrivateDataSettings | null {
   const settings = loadSettings();
 
   if (!hasCompletePrivateDataSettings(settings)) {
-    elements.settingsPanel.classList.remove("hidden");
-    setStatus(elements, "请先完成同步设置。");
+    setStatus(elements, "未配置同步。可以先编辑画布，保存前再点设置填写 GitHub 信息。");
     return null;
   }
 
@@ -103,6 +106,8 @@ async function refreshMindMap(): Promise<void> {
     dirty: false,
     selection: null,
   };
+  undoStack = [];
+  redoStack = [];
 
   setStatus(
     elements,
@@ -132,13 +137,14 @@ async function persistMindMap(): Promise<void> {
 function addNode(): void {
   const position = canvas.getNewNodePosition();
   const node = createMindMapNode(position.x, position.y);
-  state.data = addNodeToData(state.data, node);
-  state.selection = {
-    type: "node",
-    id: node.id,
-  };
-  markDirty("已新增框，尚未保存。");
-  render();
+  commitChange(
+    addNodeToData(state.data, node),
+    {
+      type: "node",
+      id: node.id,
+    },
+    "已新增框，尚未保存。",
+  );
   requestAnimationFrame(() => canvas.editNodeText(node.id));
 }
 
@@ -149,13 +155,20 @@ function changeNodeFrame(id: string, frame: NodeFrame): void {
     return;
   }
 
-  state.data = updateNodeFrame(state.data, id, fitNodeFrameToText(frame, node.text));
-  state.selection = {
-    type: "node",
-    id,
-  };
-  markDirty("已调整框，尚未保存。");
-  render();
+  const nextFrame = fitNodeFrameHeightToText(frame, node.text);
+
+  if (isSameFrame(node, nextFrame)) {
+    return;
+  }
+
+  commitChange(
+    updateNodeFrame(state.data, id, nextFrame),
+    {
+      type: "node",
+      id,
+    },
+    "已调整框，尚未保存。",
+  );
 }
 
 function changeNodeText(id: string, text: string): void {
@@ -165,22 +178,34 @@ function changeNodeText(id: string, text: string): void {
     return;
   }
 
-  const frame = fitNodeFrameToText(
-    {
-      x: node.x,
-      y: node.y,
-      width: node.width,
-      height: node.height,
-    },
-    text,
-  );
-  state.data = updateNodeText(state.data, id, text, frame);
-  state.selection = {
-    type: "node",
-    id,
+  const frameBase = {
+    x: node.x,
+    y: node.y,
+    width: node.width,
+    height: node.height,
   };
-  markDirty("已编辑文字，尚未保存。");
-  render();
+  const frame = isDefaultEmptyNode(node)
+    ? fitNewNodeFrameToText(frameBase, text)
+    : fitNodeFrameHeightToText(frameBase, text);
+
+  if (
+    node.text === text &&
+    node.x === frame.x &&
+    node.y === frame.y &&
+    node.width === frame.width &&
+    node.height === frame.height
+  ) {
+    return;
+  }
+
+  commitChange(
+    updateNodeText(state.data, id, text, frame),
+    {
+      type: "node",
+      id,
+    },
+    "已编辑文字，尚未保存。",
+  );
 }
 
 function createArrow(from: MindMapEndpoint, to: MindMapEndpoint): void {
@@ -190,13 +215,15 @@ function createArrow(from: MindMapEndpoint, to: MindMapEndpoint): void {
     return;
   }
 
-  state.data = next;
-  state.selection = {
-    type: "arrow",
-    id: state.data.arrows[state.data.arrows.length - 1].id,
-  };
-  markDirty("已新增箭头，尚未保存。");
-  render();
+  setConnectModeEnabled(false);
+  commitChange(
+    next,
+    {
+      type: "arrow",
+      id: next.arrows[next.arrows.length - 1].id,
+    },
+    "已新增箭头，尚未保存。",
+  );
 }
 
 function deleteSelection(): void {
@@ -205,19 +232,20 @@ function deleteSelection(): void {
   }
 
   if (state.selection.type === "node") {
-    state.data = deleteNodeFromData(state.data, state.selection.id);
-    markDirty("已删除框，尚未保存。");
+    commitChange(deleteNodeFromData(state.data, state.selection.id), null, "已删除框，尚未保存。");
   } else {
-    state.data = deleteArrowFromData(state.data, state.selection.id);
-    markDirty("已删除箭头，尚未保存。");
+    commitChange(deleteArrowFromData(state.data, state.selection.id), null, "已删除箭头，尚未保存。");
   }
 
-  state.selection = null;
   hideContextMenu(elements);
-  render();
 }
 
 function setSelection(selection: MindMapSelection): void {
+  if (isSameSelection(state.selection, selection)) {
+    hideContextMenu(elements);
+    return;
+  }
+
   state.selection = selection;
   hideContextMenu(elements);
   render();
@@ -235,6 +263,70 @@ function openContextMenu(selection: MindMapSelection, x: number, y: number): voi
 function markDirty(message: string): void {
   state.dirty = true;
   setStatus(elements, message);
+}
+
+function commitChange(data: MindMapState["data"], selection: MindMapSelection, message: string): void {
+  undoStack.push(state.data);
+  redoStack = [];
+  state.data = data;
+  state.selection = selection;
+  markDirty(message);
+  render();
+}
+
+function undo(): void {
+  const previous = undoStack.pop();
+
+  if (!previous) {
+    return;
+  }
+
+  redoStack.push(state.data);
+  state.data = previous;
+  state.selection = null;
+  markDirty("已撤销，尚未保存。");
+  render();
+}
+
+function redo(): void {
+  const next = redoStack.pop();
+
+  if (!next) {
+    return;
+  }
+
+  undoStack.push(state.data);
+  state.data = next;
+  state.selection = null;
+  markDirty("已重做，尚未保存。");
+  render();
+}
+
+function setConnectModeEnabled(enabled: boolean): void {
+  connectMode = enabled;
+  setConnectMode(elements, connectMode);
+  canvas.setConnectMode(connectMode);
+}
+
+function isSameSelection(current: MindMapSelection, next: MindMapSelection): boolean {
+  return current?.type === next?.type && current?.id === next?.id;
+}
+
+function isDefaultEmptyNode(node: NodeFrame & { text: string }): boolean {
+  return (
+    node.text.trim().length === 0 &&
+    node.width === DEFAULT_NODE_WIDTH &&
+    node.height === DEFAULT_NODE_HEIGHT
+  );
+}
+
+function isSameFrame(current: NodeFrame, next: NodeFrame): boolean {
+  return (
+    current.x === next.x &&
+    current.y === next.y &&
+    current.width === next.width &&
+    current.height === next.height
+  );
 }
 
 function getErrorMessage(error: unknown): string {
@@ -274,9 +366,7 @@ elements.clearSettingsBtn.addEventListener("click", () => {
 elements.addNodeBtn.addEventListener("click", addNode);
 
 elements.connectBtn.addEventListener("click", () => {
-  connectMode = !connectMode;
-  setConnectMode(elements, connectMode);
-  canvas.setConnectMode(connectMode);
+  setConnectModeEnabled(!connectMode);
 });
 
 elements.saveBtn.addEventListener("click", async () => {
@@ -295,6 +385,10 @@ elements.refreshBtn.addEventListener("click", async () => {
   }
 });
 
+elements.resetBtn.addEventListener("click", () => {
+  canvas.resetView();
+});
+
 elements.contextDeleteBtn.addEventListener("click", deleteSelection);
 
 document.addEventListener("click", (event) => {
@@ -304,7 +398,57 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (isEditableTarget(event.target) || (event.key !== "Delete" && event.key !== "Backspace")) {
+  const key = event.key.toLowerCase();
+  const commandKey = event.ctrlKey || event.metaKey;
+
+  if (commandKey && key === "s") {
+    event.preventDefault();
+    canvas.commitActiveEdit();
+    void persistMindMap().catch((error) => {
+      setStatus(elements, getErrorMessage(error));
+    });
+    return;
+  }
+
+  if (isEditableTarget(event.target)) {
+    return;
+  }
+
+  if (commandKey && key === "z") {
+    event.preventDefault();
+    if (event.shiftKey) {
+      redo();
+    } else {
+      undo();
+    }
+    return;
+  }
+
+  if (commandKey && key === "y") {
+    event.preventDefault();
+    redo();
+    return;
+  }
+
+  if (event.altKey && !commandKey && key === "1") {
+    event.preventDefault();
+    addNode();
+    return;
+  }
+
+  if (event.altKey && !commandKey && key === "2") {
+    event.preventDefault();
+    setConnectModeEnabled(true);
+    return;
+  }
+
+  if (event.key === "Enter" && state.selection?.type === "node") {
+    event.preventDefault();
+    canvas.editNodeText(state.selection.id);
+    return;
+  }
+
+  if (event.key !== "Delete" && event.key !== "Backspace") {
     return;
   }
 
@@ -323,7 +467,7 @@ window.addEventListener("beforeunload", (event) => {
 });
 
 fillSettingsForm(elements, loadSettings());
-setConnectMode(elements, connectMode);
+setConnectModeEnabled(connectMode);
 render();
 void refreshMindMap().catch((error) => {
   setStatus(elements, getErrorMessage(error));

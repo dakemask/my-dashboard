@@ -7,6 +7,8 @@
   </head>
   <body>
     <main class="mind-map-app">
+      <div id="canvasHost" class="canvas-host" aria-label="思维导图画布"></div>
+
       <header class="topbar">
         <div class="title-block">
           <a class="home-link" href="../../">首页</a>
@@ -14,13 +16,31 @@
         </div>
 
         <div class="toolbar" aria-label="思维导图工具栏">
-          <button id="addNodeBtn" type="button">新建框</button>
-          <button id="connectBtn" type="button" class="secondary" aria-pressed="false">
-            画箭头
+          <button id="addNodeBtn" type="button" class="icon-button" aria-label="新建框" title="新建框 Alt+1">
+            <span class="material-symbols-rounded" aria-hidden="true">activity_zone</span>
           </button>
-          <button id="saveBtn" type="button" class="secondary">保存</button>
-          <button id="refreshBtn" type="button" class="secondary">刷新</button>
-          <button id="settingsBtn" type="button" class="secondary">设置</button>
+          <button
+            id="connectBtn"
+            type="button"
+            class="icon-button secondary"
+            aria-label="画箭头"
+            title="画箭头 Alt+2"
+            aria-pressed="false"
+          >
+            <span class="material-symbols-rounded" aria-hidden="true">arrow_selector_tool</span>
+          </button>
+          <button id="saveBtn" type="button" class="icon-button secondary" aria-label="保存" title="保存 Ctrl+S">
+            <span class="material-symbols-rounded" aria-hidden="true">save</span>
+          </button>
+          <button id="refreshBtn" type="button" class="icon-button secondary" aria-label="刷新" title="刷新">
+            <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
+          </button>
+          <button id="resetBtn" type="button" class="icon-button secondary" aria-label="复位" title="复位">
+            <span class="material-symbols-rounded" aria-hidden="true">recenter</span>
+          </button>
+          <button id="settingsBtn" type="button" class="icon-button secondary" aria-label="设置" title="设置">
+            <span class="material-symbols-rounded" aria-hidden="true">settings</span>
+          </button>
         </div>
       </header>
 
@@ -56,10 +76,6 @@
             清除本机设置
           </button>
         </div>
-      </section>
-
-      <section class="workspace" aria-label="思维导图画布">
-        <div id="canvasHost" class="canvas-host"></div>
       </section>
 
       <p id="status" class="status" aria-live="polite"></p>

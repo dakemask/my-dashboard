@@ -15,6 +15,7 @@ export interface MindMapElements {
   connectBtn: HTMLButtonElement;
   saveBtn: HTMLButtonElement;
   refreshBtn: HTMLButtonElement;
+  resetBtn: HTMLButtonElement;
   status: HTMLElement;
   canvasHost: HTMLDivElement;
   contextMenu: HTMLElement;
@@ -36,6 +37,7 @@ export function getMindMapElements(): MindMapElements {
     connectBtn: queryRequired("#connectBtn"),
     saveBtn: queryRequired("#saveBtn"),
     refreshBtn: queryRequired("#refreshBtn"),
+    resetBtn: queryRequired("#resetBtn"),
     status: queryRequired("#status"),
     canvasHost: queryRequired("#canvasHost"),
     contextMenu: queryRequired("#contextMenu"),
