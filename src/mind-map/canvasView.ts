@@ -34,7 +34,13 @@ const NODE_MOVE_HIT_NAME = "node-move-hit";
 const ARROW_NAME = "mind-arrow";
 const CONNECTOR_NAME = "connector-handle";
 const CONNECTOR_SIDES: ConnectorSide[] = ["top", "right", "bottom", "left"];
-const MOVE_HIT_SIZE = 11;
+const MOVE_HIT_SIZE = 10;
+const NODE_STROKE = "#2f3338";
+const SELECTED_STROKE = "#2563eb";
+const SELECTED_SHADOW = "rgba(37, 99, 235, 0.1)";
+const UNSELECTED_STROKE_WIDTH = 0.75;
+const SELECTED_STROKE_WIDTH = 1.25;
+const SELECTED_SHADOW_BLUR = 5;
 const GRID_SIZE = 24;
 const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.6;
@@ -48,6 +54,7 @@ interface TextEditSession {
   group: Konva.Group;
   textarea: HTMLTextAreaElement;
   textNode: Konva.Text | null;
+  originalText: string;
   originalFrame: NodeFrame;
   autoWidthOnInput: boolean;
   close: (commit: boolean) => void;
@@ -98,6 +105,8 @@ export class MindMapCanvas {
   private editingNodeId: string | null = null;
   private editSession: TextEditSession | null = null;
   private textSelectionDrag: TextSelectionDrag | null = null;
+  private suppressEditorBlur = false;
+  private suppressNextStageClick = false;
   private movingNode: NodeMoveSession | null = null;
   private isPanning = false;
   private lastPanPoint: { x: number; y: number } | null = null;
@@ -119,10 +128,11 @@ export class MindMapCanvas {
       rotateEnabled: false,
       keepRatio: false,
       ignoreStroke: true,
-      borderStroke: "#2563eb",
-      anchorStroke: "#2563eb",
+      borderStroke: "rgba(37, 99, 235, 0.74)",
+      anchorStroke: "rgba(37, 99, 235, 0.8)",
       anchorFill: "#ffffff",
-      anchorSize: 9,
+      anchorSize: 7,
+      anchorStrokeWidth: 1,
       enabledAnchors: [
         "top-left",
         "top-center",
@@ -277,9 +287,14 @@ export class MindMapCanvas {
     this.closeActiveEditor(true);
     this.cancelPendingConnection();
 
+    this.selection = {
+      type: "node",
+      id,
+    };
+    this.nodeGroups.forEach((nodeGroup, nodeId) => this.applyNodeSelectionStyle(nodeGroup, nodeId === id));
+
     const textNode = group.findOne(`.${NODE_TEXT_NAME}`);
     const typedTextNode = textNode instanceof Konva.Text ? textNode : null;
-    typedTextNode?.hide();
     this.editingNodeId = id;
     this.updateTransformer();
     this.nodeLayer.draw();
@@ -287,9 +302,30 @@ export class MindMapCanvas {
     const textarea = document.createElement("textarea");
     textarea.className = "node-text-editor";
     textarea.value = node.text;
+    textarea.spellcheck = false;
+    textarea.autocomplete = "off";
+    textarea.autocapitalize = "off";
     document.body.append(textarea);
 
     let closed = false;
+    const handleEditorMouseDown = (event: MouseEvent): void => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      event.preventDefault();
+      textarea.focus({
+        preventScroll: true,
+      });
+      this.setEditorSelectionFromClientPoint(session, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      this.startTextSelectionDrag(session, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+    };
     const finish = (commit: boolean): void => {
       if (closed) {
         return;
@@ -298,18 +334,20 @@ export class MindMapCanvas {
       closed = true;
       textarea.removeEventListener("blur", commitOnBlur);
       textarea.removeEventListener("input", previewInput);
+      textarea.removeEventListener("mousedown", handleEditorMouseDown);
       this.stopTextSelectionDrag();
       textarea.remove();
       this.editSession = null;
       this.editingNodeId = null;
+      this.suppressEditorBlur = false;
 
       if (commit) {
         typedTextNode?.text(textarea.value);
       } else {
+        typedTextNode?.text(session.originalText);
         this.applyGroupSize(group, session.originalFrame.width, session.originalFrame.height);
       }
 
-      typedTextNode?.show();
       this.updateTransformer();
       this.nodeLayer.draw();
 
@@ -321,13 +359,30 @@ export class MindMapCanvas {
         });
       }
     };
-    const commitOnBlur = (): void => finish(true);
+    const commitOnBlur = (): void => {
+      if (this.textSelectionDrag || this.suppressEditorBlur) {
+        requestAnimationFrame(() => {
+          this.suppressEditorBlur = false;
+          if (this.editSession !== session) {
+            return;
+          }
+
+          textarea.focus({
+            preventScroll: true,
+          });
+        });
+        return;
+      }
+
+      finish(true);
+    };
     const previewInput = (): void => this.previewEditorText(session);
     const session: TextEditSession = {
       id,
       group,
       textarea,
       textNode: typedTextNode,
+      originalText: node.text,
       originalFrame: this.readGroupFrame(group),
       autoWidthOnInput:
         node.text.trim().length === 0 &&
@@ -341,6 +396,7 @@ export class MindMapCanvas {
 
     textarea.addEventListener("blur", commitOnBlur);
     textarea.addEventListener("input", previewInput);
+    textarea.addEventListener("mousedown", handleEditorMouseDown);
     textarea.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -396,12 +452,12 @@ export class MindMapCanvas {
       width: node.width,
       height: node.height,
       fill: "#ffffff",
-      stroke: selected ? "#2563eb" : "#111827",
-      strokeWidth: selected ? 2 : 1,
+      stroke: selected ? SELECTED_STROKE : NODE_STROKE,
+      strokeWidth: selected ? SELECTED_STROKE_WIDTH : UNSELECTED_STROKE_WIDTH,
       cornerRadius: 0,
       name: NODE_RECT_NAME,
-      shadowColor: selected ? "rgba(37, 99, 235, 0.18)" : "transparent",
-      shadowBlur: selected ? 10 : 0,
+      shadowColor: selected ? SELECTED_SHADOW : "transparent",
+      shadowBlur: selected ? SELECTED_SHADOW_BLUR : 0,
     });
     const text = new Konva.Text({
       x: TEXT_PADDING,
@@ -418,10 +474,10 @@ export class MindMapCanvas {
       name: NODE_TEXT_NAME,
     });
     const textHit = new Konva.Rect({
-      x: MOVE_HIT_SIZE,
-      y: MOVE_HIT_SIZE,
-      width: Math.max(1, node.width - MOVE_HIT_SIZE * 2),
-      height: Math.max(1, node.height - MOVE_HIT_SIZE * 2),
+      x: TEXT_PADDING,
+      y: TEXT_PADDING,
+      width: Math.max(1, node.width - TEXT_PADDING * 2),
+      height: Math.max(1, node.height - TEXT_PADDING * 2),
       fill: "rgba(255, 255, 255, 0.01)",
       name: NODE_TEXT_HIT_NAME,
     });
@@ -608,11 +664,11 @@ export class MindMapCanvas {
 
     if (textHit instanceof Konva.Rect) {
       textHit.position({
-        x: MOVE_HIT_SIZE,
-        y: MOVE_HIT_SIZE,
+        x: TEXT_PADDING,
+        y: TEXT_PADDING,
       });
-      textHit.width(Math.max(1, width - MOVE_HIT_SIZE * 2));
-      textHit.height(Math.max(1, height - MOVE_HIT_SIZE * 2));
+      textHit.width(Math.max(1, width - TEXT_PADDING * 2));
+      textHit.height(Math.max(1, height - TEXT_PADDING * 2));
     }
 
     group.find(`.${NODE_MOVE_HIT_NAME}`).forEach((hit) => {
@@ -620,6 +676,19 @@ export class MindMapCanvas {
         applyMoveHitRectFrame(hit, width, height);
       }
     });
+  }
+
+  private applyNodeSelectionStyle(group: Konva.Group, selected: boolean): void {
+    const rect = group.findOne(`.${NODE_RECT_NAME}`);
+
+    if (!(rect instanceof Konva.Rect)) {
+      return;
+    }
+
+    rect.stroke(selected ? SELECTED_STROKE : NODE_STROKE);
+    rect.strokeWidth(selected ? SELECTED_STROKE_WIDTH : UNSELECTED_STROKE_WIDTH);
+    rect.shadowColor(selected ? SELECTED_SHADOW : "transparent");
+    rect.shadowBlur(selected ? SELECTED_SHADOW_BLUR : 0);
   }
 
   private startNodeMove(id: string, group: Konva.Group): void {
@@ -682,8 +751,10 @@ export class MindMapCanvas {
   }
 
   private previewEditorText(session: TextEditSession): void {
+    session.textNode?.text(session.textarea.value);
     const frame = this.getEditorPreviewFrame(session);
     this.applyGroupSize(session.group, frame.width, frame.height);
+    this.transformer.forceUpdate();
     this.positionTextEditor(session);
     this.syncConnectionsFromShapes();
   }
@@ -706,12 +777,14 @@ export class MindMapCanvas {
     const stagePosition = this.stage.position();
     const frame = this.readGroupFrame(session.group);
     const textarea = session.textarea;
+    const textWidth = Math.max(1, frame.width - TEXT_PADDING * 2);
+    const textHeight = Math.max(1, frame.height - TEXT_PADDING * 2);
 
-    textarea.style.left = `${stageBox.left + stagePosition.x + frame.x * scale}px`;
-    textarea.style.top = `${stageBox.top + stagePosition.y + frame.y * scale}px`;
-    textarea.style.width = `${Math.max(MIN_NODE_WIDTH, frame.width) * scale}px`;
-    textarea.style.height = `${Math.max(MIN_NODE_HEIGHT, frame.height) * scale}px`;
-    textarea.style.padding = `${TEXT_PADDING * scale}px`;
+    textarea.style.left = `${stageBox.left + stagePosition.x + (frame.x + TEXT_PADDING) * scale}px`;
+    textarea.style.top = `${stageBox.top + stagePosition.y + (frame.y + TEXT_PADDING) * scale}px`;
+    textarea.style.width = `${textWidth * scale}px`;
+    textarea.style.height = `${textHeight * scale}px`;
+    textarea.style.padding = "0";
     textarea.style.font = getCanvasTextFont(scale);
     textarea.style.fontFamily = TEXT_FONT_FAMILY;
     textarea.style.fontSize = `${TEXT_FONT_SIZE * scale}px`;
@@ -776,16 +849,23 @@ export class MindMapCanvas {
     const up = (event: MouseEvent): void => {
       event.preventDefault();
       move(event);
+      this.suppressEditorBlur = true;
+      this.suppressNextStageClick = true;
       this.stopTextSelectionDrag();
+      window.setTimeout(() => {
+        this.suppressEditorBlur = false;
+        this.suppressNextStageClick = false;
+      }, 120);
     };
 
     this.textSelectionDrag = {
       move,
       up,
     };
-    document.addEventListener("mousemove", move);
+    document.addEventListener("mousemove", move, true);
     document.addEventListener("mouseup", up, {
       once: true,
+      capture: true,
     });
   }
 
@@ -794,8 +874,8 @@ export class MindMapCanvas {
       return;
     }
 
-    document.removeEventListener("mousemove", this.textSelectionDrag.move);
-    document.removeEventListener("mouseup", this.textSelectionDrag.up);
+    document.removeEventListener("mousemove", this.textSelectionDrag.move, true);
+    document.removeEventListener("mouseup", this.textSelectionDrag.up, true);
     this.textSelectionDrag = null;
   }
 
@@ -885,7 +965,7 @@ export class MindMapCanvas {
   }
 
   private updateTransformer(): void {
-    if (this.editingNodeId || this.selection?.type !== "node") {
+    if (this.selection?.type !== "node") {
       this.transformer.nodes([]);
       this.uiLayer.batchDraw();
       return;
@@ -898,6 +978,11 @@ export class MindMapCanvas {
 
   private handleStageClick(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
     if (this.pendingConnection || event.target !== this.stage) {
+      return;
+    }
+
+    if (this.suppressNextStageClick) {
+      this.suppressNextStageClick = false;
       return;
     }
 

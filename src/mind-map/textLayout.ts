@@ -1,7 +1,7 @@
 import { DEFAULT_NODE_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from "./mindMap";
 import type { NodeFrame } from "./types";
 
-export const TEXT_PADDING = 14;
+export const TEXT_PADDING = 10;
 export const TEXT_FONT_SIZE = 24;
 export const TEXT_LINE_HEIGHT = 1.28;
 export const TEXT_FONT_FAMILY =
