@@ -197,7 +197,7 @@ input:focus {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
-.canvas-host {
+.map-host {
   position: fixed;
   inset: 0;
   z-index: 0;
@@ -217,8 +217,235 @@ input:focus {
   touch-action: none;
 }
 
-.canvas-host.connect-mode {
+.map-host.connect-mode {
   cursor: crosshair;
+}
+
+.map-host.panning {
+  cursor: grabbing;
+}
+
+.mind-map-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mind-map-arrows {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mind-map-arrow {
+  pointer-events: visibleStroke;
+}
+
+.mind-map-arrow-line {
+  stroke: #475569;
+  stroke-linecap: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.mind-map-arrow-hit {
+  stroke: transparent;
+  stroke-linecap: round;
+  stroke-width: 14;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.mind-map-arrow.selected .mind-map-arrow-line {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.mind-map-node-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+}
+
+.mind-map-node {
+  position: absolute;
+  overflow: visible;
+  border: 1px solid rgba(71, 85, 105, 0.38);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  cursor: move;
+}
+
+.mind-map-node.selected,
+.mind-map-node.editing {
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
+}
+
+.mind-map-node-text {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  width: calc(100% - 16px);
+  min-height: calc(100% - 12px);
+  overflow: visible;
+  outline: none;
+  color: var(--text);
+  background: transparent;
+  cursor: text;
+  font-size: 15px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mind-map-node-text:focus {
+  outline: none;
+}
+
+.mind-map-handle,
+.mind-map-connector {
+  position: absolute;
+  z-index: 3;
+  display: none;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+.mind-map-handle {
+  width: 8px;
+  height: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.65);
+  background: #ffffff;
+}
+
+.mind-map-node.selected .mind-map-handle,
+.mind-map-node.editing .mind-map-handle {
+  display: block;
+}
+
+.mind-map-handle:hover {
+  border-color: var(--accent-strong);
+  background: #ffffff;
+}
+
+.mind-map-handle-n {
+  top: -4px;
+  left: calc(50% - 4px);
+  cursor: ns-resize;
+}
+
+.mind-map-handle-ne {
+  top: -4px;
+  right: -4px;
+  cursor: nesw-resize;
+}
+
+.mind-map-handle-e {
+  top: calc(50% - 4px);
+  right: -4px;
+  cursor: ew-resize;
+}
+
+.mind-map-handle-se {
+  right: -4px;
+  bottom: -4px;
+  cursor: nwse-resize;
+}
+
+.mind-map-handle-s {
+  bottom: -4px;
+  left: calc(50% - 4px);
+  cursor: ns-resize;
+}
+
+.mind-map-handle-sw {
+  bottom: -4px;
+  left: -4px;
+  cursor: nesw-resize;
+}
+
+.mind-map-handle-w {
+  top: calc(50% - 4px);
+  left: -4px;
+  cursor: ew-resize;
+}
+
+.mind-map-handle-nw {
+  top: -4px;
+  left: -4px;
+  cursor: nwse-resize;
+}
+
+.mind-map-connector {
+  width: 9px;
+  height: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.94);
+  background: #8b95a1;
+  box-shadow: 0 0 0 1px rgba(71, 85, 105, 0.24);
+  cursor: crosshair;
+}
+
+.map-host.connect-mode .mind-map-connector {
+  display: block;
+}
+
+.mind-map-connector:hover,
+.mind-map-connector.pending {
+  border-color: #ffffff;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.mind-map-connector-top {
+  top: -5px;
+  left: calc(50% - 4.5px);
+}
+
+.mind-map-connector-right {
+  top: calc(50% - 4.5px);
+  right: -5px;
+}
+
+.mind-map-connector-bottom {
+  bottom: -5px;
+  left: calc(50% - 4.5px);
+}
+
+.mind-map-connector-left {
+  top: calc(50% - 4.5px);
+  left: -5px;
+}
+
+.mind-map-text-measure {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  z-index: -1;
+  box-sizing: border-box;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  color: transparent;
+  pointer-events: none;
 }
 
 .status {
@@ -260,34 +487,6 @@ input:focus {
 .context-menu button:hover {
   border-color: rgba(180, 35, 24, 0.18);
   background: #fff1f0;
-}
-
-.node-text-editor {
-  position: fixed;
-  z-index: 30;
-  display: block;
-  appearance: none;
-  box-sizing: border-box;
-  margin: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: 0;
-  outline: none;
-  box-shadow: none;
-  color: transparent;
-  caret-color: #111827;
-  background: transparent;
-  letter-spacing: 0;
-  resize: none;
-  text-align: left;
-  -webkit-text-fill-color: transparent;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.node-text-editor::selection {
-  color: transparent;
-  background: rgba(37, 99, 235, 0.22);
 }
 
 @media (max-width: 900px) {

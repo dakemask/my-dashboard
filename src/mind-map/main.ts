@@ -6,12 +6,10 @@ import {
   deleteArrow as deleteArrowFromData,
   deleteNode as deleteNodeFromData,
   findNode,
-  DEFAULT_NODE_HEIGHT,
-  DEFAULT_NODE_WIDTH,
   updateNodeFrame,
   updateNodeText,
 } from "./mindMap";
-import { MindMapCanvas } from "./canvasView";
+import { MindMapView } from "./domSvgMapView";
 import {
   clearPrivateDataSettings,
   hasCompletePrivateDataSettings,
@@ -20,7 +18,6 @@ import {
 } from "../shared/privateData/settings";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import { loadMindMapData, saveMindMapData } from "./mindMapRepository";
-import { fitNewNodeFrameToText, fitNodeFrameHeightToText } from "./textLayout";
 import type { MindMapEndpoint, MindMapSelection, MindMapState, NodeFrame } from "./types";
 import {
   fillSettingsForm,
@@ -41,7 +38,7 @@ const SETTINGS_STORAGE_OPTIONS = {
 };
 
 const elements = getMindMapElements();
-const canvas = new MindMapCanvas(elements.canvasHost, {
+const mapView = new MindMapView(elements.mapHost, {
   onSelectionChange: setSelection,
   onNodeFrameChange: changeNodeFrame,
   onNodeTextChange: changeNodeText,
@@ -78,7 +75,7 @@ function requireSettings(): PrivateDataSettings | null {
 }
 
 function render(): void {
-  canvas.render(state.data, state.selection);
+  mapView.render(state.data, state.selection);
 }
 
 async function refreshMindMap(): Promise<void> {
@@ -135,7 +132,7 @@ async function persistMindMap(): Promise<void> {
 }
 
 function addNode(): void {
-  const position = canvas.getNewNodePosition();
+  const position = mapView.getNewNodePosition();
   const node = createMindMapNode(position.x, position.y);
   commitChange(
     addNodeToData(state.data, node),
@@ -145,7 +142,7 @@ function addNode(): void {
     },
     "已新增框，尚未保存。",
   );
-  requestAnimationFrame(() => canvas.editNodeText(node.id));
+  requestAnimationFrame(() => mapView.editNodeText(node.id));
 }
 
 function changeNodeFrame(id: string, frame: NodeFrame): void {
@@ -155,14 +152,12 @@ function changeNodeFrame(id: string, frame: NodeFrame): void {
     return;
   }
 
-  const nextFrame = fitNodeFrameHeightToText(frame, node.text);
-
-  if (isSameFrame(node, nextFrame)) {
+  if (isSameFrame(node, frame)) {
     return;
   }
 
   commitChange(
-    updateNodeFrame(state.data, id, nextFrame),
+    updateNodeFrame(state.data, id, frame),
     {
       type: "node",
       id,
@@ -171,30 +166,14 @@ function changeNodeFrame(id: string, frame: NodeFrame): void {
   );
 }
 
-function changeNodeText(id: string, text: string): void {
+function changeNodeText(id: string, text: string, frame?: NodeFrame): void {
   const node = findNode(state.data, id);
 
   if (!node) {
     return;
   }
 
-  const frameBase = {
-    x: node.x,
-    y: node.y,
-    width: node.width,
-    height: node.height,
-  };
-  const frame = isDefaultEmptyNode(node)
-    ? fitNewNodeFrameToText(frameBase, text)
-    : fitNodeFrameHeightToText(frameBase, text);
-
-  if (
-    node.text === text &&
-    node.x === frame.x &&
-    node.y === frame.y &&
-    node.width === frame.width &&
-    node.height === frame.height
-  ) {
+  if (node.text === text && (!frame || isSameFrame(node, frame))) {
     return;
   }
 
@@ -305,19 +284,11 @@ function redo(): void {
 function setConnectModeEnabled(enabled: boolean): void {
   connectMode = enabled;
   setConnectMode(elements, connectMode);
-  canvas.setConnectMode(connectMode);
+  mapView.setConnectMode(connectMode);
 }
 
 function isSameSelection(current: MindMapSelection, next: MindMapSelection): boolean {
   return current?.type === next?.type && current?.id === next?.id;
-}
-
-function isDefaultEmptyNode(node: NodeFrame & { text: string }): boolean {
-  return (
-    node.text.trim().length === 0 &&
-    node.width === DEFAULT_NODE_WIDTH &&
-    node.height === DEFAULT_NODE_HEIGHT
-  );
 }
 
 function isSameFrame(current: NodeFrame, next: NodeFrame): boolean {
@@ -334,7 +305,11 @@ function getErrorMessage(error: unknown): string {
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
 }
 
 elements.settingsBtn.addEventListener("click", () => {
@@ -386,7 +361,7 @@ elements.refreshBtn.addEventListener("click", async () => {
 });
 
 elements.resetBtn.addEventListener("click", () => {
-  canvas.resetView();
+  mapView.resetView();
 });
 
 elements.contextDeleteBtn.addEventListener("click", deleteSelection);
@@ -403,7 +378,7 @@ document.addEventListener("keydown", (event) => {
 
   if (commandKey && key === "s") {
     event.preventDefault();
-    canvas.commitActiveEdit();
+    mapView.commitActiveEdit();
     void persistMindMap().catch((error) => {
       setStatus(elements, getErrorMessage(error));
     });
@@ -444,7 +419,7 @@ document.addEventListener("keydown", (event) => {
 
   if (event.key === "Enter" && state.selection?.type === "node") {
     event.preventDefault();
-    canvas.editNodeText(state.selection.id);
+    mapView.editNodeText(state.selection.id);
     return;
   }
 
