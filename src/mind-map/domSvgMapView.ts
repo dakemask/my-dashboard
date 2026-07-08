@@ -231,6 +231,7 @@ export class MindMapView {
     this.host.removeEventListener("wheel", this.handleWheel);
     this.removeDragListeners();
     this.removePanListeners();
+    this.setResizeCursor(null);
     this.nodeElements.clear();
     this.arrowElements.clear();
     this.host.textContent = "";
@@ -316,10 +317,16 @@ export class MindMapView {
     const frame = drag.kind === "move" ? moveFrame(drag.startFrame, dx, dy) : resizeFrame(drag.startFrame, dx, dy, drag.handle);
     const element = this.nodeElements.get(drag.nodeId);
 
+    const wasMoved = drag.moved;
+
     drag.currentFrame = frame;
     drag.moved ||= Math.abs(event.clientX - drag.startClientX) > POINTER_MOVE_EPSILON;
     drag.moved ||= Math.abs(event.clientY - drag.startClientY) > POINTER_MOVE_EPSILON;
     this.frameOverrides.set(drag.nodeId, frame);
+
+    if (drag.kind === "resize" && !wasMoved && drag.moved) {
+      this.updateNodeSelectionClasses();
+    }
 
     if (element) {
       this.applyNodeFrame(element, frame);
@@ -344,6 +351,7 @@ export class MindMapView {
     this.frameOverrides.delete(drag.nodeId);
     this.activeDrag = null;
     this.removeDragListeners();
+    this.setResizeCursor(null);
     this.clearTextFocusAndSelection();
     this.updateNodeSelectionClasses();
 
@@ -415,7 +423,6 @@ export class MindMapView {
     textElement.spellcheck = false;
 
     textElement.addEventListener("pointerdown", (event) => this.handleTextPointerDown(event, id));
-    textElement.addEventListener("dblclick", (event) => this.handleTextDoubleClick(event, id));
     textElement.addEventListener("focus", () => this.beginTextEdit(id, false));
     textElement.addEventListener("input", () => this.updateEditingPreview(id));
     textElement.addEventListener("paste", this.handleTextPaste);
@@ -423,10 +430,18 @@ export class MindMapView {
     textElement.addEventListener("blur", () => this.handleTextBlur(id));
     textElement.addEventListener("contextmenu", (event) => this.handleTextContextMenu(event, id));
 
-    nodeElement.addEventListener("pointerdown", (event) => this.handleNodePointerDown(event, id));
     nodeElement.addEventListener("contextmenu", (event) => this.handleNodeContextMenu(event, id));
 
     nodeElement.append(textElement);
+
+    for (const side of CONNECTOR_SIDES) {
+      const borderHit = document.createElement("div");
+
+      borderHit.className = `mind-map-border-hit mind-map-border-hit-${side}`;
+      borderHit.setAttribute("aria-hidden", "true");
+      borderHit.addEventListener("pointerdown", (event) => this.handleNodePointerDown(event, id));
+      nodeElement.append(borderHit);
+    }
 
     for (const handle of RESIZE_HANDLES) {
       const handleElement = document.createElement("button");
@@ -543,12 +558,13 @@ export class MindMapView {
     for (const [id, element] of this.nodeElements) {
       const selected = this.selection?.type === "node" && this.selection.id === id;
       const editing = this.activeEdit?.id === id;
-      const dragging = this.activeDrag?.nodeId === id;
+      const resizing =
+        this.activeDrag?.nodeId === id && this.activeDrag.kind === "resize" && this.activeDrag.moved;
       const textElement = element.querySelector<HTMLElement>(".mind-map-node-text");
 
       element.classList.toggle("selected", selected);
       element.classList.toggle("editing", editing);
-      element.classList.toggle("dragging", dragging);
+      element.classList.toggle("resizing", resizing);
 
       if (textElement) {
         setTextEditingEnabled(textElement, editing);
@@ -598,30 +614,8 @@ export class MindMapView {
       return;
     }
 
-    if (this.activeEdit?.id === id) {
-      event.stopPropagation();
-      return;
-    }
-
-    event.preventDefault();
     event.stopPropagation();
-    this.commitActiveEdit();
-    this.clearTextFocusAndSelection();
-    this.callbacks.onSelectionChange({
-      type: "node",
-      id,
-    });
-    this.startNodeDrag(event, id, "move");
-  }
-
-  private handleTextDoubleClick(event: MouseEvent, id: string): void {
-    if (this.connectMode) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    this.beginTextEdit(id, true);
+    this.beginTextEdit(id, false);
   }
 
   private handleTextKeyDown(event: KeyboardEvent, id: string): void {
@@ -931,6 +925,7 @@ export class MindMapView {
     };
     this.clearTextFocusAndSelection();
     this.updateNodeSelectionClasses();
+    this.setResizeCursor(kind === "resize" ? handle ?? null : null);
     element.setPointerCapture(event.pointerId);
     window.addEventListener("pointermove", this.handleDragPointerMove);
     window.addEventListener("pointerup", this.handleDragPointerUp);
@@ -963,6 +958,12 @@ export class MindMapView {
     window.removeEventListener("pointermove", this.handlePanPointerMove);
     window.removeEventListener("pointerup", this.handlePanPointerUp);
     window.removeEventListener("pointercancel", this.handlePanPointerUp);
+  }
+
+  private setResizeCursor(handle: ResizeHandle | null): void {
+    for (const resizeHandle of RESIZE_HANDLES) {
+      this.host.classList.toggle(`resize-cursor-${resizeHandle}`, handle === resizeHandle);
+    }
   }
 
   private applyViewportTransform(): void {

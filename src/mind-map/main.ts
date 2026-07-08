@@ -390,11 +390,6 @@ document.addEventListener("keydown", (event) => {
   }
 
   if (isMindMapTextTarget(event.target)) {
-    if (event.key === "Delete" && state.selection?.type === "node") {
-      event.preventDefault();
-      deleteSelection();
-    }
-
     return;
   }
 
