@@ -304,12 +304,12 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function isEditableTarget(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  );
+function isFormEditableTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+function isMindMapTextTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest(".mind-map-node-text"));
 }
 
 elements.settingsBtn.addEventListener("click", () => {
@@ -385,7 +385,16 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
-  if (isEditableTarget(event.target)) {
+  if (isFormEditableTarget(event.target)) {
+    return;
+  }
+
+  if (isMindMapTextTarget(event.target)) {
+    if (event.key === "Delete" && state.selection?.type === "node") {
+      event.preventDefault();
+      deleteSelection();
+    }
+
     return;
   }
 

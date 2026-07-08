@@ -243,6 +243,7 @@ export class MindMapView {
 
     event.preventDefault();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
     this.callbacks.onSelectionChange(null);
     this.startPan(event);
   };
@@ -254,6 +255,7 @@ export class MindMapView {
 
     event.preventDefault();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
     this.callbacks.onContextMenu(null, event.clientX, event.clientY);
   };
 
@@ -342,6 +344,8 @@ export class MindMapView {
     this.frameOverrides.delete(drag.nodeId);
     this.activeDrag = null;
     this.removeDragListeners();
+    this.clearTextFocusAndSelection();
+    this.updateNodeSelectionClasses();
 
     if (element) {
       this.applyNodeFrame(element, frame);
@@ -405,12 +409,13 @@ export class MindMapView {
 
     const textElement = document.createElement("div");
     textElement.className = "mind-map-node-text";
-    textElement.setAttribute("contenteditable", "plaintext-only");
+    setTextEditingEnabled(textElement, false);
     textElement.setAttribute("role", "textbox");
     textElement.setAttribute("aria-multiline", "true");
     textElement.spellcheck = false;
 
     textElement.addEventListener("pointerdown", (event) => this.handleTextPointerDown(event, id));
+    textElement.addEventListener("dblclick", (event) => this.handleTextDoubleClick(event, id));
     textElement.addEventListener("focus", () => this.beginTextEdit(id, false));
     textElement.addEventListener("input", () => this.updateEditingPreview(id));
     textElement.addEventListener("paste", this.handleTextPaste);
@@ -487,6 +492,7 @@ export class MindMapView {
       event.preventDefault();
       event.stopPropagation();
       this.commitActiveEdit();
+      this.clearTextFocusAndSelection();
       this.callbacks.onSelectionChange({
         type: "arrow",
         id,
@@ -497,6 +503,7 @@ export class MindMapView {
       event.preventDefault();
       event.stopPropagation();
       this.commitActiveEdit();
+      this.clearTextFocusAndSelection();
       this.callbacks.onContextMenu(
         {
           type: "arrow",
@@ -536,9 +543,16 @@ export class MindMapView {
     for (const [id, element] of this.nodeElements) {
       const selected = this.selection?.type === "node" && this.selection.id === id;
       const editing = this.activeEdit?.id === id;
+      const dragging = this.activeDrag?.nodeId === id;
+      const textElement = element.querySelector<HTMLElement>(".mind-map-node-text");
 
       element.classList.toggle("selected", selected);
       element.classList.toggle("editing", editing);
+      element.classList.toggle("dragging", dragging);
+
+      if (textElement) {
+        setTextEditingEnabled(textElement, editing);
+      }
     }
 
     for (const [id, elements] of this.arrowElements) {
@@ -584,8 +598,30 @@ export class MindMapView {
       return;
     }
 
+    if (this.activeEdit?.id === id) {
+      event.stopPropagation();
+      return;
+    }
+
+    event.preventDefault();
     event.stopPropagation();
-    this.beginTextEdit(id, false);
+    this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
+    this.callbacks.onSelectionChange({
+      type: "node",
+      id,
+    });
+    this.startNodeDrag(event, id, "move");
+  }
+
+  private handleTextDoubleClick(event: MouseEvent, id: string): void {
+    if (this.connectMode) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    this.beginTextEdit(id, true);
   }
 
   private handleTextKeyDown(event: KeyboardEvent, id: string): void {
@@ -630,6 +666,7 @@ export class MindMapView {
     event.preventDefault();
     event.stopPropagation();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
     this.callbacks.onSelectionChange({
       type: "node",
       id,
@@ -645,6 +682,7 @@ export class MindMapView {
     event.preventDefault();
     event.stopPropagation();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
     this.callbacks.onContextMenu(
       {
         type: "node",
@@ -663,6 +701,7 @@ export class MindMapView {
     event.preventDefault();
     event.stopPropagation();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
     this.callbacks.onSelectionChange({
       type: "node",
       id,
@@ -687,6 +726,7 @@ export class MindMapView {
     event.preventDefault();
     event.stopPropagation();
     this.commitActiveEdit();
+    this.clearTextFocusAndSelection();
 
     const endpoint = {
       nodeId,
@@ -889,6 +929,8 @@ export class MindMapView {
       moved: false,
       handle,
     };
+    this.clearTextFocusAndSelection();
+    this.updateNodeSelectionClasses();
     element.setPointerCapture(event.pointerId);
     window.addEventListener("pointermove", this.handleDragPointerMove);
     window.addEventListener("pointerup", this.handleDragPointerUp);
@@ -981,6 +1023,20 @@ export class MindMapView {
       Boolean(target.closest(".mind-map-node-text"))
     );
   }
+
+  private clearTextFocusAndSelection(): void {
+    const activeElement = document.activeElement;
+
+    if (
+      activeElement instanceof HTMLElement &&
+      this.host.contains(activeElement) &&
+      Boolean(activeElement.closest(".mind-map-node-text"))
+    ) {
+      activeElement.blur();
+    }
+
+    window.getSelection()?.removeAllRanges();
+  }
 }
 
 function getNodeFrame(node: MindMapNode): NodeFrame {
@@ -1068,6 +1124,11 @@ function setLinePoints(line: SVGLineElement, from: Point, to: Point): void {
 
 function getEditableText(element: HTMLElement): string {
   return element.textContent ?? "";
+}
+
+function setTextEditingEnabled(element: HTMLElement, enabled: boolean): void {
+  element.setAttribute("contenteditable", enabled ? "plaintext-only" : "false");
+  element.setAttribute("aria-readonly", String(!enabled));
 }
 
 function insertPlainText(text: string): void {

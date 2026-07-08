@@ -289,10 +289,22 @@ input:focus {
   cursor: move;
 }
 
-.mind-map-node.selected,
-.mind-map-node.editing {
+.mind-map-node.selected {
   border-color: rgba(37, 99, 235, 0.72);
   box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
+}
+
+.mind-map-node.dragging {
+  border-color: rgba(29, 78, 216, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(37, 99, 235, 0.28),
+    0 8px 18px rgba(15, 23, 42, 0.12);
+  cursor: grabbing;
+}
+
+.mind-map-node.editing {
+  border-color: rgba(5, 150, 105, 0.8);
+  box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.2);
 }
 
 .mind-map-node-text {
@@ -305,14 +317,19 @@ input:focus {
   outline: none;
   color: var(--text);
   background: transparent;
-  cursor: text;
+  cursor: inherit;
   font-size: 15px;
   line-height: 1.35;
   letter-spacing: 0;
   overflow-wrap: anywhere;
-  user-select: text;
+  user-select: none;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.mind-map-node.editing .mind-map-node-text {
+  cursor: text;
+  user-select: text;
 }
 
 .mind-map-node-text:focus {
