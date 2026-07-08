@@ -1,4 +1,18 @@
-import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from "./mindMap";
+import { DEFAULT_NODE_WIDTH } from "./mindMap";
+import {
+  RESIZE_HANDLES,
+  VISUAL_MIN_SIZE,
+  clamp,
+  getEndpointPoint,
+  getNodeFrame,
+  isSameFrame,
+  modulo,
+  moveFrame,
+  resizeFrame,
+  type Point,
+  type ResizeHandle,
+} from "./nodeFrame";
+import { TextBoxLayout, type TextEditSnapshot } from "./textBoxLayout";
 import type {
   ConnectorSide,
   MindMapArrow,
@@ -17,19 +31,14 @@ interface MapViewCallbacks {
   onContextMenu: (selection: MindMapSelection, x: number, y: number) => void;
 }
 
-type ResizeHandle = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
-
 interface ArrowElements {
   group: SVGGElement;
   line: SVGLineElement;
   hitLine: SVGLineElement;
 }
 
-interface ActiveEdit {
+interface ActiveEdit extends TextEditSnapshot {
   id: string;
-  autoWidth: boolean;
-  originalFrame: NodeFrame;
-  originalText: string;
 }
 
 interface DragState {
@@ -51,21 +60,11 @@ interface PanState {
   startOffset: Point;
 }
 
-interface Point {
-  x: number;
-  y: number;
-}
-
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CONNECTOR_SIDES: ConnectorSide[] = ["top", "right", "bottom", "left"];
-const RESIZE_HANDLES: ResizeHandle[] = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
 const GRID_SIZE = 24;
 const MAX_SCALE = 2.5;
 const MIN_SCALE = 0.25;
-// Nodes use border-box sizing; the text area loses 8px on each side plus the 1px border on each side.
-const NODE_PADDING_X = 18;
-const NODE_PADDING_Y = 14;
-const VISUAL_MIN_SIZE = 2;
 const POINTER_MOVE_EPSILON = 2;
 
 export class MindMapView {
@@ -76,6 +75,7 @@ export class MindMapView {
   private readonly nodeElements = new Map<string, HTMLDivElement>();
   private readonly arrowElements = new Map<string, ArrowElements>();
   private readonly frameOverrides = new Map<string, NodeFrame>();
+  private readonly textLayout: TextBoxLayout;
 
   private activeDrag: DragState | null = null;
   private activeEdit: ActiveEdit | null = null;
@@ -98,6 +98,7 @@ export class MindMapView {
     private readonly callbacks: MapViewCallbacks,
   ) {
     this.markerId = `mind-map-arrow-head-${Math.random().toString(16).slice(2)}`;
+    this.textLayout = new TextBoxLayout(this.host);
     this.host.textContent = "";
     this.host.dataset.mapImplementation = "dom-svg";
 
@@ -208,7 +209,7 @@ export class MindMapView {
 
     const text = getEditableText(textElement);
     const baseFrame = this.frameOverrides.get(edit.id) ?? getNodeFrame(node);
-    const frame = this.getTextFittedFrame(textElement, text, baseFrame, edit);
+    const frame = this.textLayout.getTextFittedFrame(textElement, text, baseFrame, edit);
     const textChanged = text !== node.text;
     const frameChanged = !isSameFrame(frame, getNodeFrame(node));
 
@@ -347,7 +348,13 @@ export class MindMapView {
     const element = this.nodeElements.get(drag.nodeId);
     const textElement = element?.querySelector<HTMLElement>(".mind-map-node-text") ?? null;
     const node = this.getNode(drag.nodeId);
-    const frame = this.getCommittedDragFrame(drag, textElement, node);
+    const frame = this.textLayout.getCommittedDragFrame({
+      kind: drag.kind,
+      frame: drag.currentFrame,
+      handle: drag.handle,
+      textElement,
+      node,
+    });
     const changed = node ? !isSameFrame(frame, getNodeFrame(node)) : false;
 
     this.frameOverrides.delete(drag.nodeId);
@@ -815,191 +822,16 @@ export class MindMapView {
       return;
     }
 
-    const frame = this.getTextFittedFrame(textElement, getEditableText(textElement), getNodeFrame(node), this.activeEdit);
+    const frame = this.textLayout.getTextFittedFrame(
+      textElement,
+      getEditableText(textElement),
+      getNodeFrame(node),
+      this.activeEdit,
+    );
 
     this.frameOverrides.set(id, frame);
     this.applyNodeFrame(element, frame);
     this.updateArrowPositions();
-  }
-
-  private getTextFittedFrame(
-    textElement: HTMLElement,
-    text: string,
-    baseFrame: NodeFrame,
-    edit: ActiveEdit,
-  ): NodeFrame {
-    const minimumSize = this.measureMinimumNodeSize(textElement);
-    const naturalWidth = this.measureTextMaxLineWidth(textElement, text);
-    const shouldFitInitialWidth =
-      edit.originalText.length === 0 &&
-      edit.originalFrame.width === DEFAULT_NODE_WIDTH &&
-      edit.originalFrame.height === DEFAULT_NODE_HEIGHT &&
-      text.length > 0;
-    const width = edit.autoWidth
-      ? naturalWidth
-      : shouldFitInitialWidth
-        ? clamp(naturalWidth, minimumSize.width, DEFAULT_NODE_WIDTH)
-        : Math.max(minimumSize.width, Math.round(baseFrame.width));
-    const height = Math.max(minimumSize.height, this.measureTextHeight(textElement, text, width));
-
-    return {
-      x: Math.round(baseFrame.x),
-      y: Math.round(baseFrame.y),
-      width,
-      height,
-    };
-  }
-
-  private getCommittedDragFrame(
-    drag: DragState,
-    textElement: HTMLElement | null,
-    node: MindMapNode | null,
-  ): NodeFrame {
-    const handle = drag.handle;
-    const frame = drag.currentFrame;
-    const fixedRight = frame.x + frame.width;
-    const fixedBottom = frame.y + frame.height;
-    const minimumSize = textElement
-      ? this.measureMinimumNodeSize(textElement)
-      : {
-          width: MIN_NODE_WIDTH,
-          height: MIN_NODE_HEIGHT,
-        };
-    let width = Math.max(minimumSize.width, Math.round(frame.width));
-    let autoWidth = node?.autoWidth ?? false;
-
-    if (drag.kind === "resize" && textElement) {
-      const text = getEditableText(textElement);
-      const naturalWidth = this.measureTextMaxLineWidth(textElement, text);
-
-      if (resizeChangesWidth(handle)) {
-        if (width > naturalWidth) {
-          width = naturalWidth;
-          autoWidth = true;
-        } else {
-          autoWidth = false;
-        }
-      } else if (autoWidth) {
-        width = naturalWidth;
-      }
-
-      width = this.tightenSubCharacterWidthRemainder(textElement, text, width, minimumSize.width);
-    }
-
-    const height =
-      drag.kind === "resize" && textElement
-        ? Math.max(minimumSize.height, this.measureTextHeight(textElement, getEditableText(textElement), width))
-        : Math.max(minimumSize.height, Math.round(frame.height));
-    const nextFrame: NodeFrame = {
-      x: Math.round(handle?.includes("w") ? fixedRight - width : frame.x),
-      y: Math.round(handle?.includes("n") ? fixedBottom - height : frame.y),
-      width,
-      height,
-    };
-
-    if (drag.kind === "resize") {
-      nextFrame.autoWidth = autoWidth;
-    }
-
-    return nextFrame;
-  }
-
-  private measureTextMaxLineWidth(textElement: HTMLElement, text: string): number {
-    const minimumSize = this.measureMinimumNodeSize(textElement);
-
-    return Math.max(minimumSize.width, this.measureNaturalTextWidth(textElement, text));
-  }
-
-  private tightenSubCharacterWidthRemainder(
-    textElement: HTMLElement,
-    text: string,
-    width: number,
-    minimumWidth: number,
-  ): number {
-    const fittedWidth = this.measureWrappedTextMaxLineWidth(textElement, text, width);
-    const remainingWidth = width - fittedWidth;
-    const characterWidth = Math.max(1, this.measureNaturalTextWidth(textElement, "字") - NODE_PADDING_X);
-
-    if (remainingWidth > 0 && remainingWidth < characterWidth) {
-      return Math.max(minimumWidth, fittedWidth);
-    }
-
-    return width;
-  }
-
-  private measureMinimumNodeSize(textElement: HTMLElement): { width: number; height: number } {
-    const width = Math.max(MIN_NODE_WIDTH, this.measureNaturalTextWidth(textElement, "字"));
-    const height = Math.max(MIN_NODE_HEIGHT, this.measureTextHeight(textElement, "字", width));
-
-    return {
-      width,
-      height,
-    };
-  }
-
-  private measureNaturalTextWidth(textElement: HTMLElement, text: string): number {
-    const clone = this.createTextMeasureElement(textElement, text.length > 0 ? text : "M");
-
-    clone.style.display = "inline-block";
-    clone.style.whiteSpace = "pre";
-    clone.style.width = "auto";
-    clone.style.maxWidth = "none";
-    this.host.append(clone);
-
-    const width = Math.ceil(clone.getBoundingClientRect().width + NODE_PADDING_X);
-
-    clone.remove();
-    return width;
-  }
-
-  private measureWrappedTextMaxLineWidth(textElement: HTMLElement, text: string, width: number): number {
-    const clone = this.createTextMeasureElement(textElement, text.length > 0 ? text : "M");
-
-    clone.style.width = `${Math.max(1, width - NODE_PADDING_X)}px`;
-    clone.style.whiteSpace = "pre-wrap";
-    this.host.append(clone);
-
-    const range = document.createRange();
-    range.selectNodeContents(clone);
-
-    let maxLineWidth = 0;
-
-    for (const rect of range.getClientRects()) {
-      maxLineWidth = Math.max(maxLineWidth, rect.width);
-    }
-
-    range.detach();
-    clone.remove();
-
-    return Math.ceil(maxLineWidth + NODE_PADDING_X);
-  }
-
-  private measureTextHeight(textElement: HTMLElement, text: string, width: number): number {
-    const clone = this.createTextMeasureElement(textElement, text.length > 0 ? text : "M");
-
-    clone.style.width = `${Math.max(1, width - NODE_PADDING_X)}px`;
-    clone.style.whiteSpace = "pre-wrap";
-    this.host.append(clone);
-
-    const height = Math.ceil(clone.scrollHeight + NODE_PADDING_Y);
-
-    clone.remove();
-    return height;
-  }
-
-  private createTextMeasureElement(source: HTMLElement, text: string): HTMLDivElement {
-    const style = getComputedStyle(source);
-    const clone = document.createElement("div");
-
-    clone.className = "mind-map-text-measure";
-    clone.textContent = text;
-    clone.style.font = style.font;
-    clone.style.lineHeight = style.lineHeight;
-    clone.style.letterSpacing = style.letterSpacing;
-    clone.style.overflowWrap = style.overflowWrap;
-    clone.style.wordBreak = style.wordBreak;
-
-    return clone;
   }
 
   private startNodeDrag(event: PointerEvent, id: string, kind: DragState["kind"], handle?: ResizeHandle): void {
@@ -1138,83 +970,6 @@ export class MindMapView {
   }
 }
 
-function getNodeFrame(node: MindMapNode): NodeFrame {
-  return {
-    x: node.x,
-    y: node.y,
-    width: node.width,
-    height: node.height,
-    autoWidth: node.autoWidth,
-  };
-}
-
-function moveFrame(frame: NodeFrame, dx: number, dy: number): NodeFrame {
-  return {
-    ...frame,
-    x: frame.x + dx,
-    y: frame.y + dy,
-  };
-}
-
-function resizeFrame(frame: NodeFrame, dx: number, dy: number, handle: ResizeHandle | undefined): NodeFrame {
-  if (!handle) {
-    return frame;
-  }
-
-  const next = {
-    ...frame,
-  };
-
-  if (handle.includes("e")) {
-    next.width = Math.max(VISUAL_MIN_SIZE, frame.width + dx);
-  }
-
-  if (handle.includes("s")) {
-    next.height = Math.max(VISUAL_MIN_SIZE, frame.height + dy);
-  }
-
-  if (handle.includes("w")) {
-    const width = Math.max(VISUAL_MIN_SIZE, frame.width - dx);
-
-    next.x = frame.x + frame.width - width;
-    next.width = width;
-  }
-
-  if (handle.includes("n")) {
-    const height = Math.max(VISUAL_MIN_SIZE, frame.height - dy);
-
-    next.y = frame.y + frame.height - height;
-    next.height = height;
-  }
-
-  return next;
-}
-
-function getEndpointPoint(frame: NodeFrame, side: ConnectorSide): Point {
-  switch (side) {
-    case "top":
-      return {
-        x: frame.x + frame.width / 2,
-        y: frame.y,
-      };
-    case "right":
-      return {
-        x: frame.x + frame.width,
-        y: frame.y + frame.height / 2,
-      };
-    case "bottom":
-      return {
-        x: frame.x + frame.width / 2,
-        y: frame.y + frame.height,
-      };
-    case "left":
-      return {
-        x: frame.x,
-        y: frame.y + frame.height / 2,
-      };
-  }
-}
-
 function setLinePoints(line: SVGLineElement, from: Point, to: Point): void {
   line.setAttribute("x1", String(from.x));
   line.setAttribute("y1", String(from.y));
@@ -1224,10 +979,6 @@ function setLinePoints(line: SVGLineElement, from: Point, to: Point): void {
 
 function getEditableText(element: HTMLElement): string {
   return element.textContent ?? "";
-}
-
-function resizeChangesWidth(handle: ResizeHandle | undefined): boolean {
-  return Boolean(handle?.includes("e") || handle?.includes("w"));
 }
 
 function setTextEditingEnabled(element: HTMLElement, enabled: boolean): void {
@@ -1261,20 +1012,6 @@ function placeCaretAtEnd(element: HTMLElement): void {
   range.collapse(false);
   selection?.removeAllRanges();
   selection?.addRange(range);
-}
-
-function isSameFrame(a: NodeFrame, b: NodeFrame): boolean {
-  const autoWidthMatches = a.autoWidth === undefined || b.autoWidth === undefined || a.autoWidth === b.autoWidth;
-
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && autoWidthMatches;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function modulo(value: number, divisor: number): number {
-  return ((value % divisor) + divisor) % divisor;
 }
 
 function releasePointerCapture(element: Element, pointerId: number): void {

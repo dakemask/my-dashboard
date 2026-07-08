@@ -71,6 +71,39 @@ Compatibility:
 - Keep `/modules/thoughts/` stable.
 - Preserve existing localStorage keys and JSON data shapes unless explicitly changing them.
 
+### Mind Map
+
+Route: `/modules/mind-map/`
+
+HTML shell: `modules/mind-map/index.html`
+
+Source: `src/mind-map/`
+
+Purpose: create, edit, move, resize, and connect text boxes on an interactive mind-map canvas.
+
+Responsibilities:
+
+- `mindMapRepository.ts`: module JSON persistence, parsing, validation, and backward-compatible normalization.
+- `mindMap.ts`: pure mind-map operations such as create, update, delete, and connect nodes and arrows.
+- `types.ts`: mind-map persisted data, node/arrow, selection, frame, and state types.
+- `view.ts`: DOM lookup plus toolbar, settings, status, context-menu, and mode UI updates.
+- `domSvgMapView.ts`: DOM/SVG canvas rendering, pointer interactions, text editing, selection, resize handles, connectors, arrows, panning, and zooming.
+- `nodeFrame.ts`: node frame geometry, resize handle metadata, endpoint positioning, and frame comparison helpers.
+- `textBoxLayout.ts`: text box measurement, edit-time height fitting, auto-width behavior, and resize commit fitting.
+- `main.ts`: page controller, event wiring, undo/redo, persistence orchestration, and coordination between domain, repository, and view layers.
+- `style.css`: module-specific presentation.
+
+Persistence:
+
+- Uses shared private JSON repository helpers under `src/shared/privateData/`.
+- Defaults to `data/mind-map.json` in the configured private data repository.
+- Keeps mind-map-specific JSON compatibility and normalization local to this module.
+
+Compatibility:
+
+- Keep `/modules/mind-map/` stable.
+- Preserve existing localStorage keys and persisted JSON data shapes unless explicitly changing them.
+
 ## Adding A Feature Module
 
 When adding a new feature module, keep the same pattern:
