@@ -25,6 +25,7 @@ import type { ConnectorSide, MindMapNode } from "./types";
 
 export interface NodeShapeParts {
   group: Konva.Group;
+  frameRect: Konva.Rect;
   textHit: Konva.Rect;
   moveHits: Konva.Rect[];
 }
@@ -64,7 +65,6 @@ export function createNodeShape(node: MindMapNode, selected: boolean): NodeShape
     x: TEXT_PADDING,
     y: TEXT_PADDING,
     width: Math.max(1, node.width - TEXT_PADDING * 2),
-    height: Math.max(1, node.height - TEXT_PADDING * 2),
     text: node.text,
     fontFamily: TEXT_FONT_FAMILY,
     fontSize: TEXT_FONT_SIZE,
@@ -79,6 +79,7 @@ export function createNodeShape(node: MindMapNode, selected: boolean): NodeShape
 
   return {
     group,
+    frameRect: rect,
     textHit,
     moveHits,
   };
@@ -99,7 +100,6 @@ export function applyGroupSize(group: Konva.Group, width: number, height: number
 
   if (text instanceof Konva.Text) {
     text.width(Math.max(1, width - TEXT_PADDING * 2));
-    text.height(Math.max(1, height - TEXT_PADDING * 2));
   }
 
   if (textHit instanceof Konva.Rect) {

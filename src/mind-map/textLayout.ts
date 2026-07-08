@@ -8,6 +8,7 @@ export const TEXT_FONT_FAMILY =
   'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 
 const EMPTY_TEXT_NATURAL_WIDTH = 80;
+const TEXT_WRAP_TOLERANCE = 4;
 let measureContext: CanvasRenderingContext2D | null = null;
 
 interface WrappedTextLayout {
@@ -156,7 +157,7 @@ function wrapLine(line: string, start: number, maxWidth: number): WrappedTextLin
     const charEnd = charStart + char.length;
     const next = `${current}${char}`;
 
-    if (current && measureTextWidth(next) > maxWidth) {
+    if (current && measureTextWidth(next) > maxWidth + TEXT_WRAP_TOLERANCE) {
       wrapped.push({
         text: current,
         start: currentStart,

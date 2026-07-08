@@ -1,5 +1,5 @@
 import Konva from "konva";
-import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from "./mindMap";
+import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH } from "./mindMap";
 import {
   ARROW_NAME,
   CONNECTOR_NAME,
@@ -8,6 +8,7 @@ import {
   NODE_NAME,
   NODE_TEXT_HIT_NAME,
   NODE_TEXT_NAME,
+  RESIZE_VISUAL_MIN_SIZE,
 } from "./canvasConstants";
 import {
   applyGroupSize,
@@ -58,6 +59,14 @@ interface NodeMoveSession {
   moved: boolean;
 }
 
+interface TransformerBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
 export class MindMapCanvas {
   private readonly stage: Konva.Stage;
   private readonly arrowLayer = new Konva.Layer();
@@ -68,6 +77,7 @@ export class MindMapCanvas {
   private readonly textEditor: TextEditorOverlay;
   private readonly resizeObserver: ResizeObserver;
   private readonly nodeGroups = new Map<string, Konva.Group>();
+  private readonly frameRects = new Map<string, Konva.Rect>();
   private readonly arrowShapes = new Map<string, Konva.Arrow>();
   private data: MindMapData = {
     nodes: [],
@@ -77,6 +87,7 @@ export class MindMapCanvas {
   private connectMode = false;
   private pendingConnection: MindMapEndpoint | null = null;
   private previewArrow: Konva.Arrow | null = null;
+  private resizeAnchor: string | null = null;
   private movingNode: NodeMoveSession | null = null;
   private isPanning = false;
   private lastPanPoint: { x: number; y: number } | null = null;
@@ -103,6 +114,7 @@ export class MindMapCanvas {
       anchorFill: "#ffffff",
       anchorSize: 7,
       anchorStrokeWidth: 1,
+      flipEnabled: false,
       enabledAnchors: [
         "top-left",
         "top-center",
@@ -113,8 +125,13 @@ export class MindMapCanvas {
         "bottom-center",
         "bottom-right",
       ],
-      boundBoxFunc: (oldBox, newBox) =>
-        newBox.width < MIN_NODE_WIDTH || newBox.height < MIN_NODE_HEIGHT ? oldBox : newBox,
+      boundBoxFunc: (oldBox, newBox) => this.constrainTransformerBox(oldBox, newBox),
+    });
+    this.transformer.on("transformstart", () => {
+      this.resizeAnchor = this.transformer.getActiveAnchor();
+    });
+    this.transformer.on("transformend", () => {
+      this.resizeAnchor = null;
     });
     this.textEditor = new TextEditorOverlay({
       onPreview: (session) => this.previewEditorText(session),
@@ -147,6 +164,7 @@ export class MindMapCanvas {
     this.data = data;
     this.selection = selection;
     this.nodeGroups.clear();
+    this.frameRects.clear();
     this.arrowShapes.clear();
     this.arrowLayer.destroyChildren();
     this.nodeLayer.destroyChildren();
@@ -246,7 +264,7 @@ export class MindMapCanvas {
 
   private createNodeGroup(node: NodeFrame & { id: string; text: string }): void {
     const selected = this.selection?.type === "node" && this.selection.id === node.id;
-    const { group, textHit, moveHits } = createNodeShape(node, selected);
+    const { group, frameRect, textHit, moveHits } = createNodeShape(node, selected);
 
     textHit.on("mousedown touchstart", (event) => {
       if (this.connectMode || this.pendingConnection) {
@@ -312,10 +330,17 @@ export class MindMapCanvas {
       });
     });
 
-    group.on("transform", () => this.handleNodeTransform(group));
-    group.on("transformend", () => this.callbacks.onNodeFrameChange(node.id, this.readGroupFrame(group)));
+    frameRect.on("transformstart", () => {
+      this.resizeAnchor = this.transformer.getActiveAnchor();
+    });
+    frameRect.on("transform", () => this.handleNodeTransform(group, frameRect));
+    frameRect.on("transformend", () => {
+      this.resizeAnchor = null;
+      this.callbacks.onNodeFrameChange(node.id, this.readGroupFrame(group));
+    });
 
     this.nodeGroups.set(node.id, group);
+    this.frameRects.set(node.id, frameRect);
     this.nodeLayer.add(group);
   }
 
@@ -396,16 +421,54 @@ export class MindMapCanvas {
     });
   }
 
-  private handleNodeTransform(group: Konva.Group): void {
-    const width = Math.max(MIN_NODE_WIDTH, group.width() * group.scaleX());
-    const height = Math.max(MIN_NODE_HEIGHT, group.height() * group.scaleY());
-    group.scale({
+  private handleNodeTransform(group: Konva.Group, frameRect: Konva.Rect): void {
+    const nextX = group.x() + frameRect.x();
+    const nextY = group.y() + frameRect.y();
+    const width = Math.max(RESIZE_VISUAL_MIN_SIZE, Math.abs(frameRect.width() * frameRect.scaleX()));
+    const height = Math.max(RESIZE_VISUAL_MIN_SIZE, Math.abs(frameRect.height() * frameRect.scaleY()));
+
+    group.position({
+      x: nextX,
+      y: nextY,
+    });
+    frameRect.position({
+      x: 0,
+      y: 0,
+    });
+    frameRect.scale({
       x: 1,
       y: 1,
     });
     applyGroupSize(group, width, height);
+    this.textEditor.positionActive();
     this.syncConnectionsFromShapes();
-    this.transformer.forceUpdate();
+  }
+
+  private constrainTransformerBox(oldBox: TransformerBox, newBox: TransformerBox): TransformerBox {
+    if (!isFiniteBox(newBox)) {
+      return oldBox;
+    }
+
+    const activeAnchor = this.resizeAnchor ?? this.transformer.getActiveAnchor();
+    const next = {
+      ...newBox,
+    };
+
+    if (next.width < RESIZE_VISUAL_MIN_SIZE) {
+      next.width = RESIZE_VISUAL_MIN_SIZE;
+      next.x = resizesFromLeft(activeAnchor)
+        ? oldBox.x + oldBox.width - RESIZE_VISUAL_MIN_SIZE
+        : oldBox.x;
+    }
+
+    if (next.height < RESIZE_VISUAL_MIN_SIZE) {
+      next.height = RESIZE_VISUAL_MIN_SIZE;
+      next.y = resizesFromTop(activeAnchor)
+        ? oldBox.y + oldBox.height - RESIZE_VISUAL_MIN_SIZE
+        : oldBox.y;
+    }
+
+    return next;
   }
 
   private startNodeMove(id: string, group: Konva.Group): void {
@@ -639,8 +702,8 @@ export class MindMapCanvas {
       return;
     }
 
-    const group = this.nodeGroups.get(this.selection.id);
-    this.transformer.nodes(group ? [group] : []);
+    const frameRect = this.frameRects.get(this.selection.id);
+    this.transformer.nodes(frameRect ? [frameRect] : []);
     this.uiLayer.batchDraw();
   }
 
@@ -876,4 +939,21 @@ export class MindMapCanvas {
   private closeActiveEditor(commit: boolean): void {
     this.textEditor.close(commit);
   }
+}
+
+function isFiniteBox(box: TransformerBox): boolean {
+  return (
+    Number.isFinite(box.x) &&
+    Number.isFinite(box.y) &&
+    Number.isFinite(box.width) &&
+    Number.isFinite(box.height)
+  );
+}
+
+function resizesFromLeft(anchor: string | null): boolean {
+  return anchor === "top-left" || anchor === "middle-left" || anchor === "bottom-left";
+}
+
+function resizesFromTop(anchor: string | null): boolean {
+  return anchor === "top-left" || anchor === "top-center" || anchor === "top-right";
 }

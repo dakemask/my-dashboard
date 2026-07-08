@@ -19,6 +19,7 @@ export const SELECTED_SHADOW_BLUR = 5;
 
 export const MOVE_HIT_SIZE = 10;
 export const MOVE_THRESHOLD = 1.5;
+export const RESIZE_VISUAL_MIN_SIZE = 1;
 export const GRID_SIZE = 24;
 export const MIN_SCALE = 0.35;
 export const MAX_SCALE = 2.6;

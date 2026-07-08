@@ -8,7 +8,7 @@ import type {
 
 export const DEFAULT_NODE_WIDTH = 260;
 export const DEFAULT_NODE_HEIGHT = 92;
-export const MIN_NODE_WIDTH = 64;
+export const MIN_NODE_WIDTH = 44;
 export const MIN_NODE_HEIGHT = 44;
 
 export function createEmptyMindMapData(): MindMapData {
