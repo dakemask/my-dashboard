@@ -62,7 +62,8 @@ const RESIZE_HANDLES: ResizeHandle[] = ["n", "ne", "e", "se", "s", "sw", "w", "n
 const GRID_SIZE = 24;
 const MAX_SCALE = 2.5;
 const MIN_SCALE = 0.25;
-const NODE_PADDING_X = 16;
+// Nodes use border-box sizing; the text area loses 8px on each side plus the 1px border on each side.
+const NODE_PADDING_X = 18;
 const NODE_PADDING_Y = 14;
 const VISUAL_MIN_SIZE = 2;
 const POINTER_MOVE_EPSILON = 2;
