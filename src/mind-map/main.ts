@@ -296,7 +296,8 @@ function isSameFrame(current: NodeFrame, next: NodeFrame): boolean {
     current.x === next.x &&
     current.y === next.y &&
     current.width === next.width &&
-    current.height === next.height
+    current.height === next.height &&
+    (next.autoWidth === undefined || current.autoWidth === next.autoWidth)
   );
 }
 

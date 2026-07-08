@@ -64,6 +64,7 @@ function normalizeNode(value: unknown): MindMapNode | null {
     y: normalizeNumber(node.y, 80),
     width: Math.max(MIN_NODE_WIDTH, normalizeNumber(node.width, 260)),
     height: Math.max(MIN_NODE_HEIGHT, normalizeNumber(node.height, 92)),
+    autoWidth: node.autoWidth === true,
   };
 }
 

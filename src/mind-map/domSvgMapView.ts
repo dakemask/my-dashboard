@@ -27,6 +27,7 @@ interface ArrowElements {
 
 interface ActiveEdit {
   id: string;
+  autoWidth: boolean;
   originalFrame: NodeFrame;
   originalText: string;
 }
@@ -345,7 +346,7 @@ export class MindMapView {
     const element = this.nodeElements.get(drag.nodeId);
     const textElement = element?.querySelector<HTMLElement>(".mind-map-node-text") ?? null;
     const node = this.getNode(drag.nodeId);
-    const frame = this.getCommittedDragFrame(drag, textElement);
+    const frame = this.getCommittedDragFrame(drag, textElement, node);
     const changed = node ? !isSameFrame(frame, getNodeFrame(node)) : false;
 
     this.frameOverrides.delete(drag.nodeId);
@@ -425,7 +426,7 @@ export class MindMapView {
     textElement.addEventListener("pointerdown", (event) => this.handleTextPointerDown(event, id));
     textElement.addEventListener("focus", () => this.beginTextEdit(id, false));
     textElement.addEventListener("input", () => this.updateEditingPreview(id));
-    textElement.addEventListener("paste", this.handleTextPaste);
+    textElement.addEventListener("paste", (event) => this.handleTextPaste(event, id));
     textElement.addEventListener("keydown", (event) => this.handleTextKeyDown(event, id));
     textElement.addEventListener("blur", () => this.handleTextBlur(id));
     textElement.addEventListener("contextmenu", (event) => this.handleTextContextMenu(event, id));
@@ -631,12 +632,13 @@ export class MindMapView {
     });
   }
 
-  private handleTextPaste = (event: ClipboardEvent): void => {
+  private handleTextPaste(event: ClipboardEvent, id: string): void {
     const text = event.clipboardData?.getData("text/plain") ?? "";
 
     event.preventDefault();
     insertPlainText(text);
-  };
+    this.updateEditingPreview(id);
+  }
 
   private handleTextBlur(id: string): void {
     if (this.activeEdit?.id === id) {
@@ -768,6 +770,7 @@ export class MindMapView {
 
     this.activeEdit = {
       id,
+      autoWidth: node.autoWidth,
       originalFrame: getNodeFrame(node),
       originalText: node.text,
     };
@@ -824,15 +827,19 @@ export class MindMapView {
     baseFrame: NodeFrame,
     edit: ActiveEdit,
   ): NodeFrame {
+    const minimumSize = this.measureMinimumNodeSize(textElement);
+    const naturalWidth = this.measureTextMaxLineWidth(textElement, text);
     const shouldFitInitialWidth =
       edit.originalText.length === 0 &&
       edit.originalFrame.width === DEFAULT_NODE_WIDTH &&
       edit.originalFrame.height === DEFAULT_NODE_HEIGHT &&
       text.length > 0;
-    const width = shouldFitInitialWidth
-      ? clamp(this.measureNaturalTextWidth(textElement, text), MIN_NODE_WIDTH, DEFAULT_NODE_WIDTH)
-      : Math.max(MIN_NODE_WIDTH, Math.round(baseFrame.width));
-    const height = Math.max(MIN_NODE_HEIGHT, this.measureTextHeight(textElement, text, width));
+    const width = edit.autoWidth
+      ? naturalWidth
+      : shouldFitInitialWidth
+        ? clamp(naturalWidth, minimumSize.width, DEFAULT_NODE_WIDTH)
+        : Math.max(minimumSize.width, Math.round(baseFrame.width));
+    const height = Math.max(minimumSize.height, this.measureTextHeight(textElement, text, width));
 
     return {
       x: Math.round(baseFrame.x),
@@ -842,20 +849,68 @@ export class MindMapView {
     };
   }
 
-  private getCommittedDragFrame(drag: DragState, textElement: HTMLElement | null): NodeFrame {
+  private getCommittedDragFrame(
+    drag: DragState,
+    textElement: HTMLElement | null,
+    node: MindMapNode | null,
+  ): NodeFrame {
     const handle = drag.handle;
     const frame = drag.currentFrame;
     const fixedRight = frame.x + frame.width;
     const fixedBottom = frame.y + frame.height;
-    const width = Math.max(MIN_NODE_WIDTH, Math.round(frame.width));
+    const minimumSize = textElement
+      ? this.measureMinimumNodeSize(textElement)
+      : {
+          width: MIN_NODE_WIDTH,
+          height: MIN_NODE_HEIGHT,
+        };
+    let width = Math.max(minimumSize.width, Math.round(frame.width));
+    let autoWidth = node?.autoWidth ?? false;
+
+    if (drag.kind === "resize" && textElement) {
+      const naturalWidth = this.measureTextMaxLineWidth(textElement, getEditableText(textElement));
+
+      if (resizeChangesWidth(handle)) {
+        if (width > naturalWidth) {
+          width = naturalWidth;
+          autoWidth = true;
+        } else {
+          autoWidth = false;
+        }
+      } else if (autoWidth) {
+        width = naturalWidth;
+      }
+    }
+
     const height =
       drag.kind === "resize" && textElement
-        ? Math.max(MIN_NODE_HEIGHT, this.measureTextHeight(textElement, getEditableText(textElement), width))
-        : Math.max(MIN_NODE_HEIGHT, Math.round(frame.height));
-
-    return {
+        ? Math.max(minimumSize.height, this.measureTextHeight(textElement, getEditableText(textElement), width))
+        : Math.max(minimumSize.height, Math.round(frame.height));
+    const nextFrame: NodeFrame = {
       x: Math.round(handle?.includes("w") ? fixedRight - width : frame.x),
       y: Math.round(handle?.includes("n") ? fixedBottom - height : frame.y),
+      width,
+      height,
+    };
+
+    if (drag.kind === "resize") {
+      nextFrame.autoWidth = autoWidth;
+    }
+
+    return nextFrame;
+  }
+
+  private measureTextMaxLineWidth(textElement: HTMLElement, text: string): number {
+    const minimumSize = this.measureMinimumNodeSize(textElement);
+
+    return Math.max(minimumSize.width, this.measureNaturalTextWidth(textElement, text));
+  }
+
+  private measureMinimumNodeSize(textElement: HTMLElement): { width: number; height: number } {
+    const width = Math.max(MIN_NODE_WIDTH, this.measureNaturalTextWidth(textElement, "字"));
+    const height = Math.max(MIN_NODE_HEIGHT, this.measureTextHeight(textElement, "字", width));
+
+    return {
       width,
       height,
     };
@@ -1046,6 +1101,7 @@ function getNodeFrame(node: MindMapNode): NodeFrame {
     y: node.y,
     width: node.width,
     height: node.height,
+    autoWidth: node.autoWidth,
   };
 }
 
@@ -1127,6 +1183,10 @@ function getEditableText(element: HTMLElement): string {
   return element.textContent ?? "";
 }
 
+function resizeChangesWidth(handle: ResizeHandle | undefined): boolean {
+  return Boolean(handle?.includes("e") || handle?.includes("w"));
+}
+
 function setTextEditingEnabled(element: HTMLElement, enabled: boolean): void {
   element.setAttribute("contenteditable", enabled ? "plaintext-only" : "false");
   element.setAttribute("aria-readonly", String(!enabled));
@@ -1161,7 +1221,9 @@ function placeCaretAtEnd(element: HTMLElement): void {
 }
 
 function isSameFrame(a: NodeFrame, b: NodeFrame): boolean {
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  const autoWidthMatches = a.autoWidth === undefined || b.autoWidth === undefined || a.autoWidth === b.autoWidth;
+
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height && autoWidthMatches;
 }
 
 function clamp(value: number, min: number, max: number): number {

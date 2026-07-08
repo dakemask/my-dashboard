@@ -12,6 +12,7 @@ export interface MindMapNode {
   y: number;
   width: number;
   height: number;
+  autoWidth: boolean;
 }
 
 export interface MindMapArrow {
@@ -48,4 +49,5 @@ export interface NodeFrame {
   y: number;
   width: number;
   height: number;
+  autoWidth?: boolean;
 }
