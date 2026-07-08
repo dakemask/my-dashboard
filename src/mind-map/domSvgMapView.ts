@@ -869,7 +869,8 @@ export class MindMapView {
     let autoWidth = node?.autoWidth ?? false;
 
     if (drag.kind === "resize" && textElement) {
-      const naturalWidth = this.measureTextMaxLineWidth(textElement, getEditableText(textElement));
+      const text = getEditableText(textElement);
+      const naturalWidth = this.measureTextMaxLineWidth(textElement, text);
 
       if (resizeChangesWidth(handle)) {
         if (width > naturalWidth) {
@@ -881,6 +882,8 @@ export class MindMapView {
       } else if (autoWidth) {
         width = naturalWidth;
       }
+
+      width = this.tightenSubCharacterWidthRemainder(textElement, text, width, minimumSize.width);
     }
 
     const height =
@@ -907,6 +910,23 @@ export class MindMapView {
     return Math.max(minimumSize.width, this.measureNaturalTextWidth(textElement, text));
   }
 
+  private tightenSubCharacterWidthRemainder(
+    textElement: HTMLElement,
+    text: string,
+    width: number,
+    minimumWidth: number,
+  ): number {
+    const fittedWidth = this.measureWrappedTextMaxLineWidth(textElement, text, width);
+    const remainingWidth = width - fittedWidth;
+    const characterWidth = Math.max(1, this.measureNaturalTextWidth(textElement, "字") - NODE_PADDING_X);
+
+    if (remainingWidth > 0 && remainingWidth < characterWidth) {
+      return Math.max(minimumWidth, fittedWidth);
+    }
+
+    return width;
+  }
+
   private measureMinimumNodeSize(textElement: HTMLElement): { width: number; height: number } {
     const width = Math.max(MIN_NODE_WIDTH, this.measureNaturalTextWidth(textElement, "字"));
     const height = Math.max(MIN_NODE_HEIGHT, this.measureTextHeight(textElement, "字", width));
@@ -930,6 +950,28 @@ export class MindMapView {
 
     clone.remove();
     return width;
+  }
+
+  private measureWrappedTextMaxLineWidth(textElement: HTMLElement, text: string, width: number): number {
+    const clone = this.createTextMeasureElement(textElement, text.length > 0 ? text : "M");
+
+    clone.style.width = `${Math.max(1, width - NODE_PADDING_X)}px`;
+    clone.style.whiteSpace = "pre-wrap";
+    this.host.append(clone);
+
+    const range = document.createRange();
+    range.selectNodeContents(clone);
+
+    let maxLineWidth = 0;
+
+    for (const rect of range.getClientRects()) {
+      maxLineWidth = Math.max(maxLineWidth, rect.width);
+    }
+
+    range.detach();
+    clone.remove();
+
+    return Math.ceil(maxLineWidth + NODE_PADDING_X);
   }
 
   private measureTextHeight(textElement: HTMLElement, text: string, width: number): number {
