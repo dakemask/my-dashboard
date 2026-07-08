@@ -1,6 +1,31 @@
 import Konva from "konva";
 import { DEFAULT_NODE_HEIGHT, DEFAULT_NODE_WIDTH, MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from "./mindMap";
 import {
+  ARROW_NAME,
+  CONNECTOR_NAME,
+  CONNECTOR_SIDES,
+  MOVE_THRESHOLD,
+  NODE_NAME,
+  NODE_TEXT_HIT_NAME,
+  NODE_TEXT_NAME,
+} from "./canvasConstants";
+import {
+  applyGroupSize,
+  applyNodeSelectionStyle,
+  createNodeShape,
+  findNamedNode,
+  getClientPointFromEvent,
+  isConnectorSide,
+} from "./canvasShapes";
+import {
+  getWorldPointerPosition,
+  resetStageView,
+  screenToWorld,
+  updateGrid,
+  zoomStageWithWheel,
+} from "./canvasViewport";
+import { TextEditorOverlay, type EditTextPointerOptions, type TextEditSession } from "./textEditorOverlay";
+import {
   fitNewNodeFrameToText,
   fitNodeFrameHeightToText,
   getCanvasTextFont,
@@ -10,13 +35,7 @@ import {
   TEXT_LINE_HEIGHT,
   TEXT_PADDING,
 } from "./textLayout";
-import type {
-  ConnectorSide,
-  MindMapData,
-  MindMapEndpoint,
-  MindMapSelection,
-  NodeFrame,
-} from "./types";
+import type { MindMapData, MindMapEndpoint, MindMapSelection, NodeFrame } from "./types";
 
 interface CanvasCallbacks {
   onSelectionChange: (selection: MindMapSelection) => void;
@@ -26,47 +45,7 @@ interface CanvasCallbacks {
   onContextMenu: (selection: MindMapSelection, x: number, y: number) => void;
 }
 
-const NODE_NAME = "mind-node";
-const NODE_RECT_NAME = "node-rect";
-const NODE_TEXT_NAME = "node-text";
-const NODE_TEXT_HIT_NAME = "node-text-hit";
-const NODE_MOVE_HIT_NAME = "node-move-hit";
-const ARROW_NAME = "mind-arrow";
-const CONNECTOR_NAME = "connector-handle";
-const CONNECTOR_SIDES: ConnectorSide[] = ["top", "right", "bottom", "left"];
-const MOVE_HIT_SIZE = 10;
-const NODE_STROKE = "#2f3338";
-const SELECTED_STROKE = "#2563eb";
-const SELECTED_SHADOW = "rgba(37, 99, 235, 0.1)";
-const UNSELECTED_STROKE_WIDTH = 0.75;
-const SELECTED_STROKE_WIDTH = 1.25;
-const SELECTED_SHADOW_BLUR = 5;
-const GRID_SIZE = 24;
-const MIN_SCALE = 0.35;
-const MAX_SCALE = 2.6;
-const ZOOM_STEP = 1.1;
-const MOVE_THRESHOLD = 1.5;
-
-type MoveHitPart = "top" | "right" | "bottom" | "left";
-
-interface TextEditSession {
-  id: string;
-  group: Konva.Group;
-  textarea: HTMLTextAreaElement;
-  textNode: Konva.Text | null;
-  originalText: string;
-  originalFrame: NodeFrame;
-  autoWidthOnInput: boolean;
-  close: (commit: boolean) => void;
-}
-
-interface EditNodeTextOptions {
-  caretClientPoint?: {
-    x: number;
-    y: number;
-  };
-  dragSelect?: boolean;
-}
+type EditNodeTextOptions = EditTextPointerOptions;
 
 interface NodeMoveSession {
   id: string;
@@ -79,11 +58,6 @@ interface NodeMoveSession {
   moved: boolean;
 }
 
-interface TextSelectionDrag {
-  move: (event: MouseEvent) => void;
-  up: (event: MouseEvent) => void;
-}
-
 export class MindMapCanvas {
   private readonly stage: Konva.Stage;
   private readonly arrowLayer = new Konva.Layer();
@@ -91,6 +65,7 @@ export class MindMapCanvas {
   private readonly connectorLayer = new Konva.Layer();
   private readonly uiLayer = new Konva.Layer();
   private readonly transformer: Konva.Transformer;
+  private readonly textEditor: TextEditorOverlay;
   private readonly resizeObserver: ResizeObserver;
   private readonly nodeGroups = new Map<string, Konva.Group>();
   private readonly arrowShapes = new Map<string, Konva.Arrow>();
@@ -102,11 +77,6 @@ export class MindMapCanvas {
   private connectMode = false;
   private pendingConnection: MindMapEndpoint | null = null;
   private previewArrow: Konva.Arrow | null = null;
-  private editingNodeId: string | null = null;
-  private editSession: TextEditSession | null = null;
-  private textSelectionDrag: TextSelectionDrag | null = null;
-  private suppressEditorBlur = false;
-  private suppressNextStageClick = false;
   private movingNode: NodeMoveSession | null = null;
   private isPanning = false;
   private lastPanPoint: { x: number; y: number } | null = null;
@@ -146,6 +116,13 @@ export class MindMapCanvas {
       boundBoxFunc: (oldBox, newBox) =>
         newBox.width < MIN_NODE_WIDTH || newBox.height < MIN_NODE_HEIGHT ? oldBox : newBox,
     });
+    this.textEditor = new TextEditorOverlay({
+      onPreview: (session) => this.previewEditorText(session),
+      onPosition: (session) => this.positionTextEditor(session),
+      onClose: (session, commit) => this.finishTextEdit(session, commit),
+      getTextIndexAtClientPoint: (session, clientPoint) =>
+        this.getEditorTextIndexFromClientPoint(session, clientPoint),
+    });
 
     this.uiLayer.add(this.transformer);
     this.stage.add(this.arrowLayer, this.nodeLayer, this.connectorLayer, this.uiLayer);
@@ -162,7 +139,7 @@ export class MindMapCanvas {
 
     this.resizeObserver = new ResizeObserver(() => this.resizeStage());
     this.resizeObserver.observe(host);
-    this.updateGrid();
+    updateGrid(this.host, this.stage);
     requestAnimationFrame(() => this.resizeStage(true));
   }
 
@@ -177,7 +154,7 @@ export class MindMapCanvas {
     this.data.arrows.forEach((arrow) => this.createArrow(arrow.id, arrow.from, arrow.to));
     this.data.nodes.forEach((node) => this.createNodeGroup(node));
 
-    if (this.connectMode && !this.editingNodeId) {
+    if (this.connectMode && !this.textEditor.activeId) {
       this.createConnectorHandles();
     }
 
@@ -195,7 +172,7 @@ export class MindMapCanvas {
   }
 
   getNewNodePosition(): { x: number; y: number } {
-    const center = this.screenToWorld({
+    const center = screenToWorld(this.stage, {
       x: this.stage.width() / 2,
       y: this.stage.height() / 2,
     });
@@ -208,56 +185,7 @@ export class MindMapCanvas {
 
   resetView(): void {
     this.closeActiveEditor(true);
-
-    if (this.data.nodes.length === 0) {
-      this.stage.scale({
-        x: 1,
-        y: 1,
-      });
-      this.stage.position({
-        x: 0,
-        y: 0,
-      });
-      this.updateGrid();
-      this.stage.batchDraw();
-      return;
-    }
-
-    const bounds = this.data.nodes.reduce(
-      (next, node) => ({
-        minX: Math.min(next.minX, node.x),
-        minY: Math.min(next.minY, node.y),
-        maxX: Math.max(next.maxX, node.x + node.width),
-        maxY: Math.max(next.maxY, node.y + node.height),
-      }),
-      {
-        minX: Number.POSITIVE_INFINITY,
-        minY: Number.POSITIVE_INFINITY,
-        maxX: Number.NEGATIVE_INFINITY,
-        maxY: Number.NEGATIVE_INFINITY,
-      },
-    );
-    const contentWidth = Math.max(1, bounds.maxX - bounds.minX);
-    const contentHeight = Math.max(1, bounds.maxY - bounds.minY);
-    const padding = 120;
-    const scale = Math.min(
-      1,
-      this.stage.width() / (contentWidth + padding * 2),
-      this.stage.height() / (contentHeight + padding * 2),
-    );
-    const centerX = bounds.minX + contentWidth / 2;
-    const centerY = bounds.minY + contentHeight / 2;
-
-    this.stage.scale({
-      x: scale,
-      y: scale,
-    });
-    this.stage.position({
-      x: this.stage.width() / 2 - centerX * scale,
-      y: this.stage.height() / 2 - centerY * scale,
-    });
-    this.updateGrid();
-    this.stage.batchDraw();
+    resetStageView(this.stage, this.host, this.data.nodes);
   }
 
   commitActiveEdit(): void {
@@ -265,17 +193,13 @@ export class MindMapCanvas {
   }
 
   editNodeText(id: string, options: EditNodeTextOptions = {}): void {
-    if (this.editSession?.id === id) {
-      this.editSession.textarea.focus();
-      if (options.caretClientPoint) {
-        this.setEditorSelectionFromClientPoint(this.editSession, options.caretClientPoint);
-      }
-
-      if (options.dragSelect && options.caretClientPoint) {
-        this.startTextSelectionDrag(this.editSession, options.caretClientPoint);
-      }
+    if (this.textEditor.activeId === id) {
+      this.textEditor.focus(options);
       return;
     }
+
+    this.closeActiveEditor(true);
+    this.cancelPendingConnection();
 
     const node = this.data.nodes.find((item) => item.id === id);
     const group = this.nodeGroups.get(id);
@@ -284,145 +208,29 @@ export class MindMapCanvas {
       return;
     }
 
-    this.closeActiveEditor(true);
-    this.cancelPendingConnection();
-
     this.selection = {
       type: "node",
       id,
     };
-    this.nodeGroups.forEach((nodeGroup, nodeId) => this.applyNodeSelectionStyle(nodeGroup, nodeId === id));
+    this.nodeGroups.forEach((nodeGroup, nodeId) => applyNodeSelectionStyle(nodeGroup, nodeId === id));
 
     const textNode = group.findOne(`.${NODE_TEXT_NAME}`);
     const typedTextNode = textNode instanceof Konva.Text ? textNode : null;
-    this.editingNodeId = id;
     this.updateTransformer();
     this.nodeLayer.draw();
 
-    const textarea = document.createElement("textarea");
-    textarea.className = "node-text-editor";
-    textarea.value = node.text;
-    textarea.spellcheck = false;
-    textarea.autocomplete = "off";
-    textarea.autocapitalize = "off";
-    document.body.append(textarea);
-
-    let closed = false;
-    const handleEditorMouseDown = (event: MouseEvent): void => {
-      if (event.button !== 0) {
-        return;
-      }
-
-      event.preventDefault();
-      textarea.focus({
-        preventScroll: true,
-      });
-      this.setEditorSelectionFromClientPoint(session, {
-        x: event.clientX,
-        y: event.clientY,
-      });
-      this.startTextSelectionDrag(session, {
-        x: event.clientX,
-        y: event.clientY,
-      });
-    };
-    const finish = (commit: boolean): void => {
-      if (closed) {
-        return;
-      }
-
-      closed = true;
-      textarea.removeEventListener("blur", commitOnBlur);
-      textarea.removeEventListener("input", previewInput);
-      textarea.removeEventListener("mousedown", handleEditorMouseDown);
-      this.stopTextSelectionDrag();
-      textarea.remove();
-      this.editSession = null;
-      this.editingNodeId = null;
-      this.suppressEditorBlur = false;
-
-      if (commit) {
-        typedTextNode?.text(textarea.value);
-      } else {
-        typedTextNode?.text(session.originalText);
-        this.applyGroupSize(group, session.originalFrame.width, session.originalFrame.height);
-      }
-
-      this.updateTransformer();
-      this.nodeLayer.draw();
-
-      if (commit) {
-        this.callbacks.onNodeTextChange(id, textarea.value);
-        this.callbacks.onSelectionChange({
-          type: "node",
-          id,
-        });
-      }
-    };
-    const commitOnBlur = (): void => {
-      if (this.textSelectionDrag || this.suppressEditorBlur) {
-        requestAnimationFrame(() => {
-          this.suppressEditorBlur = false;
-          if (this.editSession !== session) {
-            return;
-          }
-
-          textarea.focus({
-            preventScroll: true,
-          });
-        });
-        return;
-      }
-
-      finish(true);
-    };
-    const previewInput = (): void => this.previewEditorText(session);
-    const session: TextEditSession = {
+    this.textEditor.open({
       id,
+      text: node.text,
       group,
-      textarea,
       textNode: typedTextNode,
-      originalText: node.text,
       originalFrame: this.readGroupFrame(group),
       autoWidthOnInput:
         node.text.trim().length === 0 &&
         node.width === DEFAULT_NODE_WIDTH &&
         node.height === DEFAULT_NODE_HEIGHT,
-      close: finish,
-    };
-    this.editSession = session;
-    this.positionTextEditor(session);
-    this.previewEditorText(session);
-
-    textarea.addEventListener("blur", commitOnBlur);
-    textarea.addEventListener("input", previewInput);
-    textarea.addEventListener("mousedown", handleEditorMouseDown);
-    textarea.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        finish(true);
-      }
-    });
-
-    textarea.focus({
-      preventScroll: true,
-    });
-
-    if (options.caretClientPoint) {
-      this.setEditorSelectionFromClientPoint(session, options.caretClientPoint);
-      if (options.dragSelect) {
-        this.startTextSelectionDrag(session, options.caretClientPoint);
-      }
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      textarea.focus({
-        preventScroll: true,
-      });
-      if (!node.text) {
-        textarea.select();
-      }
+      selectAllWhenEmpty: !node.text,
+      ...options,
     });
   }
 
@@ -438,50 +246,7 @@ export class MindMapCanvas {
 
   private createNodeGroup(node: NodeFrame & { id: string; text: string }): void {
     const selected = this.selection?.type === "node" && this.selection.id === node.id;
-    const group = new Konva.Group({
-      x: node.x,
-      y: node.y,
-      width: node.width,
-      height: node.height,
-      draggable: false,
-      name: NODE_NAME,
-    });
-    group.setAttr("nodeId", node.id);
-
-    const rect = new Konva.Rect({
-      width: node.width,
-      height: node.height,
-      fill: "#ffffff",
-      stroke: selected ? SELECTED_STROKE : NODE_STROKE,
-      strokeWidth: selected ? SELECTED_STROKE_WIDTH : UNSELECTED_STROKE_WIDTH,
-      cornerRadius: 0,
-      name: NODE_RECT_NAME,
-      shadowColor: selected ? SELECTED_SHADOW : "transparent",
-      shadowBlur: selected ? SELECTED_SHADOW_BLUR : 0,
-    });
-    const text = new Konva.Text({
-      x: TEXT_PADDING,
-      y: TEXT_PADDING,
-      width: Math.max(1, node.width - TEXT_PADDING * 2),
-      height: Math.max(1, node.height - TEXT_PADDING * 2),
-      text: node.text,
-      fontFamily: TEXT_FONT_FAMILY,
-      fontSize: TEXT_FONT_SIZE,
-      lineHeight: TEXT_LINE_HEIGHT,
-      fill: "#111827",
-      wrap: "char",
-      listening: false,
-      name: NODE_TEXT_NAME,
-    });
-    const textHit = new Konva.Rect({
-      x: TEXT_PADDING,
-      y: TEXT_PADDING,
-      width: Math.max(1, node.width - TEXT_PADDING * 2),
-      height: Math.max(1, node.height - TEXT_PADDING * 2),
-      fill: "rgba(255, 255, 255, 0.01)",
-      name: NODE_TEXT_HIT_NAME,
-    });
-    const moveHits = createMoveHitRects(node.width, node.height);
+    const { group, textHit, moveHits } = createNodeShape(node, selected);
 
     textHit.on("mousedown touchstart", (event) => {
       if (this.connectMode || this.pendingConnection) {
@@ -551,7 +316,6 @@ export class MindMapCanvas {
     group.on("transformend", () => this.callbacks.onNodeFrameChange(node.id, this.readGroupFrame(group)));
 
     this.nodeGroups.set(node.id, group);
-    group.add(rect, textHit, ...moveHits, text);
     this.nodeLayer.add(group);
   }
 
@@ -639,63 +403,16 @@ export class MindMapCanvas {
       x: 1,
       y: 1,
     });
-    this.applyGroupSize(group, width, height);
+    applyGroupSize(group, width, height);
     this.syncConnectionsFromShapes();
     this.transformer.forceUpdate();
-  }
-
-  private applyGroupSize(group: Konva.Group, width: number, height: number): void {
-    group.width(width);
-    group.height(height);
-
-    const rect = group.findOne(`.${NODE_RECT_NAME}`);
-    const text = group.findOne(`.${NODE_TEXT_NAME}`);
-    const textHit = group.findOne(`.${NODE_TEXT_HIT_NAME}`);
-
-    if (rect instanceof Konva.Rect) {
-      rect.width(width);
-      rect.height(height);
-    }
-
-    if (text instanceof Konva.Text) {
-      text.width(Math.max(1, width - TEXT_PADDING * 2));
-      text.height(Math.max(1, height - TEXT_PADDING * 2));
-    }
-
-    if (textHit instanceof Konva.Rect) {
-      textHit.position({
-        x: TEXT_PADDING,
-        y: TEXT_PADDING,
-      });
-      textHit.width(Math.max(1, width - TEXT_PADDING * 2));
-      textHit.height(Math.max(1, height - TEXT_PADDING * 2));
-    }
-
-    group.find(`.${NODE_MOVE_HIT_NAME}`).forEach((hit) => {
-      if (hit instanceof Konva.Rect) {
-        applyMoveHitRectFrame(hit, width, height);
-      }
-    });
-  }
-
-  private applyNodeSelectionStyle(group: Konva.Group, selected: boolean): void {
-    const rect = group.findOne(`.${NODE_RECT_NAME}`);
-
-    if (!(rect instanceof Konva.Rect)) {
-      return;
-    }
-
-    rect.stroke(selected ? SELECTED_STROKE : NODE_STROKE);
-    rect.strokeWidth(selected ? SELECTED_STROKE_WIDTH : UNSELECTED_STROKE_WIDTH);
-    rect.shadowColor(selected ? SELECTED_SHADOW : "transparent");
-    rect.shadowBlur(selected ? SELECTED_SHADOW_BLUR : 0);
   }
 
   private startNodeMove(id: string, group: Konva.Group): void {
     this.closeActiveEditor(true);
     const liveGroup = this.nodeGroups.get(id) ?? group;
 
-    const pointer = this.getWorldPointerPosition();
+    const pointer = getWorldPointerPosition(this.stage);
 
     if (!pointer) {
       return;
@@ -716,7 +433,7 @@ export class MindMapCanvas {
       return;
     }
 
-    const pointer = this.getWorldPointerPosition();
+    const pointer = getWorldPointerPosition(this.stage);
 
     if (!pointer) {
       return;
@@ -753,10 +470,30 @@ export class MindMapCanvas {
   private previewEditorText(session: TextEditSession): void {
     session.textNode?.text(session.textarea.value);
     const frame = this.getEditorPreviewFrame(session);
-    this.applyGroupSize(session.group, frame.width, frame.height);
+    applyGroupSize(session.group, frame.width, frame.height);
     this.transformer.forceUpdate();
     this.positionTextEditor(session);
     this.syncConnectionsFromShapes();
+  }
+
+  private finishTextEdit(session: TextEditSession, commit: boolean): void {
+    if (commit) {
+      session.textNode?.text(session.textarea.value);
+    } else {
+      session.textNode?.text(session.originalText);
+      applyGroupSize(session.group, session.originalFrame.width, session.originalFrame.height);
+    }
+
+    this.updateTransformer();
+    this.nodeLayer.draw();
+
+    if (commit) {
+      this.callbacks.onNodeTextChange(session.id, session.textarea.value);
+      this.callbacks.onSelectionChange({
+        type: "node",
+        id: session.id,
+      });
+    }
   }
 
   private getEditorPreviewFrame(session: TextEditSession): NodeFrame {
@@ -791,20 +528,6 @@ export class MindMapCanvas {
     textarea.style.lineHeight = String(TEXT_LINE_HEIGHT);
   }
 
-  private setEditorSelectionFromClientPoint(
-    session: TextEditSession,
-    clientPoint: { x: number; y: number },
-    anchorIndex?: number,
-  ): void {
-    const focusIndex = this.getEditorTextIndexFromClientPoint(session, clientPoint);
-    const start = anchorIndex ?? focusIndex;
-    const selectionStart = Math.min(start, focusIndex);
-    const selectionEnd = Math.max(start, focusIndex);
-    const direction = focusIndex < start ? "backward" : "forward";
-
-    session.textarea.setSelectionRange(selectionStart, selectionEnd, direction);
-  }
-
   private getEditorTextIndexFromClientPoint(
     session: TextEditSession,
     clientPoint: { x: number; y: number },
@@ -822,61 +545,6 @@ export class MindMapCanvas {
       x: worldPoint.x - frame.x - TEXT_PADDING,
       y: worldPoint.y - frame.y - TEXT_PADDING,
     });
-  }
-
-  private startTextSelectionDrag(session: TextEditSession, clientPoint: { x: number; y: number }): void {
-    this.stopTextSelectionDrag();
-
-    const anchorIndex = this.getEditorTextIndexFromClientPoint(session, clientPoint);
-    this.setEditorSelectionFromClientPoint(session, clientPoint, anchorIndex);
-
-    const move = (event: MouseEvent): void => {
-      event.preventDefault();
-      if (this.editSession !== session) {
-        this.stopTextSelectionDrag();
-        return;
-      }
-
-      this.setEditorSelectionFromClientPoint(
-        session,
-        {
-          x: event.clientX,
-          y: event.clientY,
-        },
-        anchorIndex,
-      );
-    };
-    const up = (event: MouseEvent): void => {
-      event.preventDefault();
-      move(event);
-      this.suppressEditorBlur = true;
-      this.suppressNextStageClick = true;
-      this.stopTextSelectionDrag();
-      window.setTimeout(() => {
-        this.suppressEditorBlur = false;
-        this.suppressNextStageClick = false;
-      }, 120);
-    };
-
-    this.textSelectionDrag = {
-      move,
-      up,
-    };
-    document.addEventListener("mousemove", move, true);
-    document.addEventListener("mouseup", up, {
-      once: true,
-      capture: true,
-    });
-  }
-
-  private stopTextSelectionDrag(): void {
-    if (!this.textSelectionDrag) {
-      return;
-    }
-
-    document.removeEventListener("mousemove", this.textSelectionDrag.move, true);
-    document.removeEventListener("mouseup", this.textSelectionDrag.up, true);
-    this.textSelectionDrag = null;
   }
 
   private startConnection(endpoint: MindMapEndpoint): void {
@@ -908,7 +576,7 @@ export class MindMapCanvas {
     }
 
     const start = this.getConnectorPoint(this.pendingConnection);
-    const pointer = this.getWorldPointerPosition();
+    const pointer = getWorldPointerPosition(this.stage);
 
     if (!start || !pointer) {
       return;
@@ -981,8 +649,7 @@ export class MindMapCanvas {
       return;
     }
 
-    if (this.suppressNextStageClick) {
-      this.suppressNextStageClick = false;
+    if (this.textEditor.consumeSuppressedStageClick()) {
       return;
     }
 
@@ -1022,7 +689,7 @@ export class MindMapCanvas {
           y: this.stage.y() + pointer.y - this.lastPanPoint.y,
         });
         this.lastPanPoint = pointer;
-        this.updateGrid();
+        updateGrid(this.host, this.stage);
         this.stage.batchDraw();
       }
     }
@@ -1047,31 +714,8 @@ export class MindMapCanvas {
   }
 
   private zoomWithWheel(event: WheelEvent): void {
-    event.preventDefault();
     this.closeActiveEditor(true);
-
-    const oldScale = this.stage.scaleX();
-    const rect = this.stage.container().getBoundingClientRect();
-    const pointer = {
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-    };
-    const worldPoint = {
-      x: (pointer.x - this.stage.x()) / oldScale,
-      y: (pointer.y - this.stage.y()) / oldScale,
-    };
-    const nextScale = clampScale(event.deltaY < 0 ? oldScale * ZOOM_STEP : oldScale / ZOOM_STEP);
-
-    this.stage.scale({
-      x: nextScale,
-      y: nextScale,
-    });
-    this.stage.position({
-      x: pointer.x - worldPoint.x * nextScale,
-      y: pointer.y - worldPoint.y * nextScale,
-    });
-    this.updateGrid();
-    this.stage.batchDraw();
+    zoomStageWithWheel(this.stage, this.host, event);
   }
 
   private openContextMenuFromDom(event: MouseEvent): void {
@@ -1224,145 +868,12 @@ export class MindMapCanvas {
 
     this.stage.width(width);
     this.stage.height(height);
-    this.updateGrid();
-    if (this.editSession) {
-      this.positionTextEditor(this.editSession);
-    }
+    updateGrid(this.host, this.stage);
+    this.textEditor.positionActive();
     this.stage.batchDraw();
   }
 
-  private getWorldPointerPosition(): { x: number; y: number } | null {
-    const pointer = this.stage.getPointerPosition();
-
-    return pointer ? this.screenToWorld(pointer) : null;
-  }
-
-  private screenToWorld(point: { x: number; y: number }): { x: number; y: number } {
-    const scale = this.stage.scaleX();
-
-    return {
-      x: (point.x - this.stage.x()) / scale,
-      y: (point.y - this.stage.y()) / scale,
-    };
-  }
-
-  private updateGrid(): void {
-    const scale = this.stage.scaleX();
-    const size = GRID_SIZE * scale;
-
-    this.host.style.backgroundSize = `${size}px ${size}px`;
-    this.host.style.backgroundPosition = `${mod(this.stage.x(), size)}px ${mod(this.stage.y(), size)}px`;
-  }
-
   private closeActiveEditor(commit: boolean): void {
-    if (!this.editSession) {
-      return;
-    }
-
-    this.editSession.close(commit);
+    this.textEditor.close(commit);
   }
-}
-
-function findNamedNode(target: Konva.Node, name: string): Konva.Node | null {
-  let current: Konva.Node | null = target;
-
-  while (current) {
-    if (current.hasName(name)) {
-      return current;
-    }
-
-    current = current.getParent();
-  }
-
-  return null;
-}
-
-function createMoveHitRects(width: number, height: number): Konva.Rect[] {
-  return (["top", "right", "bottom", "left"] as MoveHitPart[]).map((part) => {
-    const rect = new Konva.Rect({
-      fill: "rgba(255, 255, 255, 0.01)",
-      name: NODE_MOVE_HIT_NAME,
-    });
-    rect.setAttr("hitPart", part);
-    applyMoveHitRectFrame(rect, width, height);
-
-    return rect;
-  });
-}
-
-function applyMoveHitRectFrame(rect: Konva.Rect, width: number, height: number): void {
-  const part = rect.getAttr("hitPart");
-
-  if (!isMoveHitPart(part)) {
-    return;
-  }
-
-  switch (part) {
-    case "top":
-      rect.position({
-        x: 0,
-        y: 0,
-      });
-      rect.width(width);
-      rect.height(MOVE_HIT_SIZE);
-      break;
-    case "right":
-      rect.position({
-        x: Math.max(0, width - MOVE_HIT_SIZE),
-        y: 0,
-      });
-      rect.width(MOVE_HIT_SIZE);
-      rect.height(height);
-      break;
-    case "bottom":
-      rect.position({
-        x: 0,
-        y: Math.max(0, height - MOVE_HIT_SIZE),
-      });
-      rect.width(width);
-      rect.height(MOVE_HIT_SIZE);
-      break;
-    case "left":
-      rect.position({
-        x: 0,
-        y: 0,
-      });
-      rect.width(MOVE_HIT_SIZE);
-      rect.height(height);
-      break;
-  }
-}
-
-function isMoveHitPart(value: unknown): value is MoveHitPart {
-  return value === "top" || value === "right" || value === "bottom" || value === "left";
-}
-
-function getClientPointFromEvent(event: MouseEvent | TouchEvent): { x: number; y: number } | null {
-  if (event instanceof MouseEvent) {
-    return {
-      x: event.clientX,
-      y: event.clientY,
-    };
-  }
-
-  const touch = event.touches[0] ?? event.changedTouches[0];
-
-  return touch
-    ? {
-        x: touch.clientX,
-        y: touch.clientY,
-      }
-    : null;
-}
-
-function isConnectorSide(value: unknown): value is ConnectorSide {
-  return CONNECTOR_SIDES.some((side) => side === value);
-}
-
-function clampScale(value: number): number {
-  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
-}
-
-function mod(value: number, divisor: number): number {
-  return ((value % divisor) + divisor) % divisor;
 }
