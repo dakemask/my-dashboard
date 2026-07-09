@@ -30,6 +30,26 @@
 - `vite.config.ts`：Vite 构建配置和多页面入口。
 - `.github/workflows/pages.yml`：GitHub Pages 部署工作流。
 
+## 数据持久化标准
+
+需要持久化的模块通过浏览器使用 GitHub Contents API，将模块数据作为 JSON 文件保存在用户自有的私有 GitHub 仓库中。应用仓库继续只负责静态站点源代码和构建产物。
+
+每个持久化模块应维护一个独立的 revision JSON，用于表示该模块远程数据的版本。revision JSON 的具体文件名和字段由模块自行定义，但应保持足够小，只用于判断远程状态是否变化。
+
+每个已打开的标签页独立轮询该模块的 revision JSON：
+
+- 前台标签页默认每 `60s` 轮询一次。
+- 后台标签页默认每 `5min` 轮询一次。
+- 每次轮询应加入随机抖动，避免多个标签页或设备同时请求 GitHub。
+- 轮询只检查 revision；只有 revision 变化后才拉取完整模块数据。
+
+当 revision 变化时：
+
+- 如果本地没有未同步改动，模块应自动从 GitHub 拉取数据，并刷新本地工作区和视图。
+- 如果本地有未同步改动，模块必须先阻止进一步编辑，并要求用户处理本地改动：上传到 GitHub、与远程数据合并，或放弃本地改动后拉取远程数据。
+
+各模块将本地数据上传到 GitHub 的时机可以不同，应根据模块交互特性自行定义。普通小操作不应因为需要读取数据而直接访问 GitHub；操作所需数据应来自本地工作区或浏览器本地缓存。
+
 ## 功能模块
 
 ### Fragment Thoughts
@@ -51,10 +71,9 @@ HTML 外壳：`modules/thoughts/index.html`
 - `main.ts`：页面控制器、事件绑定，以及其他层之间的编排。
 - `style.css`：模块专用展示样式。
 
-持久化：
+同步到 GitHub 的时机：
 
-- 使用 `src/shared/privateData/` 下的共享私有 JSON 仓库辅助工具。
-- 将想法模块专用的 JSON 兼容性和规范化保留在该模块内部。
+- 新增、删除、编辑想法后可以同步到 GitHub。若实现防抖或批量同步，应保持本地状态已更新，并向用户呈现清晰的同步状态。
 
 兼容性：
 
@@ -87,16 +106,18 @@ HTML 外壳：`modules/mind-map/index.html`
 - `mindMapLocalStore.ts`：用于思维导图工作区快照的 IndexedDB 存储。
 - `mindMapSync.ts`：GitHub/IndexedDB 同步用例：加载本地工作区、保存本地工作区、从 GitHub 刷新工作区，以及将工作区变更上传到 GitHub。
 - `mindMapLibraryActions.ts`：文件树用户操作，例如创建、重命名、移动和删除文件夹/导图，并包含名称/路径验证和非受管理文件保护。
-- `main.ts`：页面控制器、事件绑定、撤销/重做、空闲刷新检查，以及工作区、同步、图库操作、领域操作和视图层之间的协调。
+- `main.ts`：页面控制器、事件绑定、撤销/重做、远程 revision 轮询和同步协调，以及工作区、图库操作、领域操作和视图层之间的协调。
 - `style.css`：模块专用展示样式。
 
-持久化：
+同步到 GitHub 的时机：
 
-- 使用 `src/shared/privateData/` 下的共享私有 GitHub Contents API 辅助工具。
+- 用户点击保存按钮、按下 `Ctrl+S`，或在远程 revision 已变化且本地存在未同步改动时选择上传或合并处理，都会将本地工作区同步到 GitHub。
+
+数据约束：
+
 - 设置中的 `path` 字段是思维导图库根路径。默认值为 `data/mind-maps/`；已存储的旧默认值 `data/mind-map.json` 会被视为未设置，并规范化为图库根路径。
 - 每个导图都保持为普通的 `MindMapData` JSON 文件，形状为 `{ nodes, arrows }`；导图名称来自文件名，不会包裹在元数据中。
-- 浏览器 IndexedDB 是整个工作区的主要工作缓存。页面打开、手动刷新，或超过两小时不活动后执行操作前，都会从 GitHub 刷新工作区。用户编辑会先更新本地工作区。
-- 保存会将本地工作区上传到 GitHub。新路径在创建时不会复用旧文件 SHA；删除的远程受管理文件会使用 `remoteShaByPath` 删除；空文件夹用 `.gitkeep` 表示。
+- 上传 Mind Map 工作区时，新路径在创建时不会复用旧文件 SHA；删除的远程受管理文件会使用 `remoteShaByPath` 删除；空文件夹用 `.gitkeep` 表示。
 - 文件树只管理文件夹、`.json` 导图文件和 `.gitkeep`。如果上次 GitHub 刷新发现某个文件夹下存在非受管理文件，则会阻止对该文件夹进行移动、重命名或删除。
 - 旧的 `data/mind-map.json` 单文件导图会被多导图库刻意忽略，不会自动导入或迁移。
 
