@@ -1,179 +1,169 @@
-# Agent Guide
+# 代理指南
 
-## Project Overview
+## 项目概览
 
-This repository is a personal dashboard for multiple small, user-owned tools. Each tool should live as a separate feature module while sharing the same dashboard entry page, build system, and deployment pipeline.
+这个仓库是一个个人仪表盘，用于承载多个由用户自有的小工具。每个工具都应作为独立的功能模块存在，同时共享同一个仪表盘入口页、构建系统和部署流水线。
 
-The app is deployed to GitHub Pages. Source code stays in the repository; GitHub Actions runs a workflow that installs dependencies, builds the Vite output in GitHub Pages' temporary working directory, and deploys the generated artifact to Pages. The local `dist/` directory is only for local testing and is not uploaded to GitHub.
+应用部署到 GitHub Pages。源代码保留在仓库中；GitHub Actions 运行工作流，安装依赖，在 GitHub Pages 的临时工作目录中构建 Vite 输出，并将生成的产物部署到 Pages。本地 `dist/` 目录只用于本地测试，不会上传到 GitHub。
 
-Persistent private data is stored outside this app repository. Modules that need persistence should read and write JSON files in a user-owned private GitHub repository through the GitHub Contents API. This keeps the dashboard app deployable as static files while keeping personal data separate from the public Pages site.
+持久化的私有数据存放在这个应用仓库之外。需要持久化的模块应通过 GitHub Contents API，在用户自有的私有 GitHub 仓库中读写 JSON 文件。这样可以让仪表盘应用继续作为静态文件部署，同时将个人数据与公开的 Pages 站点分离。
 
-## Development Principles
+## **开发原则**
 
-1. Keep modules decoupled early. When logic starts mixing independent responsibilities, extract it before it becomes a large file problem, and prefer small, typed modules. Common boundaries include UI rendering, browser storage, remote API access, data normalization, pure domain operations, and page-level orchestration.
+1. 尽早保持模块解耦。当一个文件开始混合独立职责时，在它变成大文件问题之前就要拆分，并优先使用小型、带类型的模块。常见边界包括 UI 渲染、浏览器存储、远程 API 访问、数据规范化、纯领域操作和页面级编排。
 
-2. Ask before making important choices. If you encounter:
+2. 尽量保持状态模型的自洽，在项目的技术实现上保持自洽顺畅。反例有语义重叠、奇怪而难以维护的功能实现方式、不考虑整体实现的bug修复方式。
 
-- User requirements that have several different solutions, where the different options significantly affect later real-world operations;
-- Unclear user requirements;
-- User requirements that need major project changes.
+3. 新功能、修深层bug前先询问。用户在提出新功能、要求修复bug时可能不会意识到他们的需求的复杂性。如果贸然接受用户的需求，可能导致一个个小需求积累成臃肿不规范的状态模型、或是过重的文件，这会与前两点产生冲突。如果有这种潜在风险，请在编辑前使用自定义工具 `custom_request_user_input` 向用户进行询问。
 
-Use the custom user-input tool before editing. Do not silently choose for the user in those cases.
+## 项目架构
 
-3. Preserve public behavior unless the user explicitly asks to change it. Existing routes, localStorage keys, JSON data shapes, and deployment assumptions should be treated as compatibility surfaces.
+这个应用是一个 Vite 多页面 TypeScript 项目。HTML 文件定义稳定的公开页面外壳，`src/` 下的 TypeScript 提供行为逻辑和样式导入。
 
-4. TypeScript types should describe persisted data, settings, API responses, and module contracts. Avoid `any` unless there is a clear boundary where unknown external data is being validated.
+重要项目路径：
 
-5. Use safe DOM patterns. Render user-provided content with `textContent` or explicit DOM nodes instead of HTML string templates.
+- `index.html`：仪表盘首页外壳。
+- `src/home/`：仪表盘首页实现。
+- `src/home/modules.ts`：首页展示的仪表盘模块注册表。
+- `src/shared/`：小型且真正跨模块共享的工具。
+- `src/shared/privateData/`：共享的私有 GitHub 仓库设置、GitHub Contents API 访问和 JSON 文件持久化。
+- `vite.config.ts`：Vite 构建配置和多页面入口。
+- `.github/workflows/pages.yml`：GitHub Pages 部署工作流。
 
-## Project Architecture
-
-The app is a Vite multi-page TypeScript project. HTML files define stable public page shells, while TypeScript under `src/` provides behavior and styling imports.
-
-Important project paths:
-
-- `index.html`: dashboard home page shell.
-- `src/home/`: dashboard home page implementation.
-- `src/home/modules.ts`: registry of dashboard modules shown on the home page.
-- `src/shared/`: utilities that are small and genuinely shared across modules.
-- `src/shared/privateData/`: shared private GitHub repository settings, GitHub Contents API access, and JSON file persistence.
-- `vite.config.ts`: Vite build configuration and multi-page inputs.
-- `.github/workflows/pages.yml`: GitHub Pages deployment workflow.
-
-## Feature Modules
+## 功能模块
 
 ### Fragment Thoughts
 
-Route: `/modules/thoughts/`
+路由：`/modules/thoughts/`
 
-HTML shell: `modules/thoughts/index.html`
+HTML 外壳：`modules/thoughts/index.html`
 
-Source: `src/thoughts/`
+源码：`src/thoughts/`
 
-Purpose: quickly record short thoughts, attach optional tags, and search locally in the loaded list.
+功能：快速记录短想法，附加可选标签，并在已加载列表中进行本地搜索。
 
-Responsibilities:
+职责：
 
-- `thoughtRepository.ts`: module JSON persistence, parsing, validation, and backward-compatible normalization.
-- `notes.ts`: pure thought operations such as create, update, delete, filter, sort, and parse.
-- `types.ts`: thought-specific persisted data and module state types.
-- `view.ts`: DOM lookup, rendering, and UI state updates.
-- `main.ts`: page controller, event wiring, and orchestration between the other layers.
-- `style.css`: module-specific presentation.
+- `thoughtRepository.ts`：模块 JSON 持久化、解析、验证和向后兼容的规范化。
+- `notes.ts`：纯想法操作，例如创建、更新、删除、筛选、排序和解析。
+- `types.ts`：想法模块专用的持久化数据和模块状态类型。
+- `view.ts`：DOM 查找、渲染和 UI 状态更新。
+- `main.ts`：页面控制器、事件绑定，以及其他层之间的编排。
+- `style.css`：模块专用展示样式。
 
-Persistence:
+持久化：
 
-- Uses shared private JSON repository helpers under `src/shared/privateData/`.
-- Keeps thought-specific JSON compatibility and normalization local to this module.
+- 使用 `src/shared/privateData/` 下的共享私有 JSON 仓库辅助工具。
+- 将想法模块专用的 JSON 兼容性和规范化保留在该模块内部。
 
-Compatibility:
+兼容性：
 
-- Keep `/modules/thoughts/` stable.
-- Preserve existing localStorage keys and JSON data shapes unless explicitly changing them.
+- 保持 `/modules/thoughts/` 稳定。
+- 除非明确变更，否则保留现有 localStorage 键和 JSON 数据形状。
 
 ### Mind Map
 
-Route: `/modules/mind-map/`
+路由：`/modules/mind-map/`
 
-HTML shell: `modules/mind-map/index.html`
+HTML 外壳：`modules/mind-map/index.html`
 
-Source: `src/mind-map/`
+源码：`src/mind-map/`
 
-Purpose: create, edit, move, resize, and connect text boxes on an interactive mind-map canvas.
+目的：在交互式思维导图画布上创建、编辑、移动、调整大小并连接文本框。
 
-Responsibilities:
+职责：
 
-- `mindMapRepository.ts`: module JSON persistence, parsing, validation, and backward-compatible normalization.
-- `mindMap.ts`: pure mind-map operations such as create, update, delete, and connect nodes and arrows.
-- `types.ts`: mind-map persisted data, node/arrow, selection, frame, and state types.
-- `view.ts`: DOM lookup plus toolbar, settings, status, context-menu, and mode UI updates.
-- `domSvgMapView.ts`: DOM/SVG canvas rendering, pointer interactions, text editing, selection, resize handles, connectors, arrows, panning, and zooming.
-- `domSvgMapElements.ts`: DOM/SVG element factories and low-level editable text, caret, pointer-capture, and SVG line helpers used by the canvas view.
-- `nodeFrame.ts`: node frame geometry, resize handle metadata, endpoint positioning, and frame comparison helpers.
-- `textBoxLayout.ts`: text box measurement, edit-time height fitting, auto-width behavior, and resize commit fitting.
-- `mindMapLibrary.ts`: pure path, name validation, tree lookup, tree mutation, sorting, and path-prefix helpers for the mind-map library.
-- `mindMapWorkspace.ts`: local-first workspace state model. It owns `tree`, `maps`, `dirtyContentPaths`, `dirtyTree`, `treeChangePaths`, `remoteShaByPath`, remote unknown-file protection data, and old local-cache normalization.
-- `mindMapLibraryRepository.ts`: GitHub directory traversal and managed-file transport for mind-map library folders, `.json` maps, and `.gitkeep` placeholders.
-- `mindMapLocalStore.ts`: IndexedDB storage for the mind-map workspace snapshot.
-- `mindMapSync.ts`: GitHub/IndexedDB synchronization use cases: load local workspace, save local workspace, refresh workspace from GitHub, and upload workspace changes to GitHub.
-- `mindMapLibraryActions.ts`: file-tree user operations such as create, rename, move, and delete folders/maps, including name/path validation and non-managed-file guards.
-- `main.ts`: page controller, event wiring, undo/redo, idle-refresh checks, and coordination between workspace, sync, library actions, domain operations, and view layers.
-- `style.css`: module-specific presentation.
+- `mindMapRepository.ts`：模块 JSON 持久化、解析、验证和向后兼容的规范化。
+- `mindMap.ts`：纯思维导图操作，例如创建、更新、删除，以及连接节点和箭头。
+- `types.ts`：思维导图持久化数据、节点/箭头、选择状态、框架和状态类型。
+- `view.ts`：DOM 查找，以及工具栏、设置、状态、上下文菜单和模式 UI 更新。
+- `domSvgMapView.ts`：DOM/SVG 画布渲染、指针交互、文本编辑、选择、调整大小手柄、连接器、箭头、平移和缩放。
+- `domSvgMapElements.ts`：DOM/SVG 元素工厂，以及画布视图使用的低层可编辑文本、光标、指针捕获和 SVG 线条辅助工具。
+- `nodeFrame.ts`：节点框架几何、调整大小手柄元数据、端点定位和框架比较辅助工具。
+- `textBoxLayout.ts`：文本框测量、编辑期间的高度适配、自动宽度行为和调整大小提交时的适配。
+- `mindMapLibrary.ts`：思维导图库的纯路径、名称验证、树查找、树变更、排序和路径前缀辅助工具。
+- `mindMapWorkspace.ts`：本地优先的工作区状态模型。它拥有 `tree`、`maps`、`dirtyContentPaths`、`dirtyTree`、`treeChangePaths`、`remoteShaByPath`、远程未知文件保护数据，以及旧本地缓存规范化。
+- `mindMapLibraryRepository.ts`：用于思维导图库文件夹、`.json` 导图和 `.gitkeep` 占位文件的 GitHub 目录遍历与受管理文件传输。
+- `mindMapLocalStore.ts`：用于思维导图工作区快照的 IndexedDB 存储。
+- `mindMapSync.ts`：GitHub/IndexedDB 同步用例：加载本地工作区、保存本地工作区、从 GitHub 刷新工作区，以及将工作区变更上传到 GitHub。
+- `mindMapLibraryActions.ts`：文件树用户操作，例如创建、重命名、移动和删除文件夹/导图，并包含名称/路径验证和非受管理文件保护。
+- `main.ts`：页面控制器、事件绑定、撤销/重做、空闲刷新检查，以及工作区、同步、图库操作、领域操作和视图层之间的协调。
+- `style.css`：模块专用展示样式。
 
-Persistence:
+持久化：
 
-- Uses shared private GitHub Contents API helpers under `src/shared/privateData/`.
-- The settings `path` field is the mind-map library root. The default is `data/mind-maps/`; a stored legacy default `data/mind-map.json` is treated as unset and normalized to the library root.
-- Each map remains a plain `MindMapData` JSON file shaped as `{ nodes, arrows }`; map names come from filenames and are not wrapped in metadata.
-- Browser IndexedDB is the primary working cache for the whole workspace. The workspace is refreshed from GitHub on page open, on manual refresh, or before an operation after more than two hours of inactivity. User edits update the local workspace first.
-- Saving uploads the local workspace to GitHub. New paths are created without reusing old file SHAs; removed remote managed files are deleted using `remoteShaByPath`; empty folders are represented by `.gitkeep`.
-- The file tree only manages folders, `.json` map files, and `.gitkeep`. Folder move/rename/delete is blocked when the last GitHub refresh saw non-managed files under that folder.
-- The old `data/mind-map.json` single-file map is intentionally ignored by the multi-map library and is not automatically imported or migrated.
+- 使用 `src/shared/privateData/` 下的共享私有 GitHub Contents API 辅助工具。
+- 设置中的 `path` 字段是思维导图库根路径。默认值为 `data/mind-maps/`；已存储的旧默认值 `data/mind-map.json` 会被视为未设置，并规范化为图库根路径。
+- 每个导图都保持为普通的 `MindMapData` JSON 文件，形状为 `{ nodes, arrows }`；导图名称来自文件名，不会包裹在元数据中。
+- 浏览器 IndexedDB 是整个工作区的主要工作缓存。页面打开、手动刷新，或超过两小时不活动后执行操作前，都会从 GitHub 刷新工作区。用户编辑会先更新本地工作区。
+- 保存会将本地工作区上传到 GitHub。新路径在创建时不会复用旧文件 SHA；删除的远程受管理文件会使用 `remoteShaByPath` 删除；空文件夹用 `.gitkeep` 表示。
+- 文件树只管理文件夹、`.json` 导图文件和 `.gitkeep`。如果上次 GitHub 刷新发现某个文件夹下存在非受管理文件，则会阻止对该文件夹进行移动、重命名或删除。
+- 旧的 `data/mind-map.json` 单文件导图会被多导图库刻意忽略，不会自动导入或迁移。
 
-Compatibility:
+兼容性：
 
-- Keep `/modules/mind-map/` stable.
-- Preserve existing settings localStorage keys and per-map `{ nodes, arrows }` JSON shape unless explicitly changing them.
-- Keep old browser-local mind-map workspace cache normalization in `mindMapWorkspace.ts` when changing the IndexedDB snapshot shape.
+- 保持 `/modules/mind-map/` 稳定。
+- 除非明确变更，否则保留现有设置 localStorage 键和单导图 `{ nodes, arrows }` JSON 形状。
+- 修改 IndexedDB 快照形状时，在 `mindMapWorkspace.ts` 中保留旧浏览器本地思维导图工作区缓存的规范化。
 
-## Adding A Feature Module
+## 添加功能模块
 
-When adding a new feature module, keep the same pattern:
+添加新功能模块时，保持相同模式：
 
-- Add a stable HTML shell under `modules/<module-id>/index.html`.
-- Add module source under `src/<module-id>/`.
-- Register the module in `src/home/modules.ts`.
-- Add the HTML entry to `vite.config.ts` so production builds include it.
-- Keep module-specific storage, API clients, data operations, rendering, and orchestration separated.
+- 在 `modules/<module-id>/index.html` 下添加稳定的 HTML 外壳。
+- 在 `src/<module-id>/` 下添加模块源码。
+- 在 `src/home/modules.ts` 中注册模块。
+- 在 `vite.config.ts` 中添加 HTML 入口，确保生产构建包含它。
+- 将模块专用的存储、API 客户端、数据操作、渲染和编排分离。
 
-## Module Design Rules
+## 模块设计规则
 
-For feature modules, use clear responsibility layers rather than a single page script:
+对于功能模块，使用清晰的职责分层，而不是单个页面脚本：
 
-- Settings/storage layer: browser persistence such as localStorage keys and defaults.
-- API layer: remote service calls, headers, API-specific errors, and request/response types.
-- Repository layer: load/save use cases, JSON parsing, validation, and backward-compatible normalization.
-- Domain layer: pure operations on module data, such as create, update, delete, filter, sort, and parse.
-- View layer: DOM lookup, rendering, and UI state updates.
-- Page controller: event wiring and orchestration between the other layers.
+- 设置/存储层：浏览器持久化，例如 localStorage 键和默认值。
+- API 层：远程服务调用、请求头、API 专用错误和请求/响应类型。
+- 仓库层：加载/保存用例、JSON 解析、验证和向后兼容的规范化。
+- 领域层：对模块数据的纯操作，例如创建、更新、删除、筛选、排序和解析。
+- 视图层：DOM 查找、渲染和 UI 状态更新。
+- 页面控制器：事件绑定，以及其他层之间的编排。
 
-Avoid importing view code into pure data modules, and avoid calling GitHub or localStorage APIs from rendering code. Feature modules should keep their own JSON shape normalization local, while shared private-data modules handle repository settings, file transport, and generic JSON read/write behavior.
+避免将视图代码导入纯数据模块，也避免从渲染代码中调用 GitHub 或 localStorage API。功能模块应将自己的 JSON 形状规范化保留在模块内部，而共享私有数据模块负责仓库设置、文件传输和通用 JSON 读写行为。
 
-## GitHub Pages Deployment
+## GitHub Pages 部署
 
-Deployment is workflow-based:
+部署基于工作流：
 
-1. Code is pushed to `main`, or the workflow is started manually from GitHub Actions.
-2. GitHub Actions checks out the source.
-3. It installs dependencies with `npm ci`.
-4. It runs `npm run build`.
-5. It uploads `dist/` as a Pages artifact.
-6. It deploys that artifact to GitHub Pages.
+1. 代码推送到 `main`，或从 GitHub Actions 手动启动工作流。
+2. GitHub Actions 检出源代码。
+3. 使用 `npm ci` 安装依赖。
+4. 运行 `npm run build`。
+5. 将 `dist/` 上传为 Pages artifact。
+6. 将该 artifact 部署到 GitHub Pages。
 
-The repository settings must use:
+仓库设置必须使用：
 
 `Settings -> Pages -> Build and deployment -> Source -> GitHub Actions`
 
-The Vite `base` path is derived from `GITHUB_REPOSITORY` during Actions builds, so this repository deploys under `/my-dashboard/`. If the repository name changes, verify the generated asset paths before deploying.
+Vite 的 `base` 路径在 Actions 构建期间由 `GITHUB_REPOSITORY` 派生，因此这个仓库会部署在 `/my-dashboard/` 下。如果仓库名称变更，请在部署前验证生成的资源路径。
 
-## Private JSON Data Repository
+## 私有 JSON 数据仓库
 
-Private user data is not stored in this dashboard repository. For modules that need persistence:
+私有用户数据不存储在这个仪表盘仓库中。对于需要持久化的模块：
 
-- Store data as JSON files in a separate private GitHub repository.
-- Access those files from the browser through GitHub's Contents API.
-- Use a fine-grained token limited to the private data repository and Contents read/write access.
-- Store the token only in the user's browser settings.
-- Treat the JSON format as a compatibility contract. If the format needs to change, ask the user first.
+- 将数据作为 JSON 文件存储在单独的私有 GitHub 仓库中。
+- 通过浏览器使用 GitHub Contents API 访问这些文件。
+- 使用仅限该私有数据仓库、并具有 Contents 读写权限的 fine-grained token。
+- 只在用户的浏览器设置中存储 token。
+- 将 JSON 格式视为兼容性契约。如果格式需要变更，先询问用户。
 
-Shared private-data persistence code belongs under `src/shared/privateData/`. Module-specific repositories should call the shared JSON file helpers and keep module-specific data normalization in the feature module.
+共享私有数据持久化代码属于 `src/shared/privateData/`。模块专用仓库应调用共享 JSON 文件辅助工具，并将模块专用数据规范化保留在功能模块中。
 
-## Checks And Testing
+## 检查与测试
 
-Use these commands for code-level verification:
+使用以下命令进行代码级验证：
 
-- `npm install`: install dependencies when needed.
-- `npm run build`: required before handing off code changes. This runs TypeScript checking and the production Vite build.
-- `npm run preview`: optional production preview only when the user explicitly asks for it.
+- `npm install`：需要时安装依赖。
+- `npm run build`：交付代码变更前必须运行。它会执行 TypeScript 检查和生产 Vite 构建。
+- `npm run preview`：仅在用户明确要求时用于可选的生产预览。
 
-`npm run dev`, browser-based runtime testing, layout review, and user acceptance testing are the user's responsibility. Do not start the development server yourself.
+`npm run dev`、基于浏览器的运行时测试、布局审查和用户验收测试由用户负责。不要自行启动开发服务器。
