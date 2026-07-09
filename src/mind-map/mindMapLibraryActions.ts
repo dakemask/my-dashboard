@@ -33,7 +33,7 @@ export interface MindMapLibraryActionContext {
 export type MindMapLibraryActionResult =
   | {
       changed: false;
-      status?: string;
+      errorMessage?: string;
     }
   | {
       changed: true;
@@ -43,7 +43,6 @@ export type MindMapLibraryActionResult =
         path: string;
       };
       selection: MindMapLibrarySelection;
-      status: string;
     };
 
 export function createMindMapFolderAction(context: MindMapLibraryActionContext): MindMapLibraryActionResult {
@@ -75,7 +74,6 @@ export function createMindMapFolderAction(context: MindMapLibraryActionContext):
       kind: "folder",
       path: folderPath,
     },
-    status: "已在本地新建文件夹，尚未保存到 GitHub。",
   };
 }
 
@@ -115,7 +113,6 @@ export function createMindMapFileAction(context: MindMapLibraryActionContext): M
       kind: "map",
       path: filePath,
     },
-    status: `已在本地新建导图：${getMapTitleFromPath(filePath)}，尚未保存到 GitHub。`,
   };
 }
 
@@ -169,7 +166,6 @@ export function renameMindMapLibraryEntryAction(context: MindMapLibraryActionCon
       kind: entry.kind,
       path: nextPath,
     },
-    status: entry.kind === "map" ? "已在本地重命名导图，尚未保存到 GitHub。" : "已在本地重命名文件夹，尚未保存到 GitHub。",
   };
 }
 
@@ -196,8 +192,8 @@ export function moveMindMapLibraryEntryAction(context: MindMapLibraryActionConte
     };
   }
 
-  if ("status" in targetFolder) {
-    return actionError(targetFolder.status);
+  if ("errorMessage" in targetFolder) {
+    return actionError(targetFolder.errorMessage);
   }
 
   const targetFolderPath = targetFolder.path;
@@ -225,7 +221,6 @@ export function moveMindMapLibraryEntryAction(context: MindMapLibraryActionConte
       kind: entry.kind,
       path: nextPath,
     },
-    status: entry.kind === "map" ? "已在本地移动导图，尚未保存到 GitHub。" : "已在本地移动文件夹，尚未保存到 GitHub。",
   };
 }
 
@@ -262,14 +257,13 @@ export function deleteMindMapLibraryEntryAction(context: MindMapLibraryActionCon
         ? null
         : context.currentMapPath,
     selection: null,
-    status: "已在本地删除，尚未保存到 GitHub。",
   };
 }
 
-function actionError(status: string): MindMapLibraryActionResult {
+function actionError(errorMessage: string): MindMapLibraryActionResult {
   return {
     changed: false,
-    status,
+    errorMessage,
   };
 }
 
@@ -280,7 +274,7 @@ function folderHasOnlyManagedRemoteFiles(workspace: MindMapWorkspace, folderPath
 function getExistingTargetFolderPath(
   context: MindMapLibraryActionContext,
   initialPath: string,
-): { path: string } | { status: string } | null {
+): { path: string } | { errorMessage: string } | null {
   const input = prompt("输入目标文件夹路径（相对于导图库根目录，留空表示根目录）", initialPath);
 
   if (input === null) {
@@ -291,7 +285,7 @@ function getExistingTargetFolderPath(
 
   if (validation.error) {
     return {
-      status: validation.error,
+      errorMessage: validation.error,
     };
   }
 
@@ -300,7 +294,7 @@ function getExistingTargetFolderPath(
 
   if (targetPath !== context.rootPath && entry?.kind !== "folder") {
     return {
-      status: "目标文件夹不存在。",
+      errorMessage: "目标文件夹不存在。",
     };
   }
 

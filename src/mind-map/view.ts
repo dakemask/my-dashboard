@@ -18,6 +18,7 @@ export interface MindMapElements {
   saveBtn: HTMLButtonElement;
   refreshBtn: HTMLButtonElement;
   resetBtn: HTMLButtonElement;
+  errorToastStack: HTMLElement;
   status: HTMLElement;
   saveOverlay: HTMLElement;
   mapHost: HTMLDivElement;
@@ -50,6 +51,7 @@ export function getMindMapElements(): MindMapElements {
     saveBtn: queryRequired("#saveBtn"),
     refreshBtn: queryRequired("#refreshBtn"),
     resetBtn: queryRequired("#resetBtn"),
+    errorToastStack: queryRequired("#errorToastStack"),
     status: queryRequired("#status"),
     saveOverlay: queryRequired("#saveOverlay"),
     mapHost: queryRequired("#mapHost"),
@@ -75,6 +77,30 @@ export function setSaveOverlayVisible(elements: MindMapElements, visible: boolea
   elements.saveOverlay.classList.toggle("hidden", !visible);
   elements.saveOverlay.setAttribute("aria-hidden", String(!visible));
   elements.mapHost.setAttribute("aria-busy", String(visible));
+}
+
+export function showErrorToast(elements: MindMapElements, message: string): void {
+  const toast = document.createElement("div");
+  const messageText = document.createElement("span");
+  const closeButton = document.createElement("button");
+  const closeIcon = document.createElement("span");
+
+  toast.className = "error-toast";
+  toast.setAttribute("role", "alert");
+  messageText.className = "error-toast-message";
+  messageText.textContent = message;
+  closeButton.type = "button";
+  closeButton.className = "error-toast-close";
+  closeButton.setAttribute("aria-label", "关闭错误提示");
+  closeIcon.className = "material-symbols-rounded";
+  closeIcon.setAttribute("aria-hidden", "true");
+  closeIcon.textContent = "close";
+  closeButton.append(closeIcon);
+  closeButton.addEventListener("click", () => {
+    toast.remove();
+  });
+  toast.append(messageText, closeButton);
+  elements.errorToastStack.prepend(toast);
 }
 
 export function fillSettingsForm(elements: MindMapElements, settings: PrivateDataSettings): void {

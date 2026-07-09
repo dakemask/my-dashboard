@@ -68,6 +68,7 @@ import {
   setSaveOverlayVisible,
   setStatus,
   showContextMenu,
+  showErrorToast,
 } from "./view";
 import "./style.css";
 
@@ -154,6 +155,15 @@ function renderSyncStatus(): void {
       ? "尚未同步"
       : `最近同步：${new Date(workspace.lastRemoteRefreshAt).toLocaleString()}`,
   );
+}
+
+function reportError(error: unknown): void {
+  console.error(error);
+  showErrorToast(elements, getErrorMessage(error));
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function refreshLibrary(): Promise<void> {
@@ -411,7 +421,7 @@ async function ensureFreshBeforeOperation(): Promise<boolean> {
   try {
     await refreshLocalFromGitHub(settings);
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 
   lastOperationAt = Date.now();
@@ -423,7 +433,7 @@ function markLibraryChanged(): void {
   render();
   renderLibrary();
   void saveLocalSnapshot().catch((error) => {
-    console.error(error);
+    reportError(error);
   });
 }
 
@@ -483,6 +493,9 @@ async function runLibraryAction(
   });
 
   if (!result.changed) {
+    if (result.errorMessage) {
+      showErrorToast(elements, result.errorMessage);
+    }
     return;
   }
 
@@ -624,7 +637,7 @@ function markDirty(): void {
   }
   lastOperationAt = Date.now();
   void saveLocalSnapshot().catch((error) => {
-    console.error(error);
+    reportError(error);
   });
 }
 
@@ -728,7 +741,7 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
       await refreshLocalFromGitHub(settings);
     }
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -742,7 +755,7 @@ elements.clearSettingsBtn.addEventListener("click", () => {
 
 elements.addNodeBtn.addEventListener("click", () => {
   void addNode().catch((error) => {
-    console.error(error);
+    reportError(error);
   });
 });
 
@@ -750,7 +763,7 @@ elements.refreshLibraryBtn.addEventListener("click", async () => {
   try {
     await refreshLibrary();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -758,7 +771,7 @@ elements.newFolderBtn.addEventListener("click", async () => {
   try {
     await createFolder();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -766,7 +779,7 @@ elements.newMapBtn.addEventListener("click", async () => {
   try {
     await createMap();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -774,7 +787,7 @@ elements.renameEntryBtn.addEventListener("click", async () => {
   try {
     await renameLibraryEntry();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -782,7 +795,7 @@ elements.moveEntryBtn.addEventListener("click", async () => {
   try {
     await moveLibraryEntry();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -790,7 +803,7 @@ elements.deleteEntryBtn.addEventListener("click", async () => {
   try {
     await deleteLibraryEntry();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -812,7 +825,7 @@ elements.libraryTree.addEventListener("click", (event) => {
 
   if (kind === "map" && path !== state.currentMapPath) {
     void openMindMap(path).catch((error) => {
-      console.error(error);
+      reportError(error);
     });
   }
 });
@@ -823,7 +836,7 @@ elements.connectBtn.addEventListener("click", () => {
       setConnectModeEnabled(!connectMode);
     })
     .catch((error) => {
-      console.error(error);
+      reportError(error);
     });
 });
 
@@ -831,7 +844,7 @@ elements.saveBtn.addEventListener("click", async () => {
   try {
     await persistMindMap();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -839,7 +852,7 @@ elements.refreshBtn.addEventListener("click", async () => {
   try {
     await refreshMindMap();
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 });
 
@@ -877,7 +890,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     mapView.commitActiveEdit();
     void persistMindMap().catch((error) => {
-      console.error(error);
+      reportError(error);
     });
     return;
   }
@@ -913,7 +926,7 @@ document.addEventListener("keydown", (event) => {
   if (event.altKey && !commandKey && key === "1") {
     event.preventDefault();
     void addNode().catch((error) => {
-      console.error(error);
+      reportError(error);
     });
     return;
   }
@@ -928,7 +941,7 @@ document.addEventListener("keydown", (event) => {
         setConnectModeEnabled(true);
       })
       .catch((error) => {
-        console.error(error);
+        reportError(error);
       });
     return;
   }
@@ -962,7 +975,7 @@ setConnectModeEnabled(connectMode);
 render();
 renderLibrary();
 void initializeMindMap().catch((error) => {
-  console.error(error);
+  reportError(error);
 });
 
 async function initializeMindMap(): Promise<void> {
@@ -980,6 +993,6 @@ async function initializeMindMap(): Promise<void> {
   try {
     await refreshLocalFromGitHub(settings);
   } catch (error) {
-    console.error(error);
+    reportError(error);
   }
 }

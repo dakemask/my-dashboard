@@ -705,6 +705,64 @@ input:focus {
   font-size: 13px;
 }
 
+.error-toast-stack {
+  position: fixed;
+  top: 82px;
+  right: 18px;
+  z-index: 19;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  width: min(420px, calc(100vw - 36px));
+  max-height: calc(100vh - 116px);
+  overflow: auto;
+  pointer-events: none;
+}
+
+.error-toast {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid rgba(180, 35, 24, 0.24);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.1);
+  color: var(--text);
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+.error-toast-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-toast-close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.error-toast-close:hover {
+  border-color: rgba(180, 35, 24, 0.18);
+  background: #fff1f0;
+  color: var(--danger);
+}
+
+.error-toast-close .material-symbols-rounded {
+  font-size: 18px;
+}
+
 .save-overlay {
   position: fixed;
   inset: 0;
@@ -784,6 +842,10 @@ input:focus {
     bottom: 12px;
   }
 
+  .error-toast-stack {
+    top: 136px;
+  }
+
   .settings-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -804,6 +866,10 @@ input:focus {
   }
 
   .library-panel {
+    top: 158px;
+  }
+
+  .error-toast-stack {
     top: 158px;
   }
 
