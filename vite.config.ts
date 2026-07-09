@@ -12,7 +12,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         home: resolve(projectRoot, "index.html"),
-        thoughts: resolve(projectRoot, "modules/thoughts/index.html"),
+        fragmentThoughts: resolve(projectRoot, "modules/fragment-thoughts/index.html"),
         mindMap: resolve(projectRoot, "modules/mind-map/index.html"),
       },
     },

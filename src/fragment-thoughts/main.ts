@@ -1,10 +1,10 @@
 import {
-  addNote as addNoteToData,
-  createNote,
-  deleteNote as deleteNoteFromData,
-  getVisibleNotes,
+  addFragmentThought as addFragmentThoughtToData,
+  createFragmentThought,
+  deleteFragmentThought as deleteFragmentThoughtFromData,
+  getVisibleFragmentThoughts,
   parseTags,
-} from "./notes";
+} from "./fragmentThoughts";
 import {
   clearPrivateDataSettings,
   hasCompletePrivateDataSettings,
@@ -12,24 +12,24 @@ import {
   savePrivateDataSettings,
 } from "../shared/privateData/settings";
 import type { PrivateDataSettings } from "../shared/privateData/types";
-import { loadThoughtData, saveThoughtData } from "./thoughtRepository";
-import type { ThoughtState } from "./types";
+import { loadFragmentThoughtData, saveFragmentThoughtData } from "./fragmentThoughtRepository";
+import type { FragmentThoughtState } from "./types";
 import {
   clearComposer,
   fillSettingsForm,
-  getThoughtsElements,
+  getFragmentThoughtsElements,
   readSettingsForm,
-  renderNotes,
+  renderFragmentThoughts,
   setStatus,
 } from "./view";
 import "./style.css";
 
-const DEFAULT_THOUGHTS_DATA_SETTINGS: Partial<PrivateDataSettings> = {
-  path: "data/thoughts.json",
+const DEFAULT_FRAGMENT_THOUGHTS_DATA_SETTINGS: Partial<PrivateDataSettings> = {
+  path: "fragment-thoughts/fragment-thoughts.json",
 };
 
-const elements = getThoughtsElements();
-let state: ThoughtState = {
+const elements = getFragmentThoughtsElements();
+let state: FragmentThoughtState = {
   sha: null,
   data: {
     notes: [],
@@ -37,7 +37,7 @@ let state: ThoughtState = {
 };
 
 function loadSettings(): PrivateDataSettings {
-  return loadPrivateDataSettings(DEFAULT_THOUGHTS_DATA_SETTINGS);
+  return loadPrivateDataSettings(DEFAULT_FRAGMENT_THOUGHTS_DATA_SETTINGS);
 }
 
 function requireSettings(): PrivateDataSettings | null {
@@ -53,10 +53,14 @@ function requireSettings(): PrivateDataSettings | null {
 }
 
 function render(): void {
-  renderNotes(elements, getVisibleNotes(state.data, elements.searchInput.value), deleteNote);
+  renderFragmentThoughts(
+    elements,
+    getVisibleFragmentThoughts(state.data, elements.searchInput.value),
+    deleteFragmentThought,
+  );
 }
 
-async function refreshThoughts(): Promise<void> {
+async function refreshFragmentThoughts(): Promise<void> {
   const settings = requireSettings();
 
   if (!settings) {
@@ -66,7 +70,7 @@ async function refreshThoughts(): Promise<void> {
 
   setStatus(elements, "正在从 GitHub 读取...");
 
-  const result = await loadThoughtData(settings);
+  const result = await loadFragmentThoughtData(settings);
   state = {
     sha: result.sha,
     data: result.data,
@@ -79,7 +83,7 @@ async function refreshThoughts(): Promise<void> {
   render();
 }
 
-async function persistThoughts(message: string): Promise<void> {
+async function persistFragmentThoughts(message: string): Promise<void> {
   const settings = requireSettings();
 
   if (!settings) {
@@ -87,11 +91,11 @@ async function persistThoughts(message: string): Promise<void> {
   }
 
   setStatus(elements, "正在保存到 GitHub...");
-  state.sha = await saveThoughtData(settings, state.data, state.sha, message);
+  state.sha = await saveFragmentThoughtData(settings, state.data, state.sha, message);
   setStatus(elements, `已保存：${new Date().toLocaleString()}`);
 }
 
-async function addNote(): Promise<void> {
+async function addFragmentThought(): Promise<void> {
   const content = elements.thoughtInput.value.trim();
 
   if (!content) {
@@ -99,30 +103,30 @@ async function addNote(): Promise<void> {
     return;
   }
 
-  const note = createNote(content, parseTags(elements.tagInput.value));
-  state.data = addNoteToData(state.data, note);
+  const fragmentThought = createFragmentThought(content, parseTags(elements.tagInput.value));
+  state.data = addFragmentThoughtToData(state.data, fragmentThought);
   clearComposer(elements);
   render();
 
   try {
-    await persistThoughts("add thought");
+    await persistFragmentThoughts("add fragment thought");
   } catch (error) {
     setStatus(elements, getErrorMessage(error));
   }
 }
 
-async function deleteNote(id: string): Promise<void> {
+async function deleteFragmentThought(id: string): Promise<void> {
   const ok = confirm("确定删除这条想法吗？");
 
   if (!ok) {
     return;
   }
 
-  state.data = deleteNoteFromData(state.data, id);
+  state.data = deleteFragmentThoughtFromData(state.data, id);
   render();
 
   try {
-    await persistThoughts("delete thought");
+    await persistFragmentThoughts("delete fragment thought");
   } catch (error) {
     setStatus(elements, getErrorMessage(error));
   }
@@ -141,7 +145,7 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
   setStatus(elements, "设置已保存。");
 
   try {
-    await refreshThoughts();
+    await refreshFragmentThoughts();
   } catch (error) {
     setStatus(elements, getErrorMessage(error));
   }
@@ -154,12 +158,12 @@ elements.clearSettingsBtn.addEventListener("click", () => {
 });
 
 elements.addBtn.addEventListener("click", () => {
-  void addNote();
+  void addFragmentThought();
 });
 
 elements.refreshBtn.addEventListener("click", async () => {
   try {
-    await refreshThoughts();
+    await refreshFragmentThoughts();
   } catch (error) {
     setStatus(elements, getErrorMessage(error));
   }
@@ -168,6 +172,6 @@ elements.refreshBtn.addEventListener("click", async () => {
 elements.searchInput.addEventListener("input", render);
 
 fillSettingsForm(elements, loadSettings());
-void refreshThoughts().catch((error) => {
+void refreshFragmentThoughts().catch((error) => {
   setStatus(elements, getErrorMessage(error));
 });

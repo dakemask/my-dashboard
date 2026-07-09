@@ -4,7 +4,7 @@
 
 ## 模块
 
-- `modules/thoughts/`: 碎片想法记录功能，数据同步到私有数据仓库。
+- `modules/fragment-thoughts/`: 碎片想法记录功能，数据同步到私有数据仓库。
 
 ## 本地开发
 

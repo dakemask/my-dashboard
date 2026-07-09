@@ -54,22 +54,24 @@
 
 ### Fragment Thoughts
 
-路由：`/modules/thoughts/`
+路由：`/modules/fragment-thoughts/`
 
-HTML 外壳：`modules/thoughts/index.html`
+HTML 外壳：`modules/fragment-thoughts/index.html`
 
-源码：`src/thoughts/`
+源码：`src/fragment-thoughts/`
 
 功能：快速记录短想法，附加可选标签，并在已加载列表中进行本地搜索。
 
 职责：
 
-- `thoughtRepository.ts`：模块 JSON 持久化、解析、验证和向后兼容的规范化。
-- `notes.ts`：纯想法操作，例如创建、更新、删除、筛选、排序和解析。
+- `fragmentThoughtRepository.ts`：模块 JSON 持久化、解析、验证和向后兼容的规范化。
+- `fragmentThoughts.ts`：纯想法操作，例如创建、更新、删除、筛选、排序和解析。
 - `types.ts`：想法模块专用的持久化数据和模块状态类型。
 - `view.ts`：DOM 查找、渲染和 UI 状态更新。
 - `main.ts`：页面控制器、事件绑定，以及其他层之间的编排。
 - `style.css`：模块专用展示样式。
+
+默认数据路径：`fragment-thoughts/fragment-thoughts.json`。
 
 同步到 GitHub 的时机：
 
@@ -77,7 +79,7 @@ HTML 外壳：`modules/thoughts/index.html`
 
 兼容性：
 
-- 保持 `/modules/thoughts/` 稳定。
+- 保持 `/modules/fragment-thoughts/` 稳定。
 - 除非明确变更，否则保留现有 localStorage 键和 JSON 数据形状。
 
 ### Mind Map

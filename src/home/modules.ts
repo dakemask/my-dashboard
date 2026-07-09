@@ -7,10 +7,10 @@ export interface DashboardModule {
 
 export const dashboardModules: DashboardModule[] = [
   {
-    id: "thoughts",
+    id: "fragment-thoughts",
     title: "碎片想法",
     description: "快速记录，随时搜索，数据同步到你的 GitHub 私有仓库。",
-    href: "modules/thoughts/",
+    href: "modules/fragment-thoughts/",
   },
   {
     id: "mind-map",

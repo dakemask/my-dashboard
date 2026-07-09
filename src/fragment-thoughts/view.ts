@@ -1,8 +1,8 @@
 import { queryRequired } from "../shared/dom";
 import type { PrivateDataSettings } from "../shared/privateData/types";
-import type { ThoughtNote } from "./types";
+import type { FragmentThought } from "./types";
 
-export interface ThoughtsElements {
+export interface FragmentThoughtsElements {
   settingsBtn: HTMLButtonElement;
   settingsPanel: HTMLElement;
   ownerInput: HTMLInputElement;
@@ -21,7 +21,7 @@ export interface ThoughtsElements {
   list: HTMLElement;
 }
 
-export function getThoughtsElements(): ThoughtsElements {
+export function getFragmentThoughtsElements(): FragmentThoughtsElements {
   return {
     settingsBtn: queryRequired("#settingsBtn"),
     settingsPanel: queryRequired("#settingsPanel"),
@@ -42,11 +42,11 @@ export function getThoughtsElements(): ThoughtsElements {
   };
 }
 
-export function setStatus(elements: ThoughtsElements, message = ""): void {
+export function setStatus(elements: FragmentThoughtsElements, message = ""): void {
   elements.status.textContent = message;
 }
 
-export function fillSettingsForm(elements: ThoughtsElements, settings: PrivateDataSettings): void {
+export function fillSettingsForm(elements: FragmentThoughtsElements, settings: PrivateDataSettings): void {
   elements.ownerInput.value = settings.owner;
   elements.repoInput.value = settings.repo;
   elements.branchInput.value = settings.branch;
@@ -54,7 +54,7 @@ export function fillSettingsForm(elements: ThoughtsElements, settings: PrivateDa
   elements.tokenInput.value = settings.token;
 }
 
-export function readSettingsForm(elements: ThoughtsElements): PrivateDataSettings {
+export function readSettingsForm(elements: FragmentThoughtsElements): PrivateDataSettings {
   return {
     owner: elements.ownerInput.value.trim(),
     repo: elements.repoInput.value.trim(),
@@ -64,19 +64,19 @@ export function readSettingsForm(elements: ThoughtsElements): PrivateDataSetting
   };
 }
 
-export function clearComposer(elements: ThoughtsElements): void {
+export function clearComposer(elements: FragmentThoughtsElements): void {
   elements.thoughtInput.value = "";
   elements.tagInput.value = "";
 }
 
-export function renderNotes(
-  elements: ThoughtsElements,
-  notes: ThoughtNote[],
+export function renderFragmentThoughts(
+  elements: FragmentThoughtsElements,
+  fragmentThoughts: FragmentThought[],
   onDelete: (id: string) => void,
 ): void {
   elements.list.replaceChildren();
 
-  if (notes.length === 0) {
+  if (fragmentThoughts.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.textContent = "还没有匹配的想法。";
@@ -84,37 +84,39 @@ export function renderNotes(
     return;
   }
 
-  const noteElements = notes.map((note) => createNoteElement(note, onDelete));
-  elements.list.append(...noteElements);
+  const fragmentThoughtElements = fragmentThoughts.map((fragmentThought) =>
+    createFragmentThoughtElement(fragmentThought, onDelete),
+  );
+  elements.list.append(...fragmentThoughtElements);
 }
 
-function createNoteElement(note: ThoughtNote, onDelete: (id: string) => void): HTMLElement {
+function createFragmentThoughtElement(fragmentThought: FragmentThought, onDelete: (id: string) => void): HTMLElement {
   const article = document.createElement("article");
   article.className = "note";
 
   const content = document.createElement("div");
   content.className = "note-content";
-  content.textContent = note.content;
+  content.textContent = fragmentThought.content;
 
   const meta = document.createElement("div");
   meta.className = "note-meta";
 
   const tagContainer = document.createElement("div");
-  if (note.tags.length > 0) {
+  if (fragmentThought.tags.length > 0) {
     const tags = document.createElement("div");
     tags.className = "tags";
-    tags.append(...note.tags.map(createTagElement));
+    tags.append(...fragmentThought.tags.map(createTagElement));
     tagContainer.append(tags);
   }
 
   const actions = document.createElement("div");
-  actions.textContent = formatTime(note.createdAt);
+  actions.textContent = formatTime(fragmentThought.createdAt);
 
   const deleteButton = document.createElement("button");
   deleteButton.className = "ghost danger";
   deleteButton.type = "button";
   deleteButton.textContent = "删除";
-  deleteButton.addEventListener("click", () => onDelete(note.id));
+  deleteButton.addEventListener("click", () => onDelete(fragmentThought.id));
 
   actions.append(" ", deleteButton);
   meta.append(tagContainer, actions);
