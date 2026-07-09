@@ -105,6 +105,17 @@
 
       <p id="status" class="status" aria-live="polite"></p>
 
+      <div
+        id="saveOverlay"
+        class="save-overlay hidden"
+        role="status"
+        aria-live="polite"
+        aria-label="正在保存到 GitHub"
+        aria-hidden="true"
+      >
+        <div class="save-spinner" aria-hidden="true"></div>
+      </div>
+
       <nav id="contextMenu" class="context-menu hidden" aria-label="对象菜单">
         <button id="contextDeleteBtn" type="button" class="danger">删除</button>
       </nav>

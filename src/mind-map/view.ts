@@ -19,6 +19,7 @@ export interface MindMapElements {
   refreshBtn: HTMLButtonElement;
   resetBtn: HTMLButtonElement;
   status: HTMLElement;
+  saveOverlay: HTMLElement;
   mapHost: HTMLDivElement;
   currentMapTitle: HTMLElement;
   libraryRootLabel: HTMLElement;
@@ -50,6 +51,7 @@ export function getMindMapElements(): MindMapElements {
     refreshBtn: queryRequired("#refreshBtn"),
     resetBtn: queryRequired("#resetBtn"),
     status: queryRequired("#status"),
+    saveOverlay: queryRequired("#saveOverlay"),
     mapHost: queryRequired("#mapHost"),
     currentMapTitle: queryRequired("#currentMapTitle"),
     libraryRootLabel: queryRequired("#libraryRootLabel"),
@@ -67,6 +69,12 @@ export function getMindMapElements(): MindMapElements {
 
 export function setStatus(elements: MindMapElements, message = ""): void {
   elements.status.textContent = message;
+}
+
+export function setSaveOverlayVisible(elements: MindMapElements, visible: boolean): void {
+  elements.saveOverlay.classList.toggle("hidden", !visible);
+  elements.saveOverlay.setAttribute("aria-hidden", String(!visible));
+  elements.mapHost.setAttribute("aria-busy", String(visible));
 }
 
 export function fillSettingsForm(elements: MindMapElements, settings: PrivateDataSettings): void {

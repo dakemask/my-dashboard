@@ -65,6 +65,7 @@ import {
   setLibraryActionState,
   setLibraryRootLabel,
   setMapToolsEnabled,
+  setSaveOverlayVisible,
   setStatus,
   showContextMenu,
 } from "./view";
@@ -96,6 +97,7 @@ let workspace = createEmptyMindMapWorkspace();
 let librarySelection: MindMapLibrarySelection = null;
 let lastOperationAt = Date.now();
 let connectMode = false;
+let saveInProgress = false;
 let undoStack: MindMapState["data"][] = [];
 let redoStack: MindMapState["data"][] = [];
 
@@ -250,6 +252,10 @@ async function openMindMap(
 }
 
 async function persistMindMap(): Promise<void> {
+  if (saveInProgress) {
+    return;
+  }
+
   mapView.commitActiveEdit();
 
   if (!(await ensureFreshBeforeOperation())) {
@@ -268,11 +274,19 @@ async function persistMindMap(): Promise<void> {
     return;
   }
 
-  lastOperationAt = await saveRemoteMindMapWorkspace(settings, workspace);
-  syncCurrentMapAfterLocalRefresh();
-  await saveLocalSnapshot();
-  render();
-  renderLibrary();
+  saveInProgress = true;
+  setSaveOverlayVisible(elements, true);
+
+  try {
+    lastOperationAt = await saveRemoteMindMapWorkspace(settings, workspace);
+    syncCurrentMapAfterLocalRefresh();
+    await saveLocalSnapshot();
+    render();
+    renderLibrary();
+  } finally {
+    saveInProgress = false;
+    setSaveOverlayVisible(elements, false);
+  }
 }
 
 async function cacheCurrentMapBeforeSwitch(): Promise<void> {
