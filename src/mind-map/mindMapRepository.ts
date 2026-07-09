@@ -1,4 +1,4 @@
-import { loadJsonFile, saveJsonFile } from "../shared/privateData/jsonFileRepository";
+import { loadJsonFile, loadJsonFileAtPath, saveJsonFile, saveJsonFileAtPath } from "../shared/privateData/jsonFileRepository";
 import type { LoadedJsonFile, PrivateDataSettings } from "../shared/privateData/types";
 import { createEmptyMindMapData, MIN_NODE_HEIGHT, MIN_NODE_WIDTH } from "./mindMap";
 import type {
@@ -15,6 +15,13 @@ export function loadMindMapData(settings: PrivateDataSettings): Promise<LoadedJs
   return loadJsonFile(settings, normalizeMindMapData, createEmptyMindMapData);
 }
 
+export function loadMindMapDataAtPath(
+  settings: PrivateDataSettings,
+  path: string,
+): Promise<LoadedJsonFile<MindMapData>> {
+  return loadJsonFileAtPath(settings, path, normalizeMindMapData, createEmptyMindMapData);
+}
+
 export function saveMindMapData(
   settings: PrivateDataSettings,
   data: MindMapData,
@@ -22,6 +29,16 @@ export function saveMindMapData(
   message: string,
 ): Promise<string> {
   return saveJsonFile(settings, data, sha, message);
+}
+
+export function saveMindMapDataAtPath(
+  settings: PrivateDataSettings,
+  path: string,
+  data: MindMapData,
+  sha: string | null,
+  message: string,
+): Promise<string> {
+  return saveJsonFileAtPath(settings, path, data, sha, message);
 }
 
 function normalizeMindMapData(value: unknown): MindMapData {

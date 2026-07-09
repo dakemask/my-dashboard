@@ -4,6 +4,14 @@ import type { PrivateDataSettings } from "./types";
 interface GitHubContentResponse {
   sha: string;
   content: string;
+  type: "file";
+}
+
+interface GitHubDirectoryItemResponse {
+  name: string;
+  path: string;
+  sha: string;
+  type: "file" | "dir" | "symlink" | "submodule";
 }
 
 interface GitHubUpdateResponse {
@@ -18,6 +26,13 @@ interface UpdateTextFileInput {
   sha: string | null;
 }
 
+export interface GitHubDirectoryItem {
+  name: string;
+  path: string;
+  sha: string;
+  type: "file" | "dir" | "symlink" | "submodule";
+}
+
 export class GitHubApiError extends Error {
   constructor(
     message: string,
@@ -29,14 +44,25 @@ export class GitHubApiError extends Error {
 }
 
 export function buildContentsUrl(settings: PrivateDataSettings): string {
-  const path = encodeURIComponent(settings.path).replaceAll("%2F", "/");
+  return buildContentsUrlForPath(settings, settings.path);
+}
+
+export function buildContentsUrlForPath(settings: PrivateDataSettings, filePath: string): string {
+  const path = encodeURIComponent(trimSlashes(filePath)).replaceAll("%2F", "/");
   return `https://api.github.com/repos/${settings.owner}/${settings.repo}/contents/${path}`;
 }
 
 export async function readTextFile(settings: PrivateDataSettings): Promise<{ sha: string; text: string }> {
+  return readTextFileAtPath(settings, settings.path);
+}
+
+export async function readTextFileAtPath(
+  settings: PrivateDataSettings,
+  filePath: string,
+): Promise<{ sha: string; text: string }> {
   const json = await githubFetch<GitHubContentResponse>(
     settings,
-    `${buildContentsUrl(settings)}?ref=${encodeURIComponent(settings.branch)}`,
+    `${buildContentsUrlForPath(settings, filePath)}?ref=${encodeURIComponent(settings.branch)}`,
   );
 
   return {
@@ -46,6 +72,14 @@ export async function readTextFile(settings: PrivateDataSettings): Promise<{ sha
 }
 
 export async function updateTextFile(settings: PrivateDataSettings, input: UpdateTextFileInput): Promise<string> {
+  return updateTextFileAtPath(settings, settings.path, input);
+}
+
+export async function updateTextFileAtPath(
+  settings: PrivateDataSettings,
+  filePath: string,
+  input: UpdateTextFileInput,
+): Promise<string> {
   const body: {
     message: string;
     content: string;
@@ -61,12 +95,49 @@ export async function updateTextFile(settings: PrivateDataSettings, input: Updat
     body.sha = input.sha;
   }
 
-  const json = await githubFetch<GitHubUpdateResponse>(settings, buildContentsUrl(settings), {
+  const json = await githubFetch<GitHubUpdateResponse>(settings, buildContentsUrlForPath(settings, filePath), {
     method: "PUT",
     body: JSON.stringify(body),
   });
 
   return json.content.sha;
+}
+
+export async function deleteTextFileAtPath(
+  settings: PrivateDataSettings,
+  filePath: string,
+  sha: string,
+  message: string,
+): Promise<void> {
+  await githubFetch(settings, buildContentsUrlForPath(settings, filePath), {
+    method: "DELETE",
+    body: JSON.stringify({
+      message,
+      sha,
+      branch: settings.branch,
+    }),
+  });
+}
+
+export async function listDirectoryAtPath(
+  settings: PrivateDataSettings,
+  directoryPath: string,
+): Promise<GitHubDirectoryItem[]> {
+  const json = await githubFetch<GitHubDirectoryItemResponse[] | GitHubContentResponse>(
+    settings,
+    `${buildContentsUrlForPath(settings, directoryPath)}?ref=${encodeURIComponent(settings.branch)}`,
+  );
+
+  if (!Array.isArray(json)) {
+    throw new GitHubApiError("GitHub API 错误：指定路径是文件，不是文件夹。", 422);
+  }
+
+  return json.map((item) => ({
+    name: item.name,
+    path: item.path,
+    sha: item.sha,
+    type: item.type,
+  }));
 }
 
 async function githubFetch<T>(
@@ -102,4 +173,8 @@ async function githubFetch<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+function trimSlashes(value: string): string {
+  return value.trim().replace(/^\/+|\/+$/g, "");
 }

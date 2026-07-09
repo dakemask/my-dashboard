@@ -27,10 +27,9 @@ export interface MindMapData {
 }
 
 export interface MindMapState {
-  sha: string | null;
   data: MindMapData;
-  dirty: boolean;
   selection: MindMapSelection;
+  currentMapPath: string | null;
 }
 
 export type MindMapSelection =
@@ -51,3 +50,25 @@ export interface NodeFrame {
   height: number;
   autoWidth?: boolean;
 }
+
+export type MindMapLibraryEntry = MindMapFolderEntry | MindMapFileEntry;
+
+export interface MindMapFolderEntry {
+  kind: "folder";
+  name: string;
+  path: string;
+  children: MindMapLibraryEntry[];
+}
+
+export interface MindMapFileEntry {
+  kind: "map";
+  name: string;
+  path: string;
+}
+
+export type MindMapLibrarySelection =
+  | {
+      kind: "folder" | "map";
+      path: string;
+    }
+  | null;

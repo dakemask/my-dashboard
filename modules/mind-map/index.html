@@ -12,7 +12,10 @@
       <header class="topbar">
         <div class="title-block">
           <a class="home-link" href="../../">首页</a>
-          <h1>思维导图</h1>
+          <h1>
+            <span>思维导图</span>
+            <span id="currentMapTitle" class="current-map-title">未打开导图</span>
+          </h1>
         </div>
 
         <div class="toolbar" aria-label="思维导图工具栏">
@@ -44,6 +47,28 @@
         </div>
       </header>
 
+      <aside class="library-panel" aria-label="导图库">
+        <div class="library-header">
+          <div>
+            <h2>导图库</h2>
+            <p id="libraryRootLabel" class="library-root"></p>
+          </div>
+          <button id="refreshLibraryBtn" type="button" class="icon-button secondary" aria-label="刷新导图库" title="刷新导图库">
+            <span class="material-symbols-rounded" aria-hidden="true">refresh</span>
+          </button>
+        </div>
+
+        <div class="library-actions" aria-label="导图库操作">
+          <button id="newFolderBtn" type="button" class="library-command secondary">文件夹</button>
+          <button id="newMapBtn" type="button" class="library-command secondary">导图</button>
+          <button id="renameEntryBtn" type="button" class="library-command secondary">重命名</button>
+          <button id="moveEntryBtn" type="button" class="library-command secondary">移动</button>
+          <button id="deleteEntryBtn" type="button" class="library-command secondary danger">删除</button>
+        </div>
+
+        <div id="libraryTree" class="library-tree"></div>
+      </aside>
+
       <section id="settingsPanel" class="settings-panel hidden">
         <label>
           GitHub 用户名
@@ -61,8 +86,8 @@
         </label>
 
         <label>
-          数据文件路径
-          <input id="pathInput" value="data/mind-map.json" />
+          导图库根目录
+          <input id="pathInput" value="data/mind-maps/" />
         </label>
 
         <label>
