@@ -112,7 +112,6 @@ function requireSettings(): PrivateDataSettings | null {
   const settings = loadSettings();
 
   if (!hasCompletePrivateDataSettings(settings)) {
-    setStatus(elements, "未配置导图库同步。请先点设置填写 GitHub 信息。");
     return null;
   }
 
@@ -143,9 +142,19 @@ function renderLibrary(): void {
     workspace.treeChangePaths,
   );
   setLibraryActionState(elements, settingsReady, librarySelection);
+  renderSyncStatus();
 }
 
-async function refreshLibrary(message?: string): Promise<void> {
+function renderSyncStatus(): void {
+  setStatus(
+    elements,
+    workspace.lastRemoteRefreshAt === null
+      ? "尚未同步"
+      : `最近同步：${new Date(workspace.lastRemoteRefreshAt).toLocaleString()}`,
+  );
+}
+
+async function refreshLibrary(): Promise<void> {
   const settings = requireSettings();
 
   if (!settings) {
@@ -164,11 +173,10 @@ async function refreshLibrary(message?: string): Promise<void> {
     }
   }
 
-  await refreshLocalFromGitHub(settings, message);
+  await refreshLocalFromGitHub(settings);
 }
 
-async function refreshLocalFromGitHub(settings: PrivateDataSettings, message?: string): Promise<void> {
-  setStatus(elements, "正在从 GitHub 刷新本地缓存...");
+async function refreshLocalFromGitHub(settings: PrivateDataSettings): Promise<void> {
   workspace = await loadRemoteMindMapWorkspace(settings);
   lastOperationAt = workspace.lastRemoteRefreshAt ?? Date.now();
   syncCurrentMapAfterLocalRefresh();
@@ -176,21 +184,18 @@ async function refreshLocalFromGitHub(settings: PrivateDataSettings, message?: s
 
   render();
   renderLibrary();
-  setStatus(elements, message ?? (workspace.tree.length === 0 ? "导图库为空。可以新建导图。" : `已刷新本地缓存：${new Date().toLocaleString()}`));
 }
 
 async function refreshMindMap(): Promise<void> {
   mapView.commitActiveEdit();
 
   if (!state.currentMapPath) {
-    setStatus(elements, "请选择或新建导图。");
     return;
   }
 
   const data = getWorkspaceMapData(workspace, state.currentMapPath);
 
   if (!data) {
-    setStatus(elements, "本地缓存里没有这个导图。请刷新导图库。");
     return;
   }
 
@@ -203,12 +208,11 @@ async function refreshMindMap(): Promise<void> {
   redoStack = [];
   render();
   renderLibrary();
-  setStatus(elements, `已从本地缓存重载：${new Date().toLocaleString()}`);
 }
 
 async function openMindMap(
   path: string,
-  options: { skipDirtyCheck?: boolean; statusMessage?: string } = {},
+  options: { skipDirtyCheck?: boolean } = {},
 ): Promise<void> {
   mapView.commitActiveEdit();
 
@@ -220,13 +224,10 @@ async function openMindMap(
     await cacheCurrentMapBeforeSwitch();
   }
 
-  setStatus(elements, "正在打开导图...");
-
   const normalizedPath = normalizePath(path);
   const data = getWorkspaceMapData(workspace, normalizedPath);
 
   if (!data) {
-    setStatus(elements, "本地缓存里没有这个导图。请刷新导图库。");
     render();
     return;
   }
@@ -246,7 +247,6 @@ async function openMindMap(
 
   render();
   renderLibrary();
-  setStatus(elements, options.statusMessage ?? `已打开：${getMapTitleFromPath(normalizedPath)}`);
 }
 
 async function persistMindMap(): Promise<void> {
@@ -265,17 +265,14 @@ async function persistMindMap(): Promise<void> {
   cacheCurrentMap();
 
   if (!hasUnsavedLocalChanges()) {
-    setStatus(elements, "没有需要保存的修改。");
     return;
   }
 
-  setStatus(elements, "正在保存到 GitHub...");
   lastOperationAt = await saveRemoteMindMapWorkspace(settings, workspace);
   syncCurrentMapAfterLocalRefresh();
   await saveLocalSnapshot();
   render();
   renderLibrary();
-  setStatus(elements, `已保存到 GitHub：${new Date().toLocaleString()}`);
 }
 
 async function cacheCurrentMapBeforeSwitch(): Promise<void> {
@@ -398,22 +395,21 @@ async function ensureFreshBeforeOperation(): Promise<boolean> {
   }
 
   try {
-    await refreshLocalFromGitHub(settings, "已因空闲超过 2 小时，从 GitHub 刷新本地缓存。");
+    await refreshLocalFromGitHub(settings);
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 
   lastOperationAt = Date.now();
   return true;
 }
 
-function markLibraryChanged(message: string): void {
+function markLibraryChanged(): void {
   lastOperationAt = Date.now();
-  setStatus(elements, message);
   render();
   renderLibrary();
   void saveLocalSnapshot().catch((error) => {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   });
 }
 
@@ -473,9 +469,6 @@ async function runLibraryAction(
   });
 
   if (!result.changed) {
-    if (result.status) {
-      setStatus(elements, result.status);
-    }
     return;
   }
 
@@ -496,7 +489,7 @@ async function runLibraryAction(
     state.currentMapPath = result.currentMapPath;
   }
 
-  markLibraryChanged(result.status);
+  markLibraryChanged();
 }
 
 async function addNode(): Promise<void> {
@@ -505,7 +498,6 @@ async function addNode(): Promise<void> {
   }
 
   if (!state.currentMapPath) {
-    setStatus(elements, "请先选择或新建导图。");
     return;
   }
 
@@ -516,8 +508,7 @@ async function addNode(): Promise<void> {
     {
       type: "node",
       id: node.id,
-    },
-    "已新增框，尚未保存。",
+    }
   );
   requestAnimationFrame(() => mapView.editNodeText(node.id));
 }
@@ -538,8 +529,7 @@ function changeNodeFrame(id: string, frame: NodeFrame): void {
     {
       type: "node",
       id,
-    },
-    "已调整框，尚未保存。",
+    }
   );
 }
 
@@ -559,8 +549,7 @@ function changeNodeText(id: string, text: string, frame?: NodeFrame): void {
     {
       type: "node",
       id,
-    },
-    "已编辑文字，尚未保存。",
+    }
   );
 }
 
@@ -577,8 +566,7 @@ function createArrow(from: MindMapEndpoint, to: MindMapEndpoint): void {
     {
       type: "arrow",
       id: next.arrows[next.arrows.length - 1].id,
-    },
-    "已新增箭头，尚未保存。",
+    }
   );
 }
 
@@ -588,9 +576,9 @@ function deleteSelection(): void {
   }
 
   if (state.selection.type === "node") {
-    commitChange(deleteNodeFromData(state.data, state.selection.id), null, "已删除框，尚未保存。");
+    commitChange(deleteNodeFromData(state.data, state.selection.id), null);
   } else {
-    commitChange(deleteArrowFromData(state.data, state.selection.id), null, "已删除箭头，尚未保存。");
+    commitChange(deleteArrowFromData(state.data, state.selection.id), null);
   }
 
   hideContextMenu(elements);
@@ -616,23 +604,22 @@ function openContextMenu(selection: MindMapSelection, x: number, y: number): voi
   }
 }
 
-function markDirty(message: string): void {
+function markDirty(): void {
   if (state.currentMapPath) {
     updateWorkspaceMapData(workspace, state.currentMapPath, state.data);
   }
   lastOperationAt = Date.now();
-  setStatus(elements, message);
   void saveLocalSnapshot().catch((error) => {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   });
 }
 
-function commitChange(data: MindMapState["data"], selection: MindMapSelection, message: string): void {
+function commitChange(data: MindMapState["data"], selection: MindMapSelection): void {
   undoStack.push(state.data);
   redoStack = [];
   state.data = data;
   state.selection = selection;
-  markDirty(message);
+  markDirty();
   render();
   renderLibrary();
 }
@@ -647,7 +634,7 @@ function undo(): void {
   redoStack.push(state.data);
   state.data = previous;
   state.selection = null;
-  markDirty("已撤销，尚未保存。");
+  markDirty();
   render();
   renderLibrary();
 }
@@ -662,7 +649,7 @@ function redo(): void {
   undoStack.push(state.data);
   state.data = next;
   state.selection = null;
-  markDirty("已重做，尚未保存。");
+  markDirty();
   render();
   renderLibrary();
 }
@@ -685,10 +672,6 @@ function isSameFrame(current: NodeFrame, next: NodeFrame): boolean {
     current.height === next.height &&
     (next.autoWidth === undefined || current.autoWidth === next.autoWidth)
   );
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isFormEditableTarget(target: EventTarget | null): boolean {
@@ -716,7 +699,6 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
   fillSettingsForm(elements, loadSettings());
 
   if (hasUnsavedLocalChanges()) {
-    setStatus(elements, "设置已保存。浏览器本地仍有未保存修改，请保存后再从 GitHub 刷新。");
     renderLibrary();
     return;
   }
@@ -725,13 +707,14 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
     clearCurrentMap();
     workspace = createEmptyMindMapWorkspace();
     librarySelection = null;
+    renderLibrary();
     const settings = requireSettings();
 
     if (settings) {
       await refreshLocalFromGitHub(settings);
     }
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -741,12 +724,11 @@ elements.clearSettingsBtn.addEventListener("click", () => {
   workspace = createEmptyMindMapWorkspace();
   librarySelection = null;
   renderLibrary();
-  setStatus(elements, "已清除当前浏览器里的设置。");
 });
 
 elements.addNodeBtn.addEventListener("click", () => {
   void addNode().catch((error) => {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   });
 });
 
@@ -754,7 +736,7 @@ elements.refreshLibraryBtn.addEventListener("click", async () => {
   try {
     await refreshLibrary();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -762,7 +744,7 @@ elements.newFolderBtn.addEventListener("click", async () => {
   try {
     await createFolder();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -770,7 +752,7 @@ elements.newMapBtn.addEventListener("click", async () => {
   try {
     await createMap();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -778,7 +760,7 @@ elements.renameEntryBtn.addEventListener("click", async () => {
   try {
     await renameLibraryEntry();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -786,7 +768,7 @@ elements.moveEntryBtn.addEventListener("click", async () => {
   try {
     await moveLibraryEntry();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -794,7 +776,7 @@ elements.deleteEntryBtn.addEventListener("click", async () => {
   try {
     await deleteLibraryEntry();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -816,7 +798,7 @@ elements.libraryTree.addEventListener("click", (event) => {
 
   if (kind === "map" && path !== state.currentMapPath) {
     void openMindMap(path).catch((error) => {
-      setStatus(elements, getErrorMessage(error));
+      console.error(error);
     });
   }
 });
@@ -827,7 +809,7 @@ elements.connectBtn.addEventListener("click", () => {
       setConnectModeEnabled(!connectMode);
     })
     .catch((error) => {
-      setStatus(elements, getErrorMessage(error));
+      console.error(error);
     });
 });
 
@@ -835,7 +817,7 @@ elements.saveBtn.addEventListener("click", async () => {
   try {
     await persistMindMap();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -843,7 +825,7 @@ elements.refreshBtn.addEventListener("click", async () => {
   try {
     await refreshMindMap();
   } catch (error) {
-    setStatus(elements, getErrorMessage(error));
+    console.error(error);
   }
 });
 
@@ -862,9 +844,7 @@ document.addEventListener(
 
     event.preventDefault();
     event.stopPropagation();
-    void ensureFreshBeforeOperation().then(() => {
-      setStatus(elements, "已完成空闲检查，请重试刚才的画布操作。");
-    });
+    void ensureFreshBeforeOperation();
   },
   true,
 );
@@ -883,7 +863,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     mapView.commitActiveEdit();
     void persistMindMap().catch((error) => {
-      setStatus(elements, getErrorMessage(error));
+      console.error(error);
     });
     return;
   }
@@ -919,7 +899,7 @@ document.addEventListener("keydown", (event) => {
   if (event.altKey && !commandKey && key === "1") {
     event.preventDefault();
     void addNode().catch((error) => {
-      setStatus(elements, getErrorMessage(error));
+      console.error(error);
     });
     return;
   }
@@ -927,7 +907,6 @@ document.addEventListener("keydown", (event) => {
   if (event.altKey && !commandKey && key === "2") {
     event.preventDefault();
     if (!state.currentMapPath) {
-      setStatus(elements, "请先选择或新建导图。");
       return;
     }
     void ensureFreshBeforeOperation()
@@ -935,7 +914,7 @@ document.addEventListener("keydown", (event) => {
         setConnectModeEnabled(true);
       })
       .catch((error) => {
-        setStatus(elements, getErrorMessage(error));
+        console.error(error);
       });
     return;
   }
@@ -969,7 +948,7 @@ setConnectModeEnabled(connectMode);
 render();
 renderLibrary();
 void initializeMindMap().catch((error) => {
-  setStatus(elements, getErrorMessage(error));
+  console.error(error);
 });
 
 async function initializeMindMap(): Promise<void> {
@@ -985,8 +964,8 @@ async function initializeMindMap(): Promise<void> {
   }
 
   try {
-    await refreshLocalFromGitHub(settings, "已从 GitHub 同步到浏览器本地缓存。");
+    await refreshLocalFromGitHub(settings);
   } catch (error) {
-    setStatus(elements, hadLocalSnapshot ? `GitHub 刷新失败，正在使用本地缓存：${getErrorMessage(error)}` : getErrorMessage(error));
+    console.error(error);
   }
 }
