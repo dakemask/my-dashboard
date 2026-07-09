@@ -2,10 +2,6 @@
 
 一个基于 GitHub Pages 的个人仪表盘框架。项目使用 TypeScript + Vite 构建，GitHub Actions 会把构建产物部署到 GitHub Pages。
 
-## 模块
-
-- `modules/fragment-thoughts/`: 碎片想法记录功能，数据同步到私有数据仓库。
-
 ## 本地开发
 
 ```bash

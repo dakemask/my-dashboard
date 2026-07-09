@@ -40,6 +40,7 @@ interface MapViewCallbacks {
   onSelectionChange: (selection: MindMapSelection) => void;
   onNodeFrameChange: (id: string, frame: NodeFrame) => void;
   onNodeTextChange: (id: string, text: string, frame?: NodeFrame) => void;
+  onNodeTextPreview: (id: string, text: string, frame?: NodeFrame) => void;
   onArrowCreate: (from: MindMapEndpoint, to: MindMapEndpoint) => void;
   onContextMenu: (selection: MindMapSelection, x: number, y: number) => void;
 }
@@ -216,8 +217,8 @@ export class MindMapView {
     const text = getEditableText(textElement);
     const baseFrame = this.frameOverrides.get(edit.id) ?? getNodeFrame(node);
     const frame = this.textLayout.getTextFittedFrame(textElement, text, baseFrame, edit);
-    const textChanged = text !== node.text;
-    const frameChanged = !isSameFrame(frame, getNodeFrame(node));
+    const textChanged = text !== edit.originalText;
+    const frameChanged = !isSameFrame(frame, edit.originalFrame);
 
     this.activeEdit = null;
     this.frameOverrides.delete(edit.id);
@@ -761,6 +762,7 @@ export class MindMapView {
     this.frameOverrides.set(id, frame);
     this.applyNodeFrame(element, frame);
     this.updateArrowPositions();
+    this.callbacks.onNodeTextPreview(id, getEditableText(textElement), frame);
   }
 
   private startNodeDrag(event: PointerEvent, id: string, kind: DragState["kind"], handle?: ResizeHandle): void {

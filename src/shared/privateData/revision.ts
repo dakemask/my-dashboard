@@ -12,9 +12,9 @@ export interface LoadedPrivateDataRevision {
 }
 
 export interface PrivateDataRevisionPoller {
-  start: () => void;
+  start: (options?: { immediate?: boolean }) => void;
   stop: () => void;
-  restart: () => void;
+  restart: (options?: { immediate?: boolean }) => void;
 }
 
 interface PrivateDataRevisionPollerOptions {
@@ -71,10 +71,11 @@ export async function savePrivateDataRevision(
   settings: PrivateDataSettings,
   moduleRoot: string,
   message = `update ${normalizePrivateDataPath(moduleRoot)} revision`,
+  currentSha?: string | null,
 ): Promise<LoadedPrivateDataRevision> {
-  const current = await loadPrivateDataRevision(settings, moduleRoot);
+  const shaToUpdate = currentSha === undefined ? (await loadPrivateDataRevision(settings, moduleRoot))?.sha ?? null : currentSha;
   const data = createPrivateDataRevision();
-  const sha = await saveJsonFileAtPath(settings, getPrivateDataRevisionPath(moduleRoot), data, current?.sha ?? null, message);
+  const sha = await saveJsonFileAtPath(settings, getPrivateDataRevisionPath(moduleRoot), data, shaToUpdate, message);
 
   return {
     data,
@@ -97,14 +98,14 @@ export function createPrivateDataRevisionPoller(
     scheduleNextPoll(document.hidden ? undefined : 0);
   };
 
-  function start(): void {
+  function start(options: { immediate?: boolean } = {}): void {
     if (!stopped) {
       return;
     }
 
     stopped = false;
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    scheduleNextPoll(0);
+    scheduleNextPoll(options.immediate === false ? undefined : 0);
   }
 
   function stop(): void {
@@ -117,9 +118,9 @@ export function createPrivateDataRevisionPoller(
     clearPendingPoll();
   }
 
-  function restart(): void {
+  function restart(options: { immediate?: boolean } = {}): void {
     stop();
-    start();
+    start(options);
   }
 
   function scheduleNextPoll(delayMs = getNextPollDelayMs()): void {

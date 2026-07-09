@@ -23,38 +23,6 @@ export interface MindMapWorkspace {
   lastRemoteRefreshAt: number | null;
 }
 
-export interface MindMapWorkspaceSnapshot {
-  tree: MindMapLibraryEntry[];
-  maps: Record<string, MindMapData>;
-  dirtyContentPaths: string[];
-  dirtyTree: boolean;
-  treeChangePaths: string[];
-  remoteShaByPath: Record<string, string>;
-  remoteUnknownFilePaths: string[];
-  lastRemoteRefreshAt: number | null;
-}
-
-export interface MindMapWorkspaceStoredSnapshot {
-  tree?: MindMapLibraryEntry[];
-  entries?: MindMapLibraryEntry[];
-  maps?: Record<string, MindMapData | LegacyCachedMap>;
-  dirtyContentPaths?: string[];
-  dirtyMapPaths?: string[];
-  dirtyTree?: boolean;
-  libraryDirty?: boolean;
-  treeChangePaths?: string[];
-  remoteShaByPath?: Record<string, string>;
-  remoteUnknownFilePaths?: string[];
-  lastRemoteRefreshAt?: number | null;
-}
-
-interface LegacyCachedMap {
-  path?: string;
-  data: MindMapData;
-  sha?: string | null;
-  updatedAt?: number;
-}
-
 export interface WorkspaceDesiredMapFile {
   kind: "map";
   path: string;
@@ -98,54 +66,6 @@ export function createMindMapWorkspaceFromRemote(
     remoteShaByPath: normalizeShaMap(remoteShaByPath),
     remoteUnknownFilePaths: normalizePathSet(remoteUnknownFilePaths),
     lastRemoteRefreshAt: refreshedAt,
-  };
-}
-
-export function createMindMapWorkspaceFromSnapshot(snapshot: MindMapWorkspaceStoredSnapshot): MindMapWorkspace {
-  const tree = normalizeWorkspaceTree(snapshot.tree ?? snapshot.entries ?? []);
-  const maps: Record<string, MindMapData> = {};
-  const remoteShaByPath = new Map<string, string>(
-    Object.entries(snapshot.remoteShaByPath ?? {}).map(([path, sha]) => [normalizePath(path), sha]),
-  );
-
-  for (const [path, value] of Object.entries(snapshot.maps ?? {})) {
-    const normalizedPath = normalizePath(path);
-
-    if (isLegacyCachedMap(value)) {
-      maps[normalizedPath] = value.data;
-
-      if (typeof value.sha === "string" && value.sha) {
-        remoteShaByPath.set(normalizedPath, value.sha);
-      }
-    } else {
-      maps[normalizedPath] = value;
-    }
-  }
-
-  collectLegacyEntrySha(snapshot.tree ?? snapshot.entries ?? [], remoteShaByPath);
-
-  return {
-    tree,
-    maps,
-    dirtyContentPaths: normalizePathSet(snapshot.dirtyContentPaths ?? snapshot.dirtyMapPaths ?? []),
-    dirtyTree: snapshot.dirtyTree ?? snapshot.libraryDirty ?? false,
-    treeChangePaths: normalizePathSet(snapshot.treeChangePaths ?? collectLegacyPendingPaths(snapshot.tree ?? snapshot.entries ?? [])),
-    remoteShaByPath,
-    remoteUnknownFilePaths: normalizePathSet(snapshot.remoteUnknownFilePaths ?? []),
-    lastRemoteRefreshAt: snapshot.lastRemoteRefreshAt ?? null,
-  };
-}
-
-export function createMindMapWorkspaceSnapshot(workspace: MindMapWorkspace): MindMapWorkspaceSnapshot {
-  return {
-    tree: normalizeWorkspaceTree(workspace.tree),
-    maps: normalizeWorkspaceMaps(workspace.maps),
-    dirtyContentPaths: [...workspace.dirtyContentPaths],
-    dirtyTree: workspace.dirtyTree,
-    treeChangePaths: [...workspace.treeChangePaths],
-    remoteShaByPath: Object.fromEntries(workspace.remoteShaByPath),
-    remoteUnknownFilePaths: [...workspace.remoteUnknownFilePaths],
-    lastRemoteRefreshAt: workspace.lastRemoteRefreshAt,
   };
 }
 
@@ -383,39 +303,4 @@ function normalizePathSet(paths: Iterable<string>): Set<string> {
 
 function normalizeShaMap(shaByPath: Map<string, string>): Map<string, string> {
   return new Map([...shaByPath].map(([path, sha]) => [normalizePath(path), sha]));
-}
-
-function isLegacyCachedMap(value: MindMapData | LegacyCachedMap): value is LegacyCachedMap {
-  return Boolean(value && typeof value === "object" && "data" in value);
-}
-
-function collectLegacyEntrySha(entries: MindMapLibraryEntry[], remoteShaByPath: Map<string, string>): void {
-  for (const entry of entries) {
-    if (entry.kind === "folder") {
-      collectLegacyEntrySha(entry.children, remoteShaByPath);
-      continue;
-    }
-
-    const sha = (entry as { sha?: unknown }).sha;
-
-    if (typeof sha === "string" && sha) {
-      remoteShaByPath.set(normalizePath(entry.path), sha);
-    }
-  }
-}
-
-function collectLegacyPendingPaths(entries: MindMapLibraryEntry[]): string[] {
-  const pendingPaths: string[] = [];
-
-  for (const entry of entries) {
-    if ((entry as { pending?: unknown }).pending === true) {
-      pendingPaths.push(normalizePath(entry.path));
-    }
-
-    if (entry.kind === "folder") {
-      pendingPaths.push(...collectLegacyPendingPaths(entry.children));
-    }
-  }
-
-  return pendingPaths;
 }

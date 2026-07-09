@@ -41,10 +41,8 @@ import {
   type MindMapLibraryActionResult,
 } from "./mindMapLibraryActions";
 import {
-  loadLocalMindMapWorkspace,
   loadRemoteMindMapWorkspace,
   refreshMindMapWorkspaceRemoteMetadata,
-  saveLocalMindMapWorkspace,
   saveRemoteMindMapWorkspace,
 } from "./mindMapSync";
 import {
@@ -91,6 +89,7 @@ const mapView = new MindMapView(elements.mapHost, {
   onSelectionChange: setSelection,
   onNodeFrameChange: changeNodeFrame,
   onNodeTextChange: changeNodeText,
+  onNodeTextPreview: previewNodeText,
   onArrowCreate: createArrow,
   onContextMenu: openContextMenu,
 });
@@ -103,12 +102,14 @@ let state: MindMapState = {
 let workspace = createEmptyMindMapWorkspace();
 let librarySelection: MindMapLibrarySelection = null;
 let knownRevision: string | null = null;
+let knownRevisionSha: string | null = null;
 let connectMode = false;
 let saveInProgress = false;
 let refreshInProgress = false;
 let revisionConflictInProgress = false;
 let undoStack: MindMapState["data"][] = [];
 let redoStack: MindMapState["data"][] = [];
+let pendingTextEditUndo: { id: string; data: MindMapState["data"] } | null = null;
 
 const revisionPoller = createPrivateDataRevisionPoller({
   getSettings: getCompleteSettings,
@@ -230,8 +231,8 @@ async function refreshLocalFromGitHub(settings: PrivateDataSettings): Promise<vo
 
     workspace = remoteWorkspace;
     knownRevision = revision?.data.revision ?? null;
+    knownRevisionSha = revision?.sha ?? null;
     syncCurrentMapAfterLocalRefresh();
-    await saveLocalSnapshot();
 
     render();
     renderLibrary();
@@ -276,7 +277,7 @@ async function openMindMap(
   }
 
   if (!options.skipDirtyCheck) {
-    await cacheCurrentMapBeforeSwitch();
+    cacheCurrentMapBeforeSwitch();
   }
 
   const normalizedPath = normalizePath(path);
@@ -329,6 +330,7 @@ async function persistMindMap(
     return;
   }
 
+  revisionPoller.stop();
   saveInProgress = true;
   setSaveOverlayVisible(elements, true);
 
@@ -344,9 +346,15 @@ async function persistMindMap(
     await saveRemoteMindMapWorkspace(settings, workspace);
 
     try {
-      const revision = await savePrivateDataRevision(settings, getMindMapModuleRoot(settings), "update mind map revision");
+      const revision = await savePrivateDataRevision(
+        settings,
+        getMindMapModuleRoot(settings),
+        "update mind map revision",
+        knownRevisionSha,
+      );
 
       knownRevision = revision.data.revision;
+      knownRevisionSha = revision.sha;
     } catch (error) {
       workspace.dirtyContentPaths = dirtyContentPaths;
       workspace.dirtyTree = dirtyTree;
@@ -355,22 +363,21 @@ async function persistMindMap(
     }
 
     syncCurrentMapAfterLocalRefresh();
-    await saveLocalSnapshot();
     render();
     renderLibrary();
   } finally {
     saveInProgress = false;
     setSaveOverlayVisible(elements, false);
+    revisionPoller.start({ immediate: false });
   }
 }
 
-async function cacheCurrentMapBeforeSwitch(): Promise<void> {
+function cacheCurrentMapBeforeSwitch(): void {
   if (!state.currentMapPath) {
     return;
   }
 
   cacheCurrentMap();
-  await saveLocalSnapshot();
 }
 
 function clearCurrentMap(): void {
@@ -396,36 +403,6 @@ function readNormalizedSettingsForm(): PrivateDataSettings {
 
 function hasUnsavedLocalChanges(): boolean {
   return hasWorkspaceChanges(workspace);
-}
-
-async function loadLocalSnapshot(): Promise<boolean> {
-  const settings = loadSettings();
-
-  if (!hasCompletePrivateDataSettings(settings)) {
-    return false;
-  }
-
-  const localWorkspace = await loadLocalMindMapWorkspace(settings);
-
-  if (!localWorkspace) {
-    return false;
-  }
-
-  workspace = localWorkspace;
-  syncCurrentMapAfterLocalRefresh();
-  render();
-  renderLibrary();
-  return true;
-}
-
-async function saveLocalSnapshot(): Promise<void> {
-  const settings = loadSettings();
-
-  if (!hasCompletePrivateDataSettings(settings)) {
-    return;
-  }
-
-  await saveLocalMindMapWorkspace(settings, workspace);
 }
 
 function cacheCurrentMap(): void {
@@ -496,6 +473,7 @@ async function handleRemoteRevisionChange(revision: LoadedPrivateDataRevision): 
     );
 
     if (shouldUploadLocal) {
+      knownRevisionSha = revision.sha;
       await persistMindMap({
         allowDuringConflict: true,
         refreshRemoteMetadata: true,
@@ -511,9 +489,6 @@ async function handleRemoteRevisionChange(revision: LoadedPrivateDataRevision): 
 function markLibraryChanged(): void {
   render();
   renderLibrary();
-  void saveLocalSnapshot().catch((error) => {
-    reportError(error);
-  });
 }
 
 function isCurrentMapDirty(): boolean {
@@ -529,7 +504,7 @@ async function createFolder(): Promise<void> {
 
 async function createMap(): Promise<void> {
   mapView.commitActiveEdit();
-  await cacheCurrentMapBeforeSwitch();
+  cacheCurrentMapBeforeSwitch();
   await runLibraryAction(createMindMapFileAction);
 }
 
@@ -640,6 +615,59 @@ function changeNodeFrame(id: string, frame: NodeFrame): void {
 }
 
 function changeNodeText(id: string, text: string, frame?: NodeFrame): void {
+  const undoData = pendingTextEditUndo?.id === id ? pendingTextEditUndo.data : null;
+
+  if (pendingTextEditUndo?.id === id) {
+    pendingTextEditUndo = null;
+  }
+
+  const node = findNode(state.data, id);
+
+  if (!node) {
+    return;
+  }
+
+  const next = updateNodeText(state.data, id, text, frame);
+
+  if (undoData) {
+    const originalNode = findNode(undoData, id);
+    const nextNode = findNode(next, id);
+
+    state.data = next;
+
+    if (!originalNode || !nextNode || (originalNode.text === nextNode.text && isSameFrame(originalNode, nextNode))) {
+      markDirty();
+      render();
+      renderLibrary();
+      return;
+    }
+
+    undoStack.push(undoData);
+    redoStack = [];
+    state.selection = {
+      type: "node",
+      id,
+    };
+    markDirty();
+    render();
+    renderLibrary();
+    return;
+  }
+
+  if (node.text === text && (!frame || isSameFrame(node, frame))) {
+    return;
+  }
+
+  commitChange(
+    next,
+    {
+      type: "node",
+      id,
+    }
+  );
+}
+
+function previewNodeText(id: string, text: string, frame?: NodeFrame): void {
   const node = findNode(state.data, id);
 
   if (!node) {
@@ -650,13 +678,16 @@ function changeNodeText(id: string, text: string, frame?: NodeFrame): void {
     return;
   }
 
-  commitChange(
-    updateNodeText(state.data, id, text, frame),
-    {
-      type: "node",
+  if (pendingTextEditUndo?.id !== id) {
+    pendingTextEditUndo = {
       id,
-    }
-  );
+      data: state.data,
+    };
+  }
+
+  state.data = updateNodeText(state.data, id, text, frame);
+  markDirty();
+  renderDirtyIndicators();
 }
 
 function createArrow(from: MindMapEndpoint, to: MindMapEndpoint): void {
@@ -714,12 +745,20 @@ function markDirty(): void {
   if (state.currentMapPath) {
     updateWorkspaceMapData(workspace, state.currentMapPath, state.data);
   }
-  void saveLocalSnapshot().catch((error) => {
-    reportError(error);
-  });
+}
+
+function renderDirtyIndicators(): void {
+  setCurrentMapTitle(
+    elements,
+    state.currentMapPath ? getMapTitleFromPath(state.currentMapPath) : "未打开导图",
+    isCurrentMapDirty(),
+  );
+  setMapToolsEnabled(elements, Boolean(state.currentMapPath), hasUnsavedLocalChanges());
+  renderLibrary();
 }
 
 function commitChange(data: MindMapState["data"], selection: MindMapSelection): void {
+  pendingTextEditUndo = null;
   undoStack.push(state.data);
   redoStack = [];
   state.data = data;
@@ -799,6 +838,7 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
   savePrivateDataSettings(readNormalizedSettingsForm(), SETTINGS_STORAGE_OPTIONS);
   fillSettingsForm(elements, loadSettings());
   knownRevision = null;
+  knownRevisionSha = null;
   revisionPoller.stop();
 
   if (hasUnsavedLocalChanges()) {
@@ -827,6 +867,7 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
 elements.clearSettingsBtn.addEventListener("click", () => {
   clearPrivateDataSettings(SETTINGS_STORAGE_OPTIONS);
   knownRevision = null;
+  knownRevisionSha = null;
   revisionPoller.stop();
   fillSettingsForm(elements, loadSettings());
   workspace = createEmptyMindMapWorkspace();
@@ -1050,14 +1091,9 @@ void initializeMindMap().catch((error) => {
 });
 
 async function initializeMindMap(): Promise<void> {
-  const hadLocalSnapshot = await loadLocalSnapshot();
   const settings = requireSettings();
 
   if (!settings) {
-    if (!hadLocalSnapshot) {
-      render();
-      renderLibrary();
-    }
     revisionPoller.start();
     return;
   }

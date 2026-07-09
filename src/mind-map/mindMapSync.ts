@@ -6,36 +6,16 @@ import {
   loadMindMapUnknownFiles,
   saveMindMapFolderPlaceholder,
 } from "./mindMapLibraryRepository";
-import { loadMindMapLocalSnapshot, saveMindMapLocalSnapshot } from "./mindMapLocalStore";
 import { loadMindMapDataAtPath, saveMindMapDataAtPath } from "./mindMapRepository";
 import {
   collectWorkspaceMaps,
   createMindMapWorkspaceFromRemote,
-  createMindMapWorkspaceFromSnapshot,
-  createMindMapWorkspaceSnapshot,
   getWorkspaceDesiredFiles,
   markWorkspaceSaved,
   type MindMapWorkspace,
 } from "./mindMapWorkspace";
 import { normalizePath } from "./mindMapLibrary";
 import type { MindMapData } from "./types";
-
-export async function loadLocalMindMapWorkspace(settings: PrivateDataSettings): Promise<MindMapWorkspace | null> {
-  const snapshot = await loadMindMapLocalSnapshot(settings);
-
-  return snapshot ? createMindMapWorkspaceFromSnapshot(snapshot) : null;
-}
-
-export function saveLocalMindMapWorkspace(
-  settings: PrivateDataSettings,
-  workspace: MindMapWorkspace,
-): Promise<void> {
-  return saveMindMapLocalSnapshot(settings, {
-    rootPath: settings.path,
-    ...createMindMapWorkspaceSnapshot(workspace),
-    updatedAt: Date.now(),
-  });
-}
 
 export async function loadRemoteMindMapWorkspace(settings: PrivateDataSettings): Promise<MindMapWorkspace> {
   const [remoteEntries, managedFiles, unknownFilePaths] = await Promise.all([
@@ -80,37 +60,41 @@ export async function saveRemoteMindMapWorkspace(
   const desiredPaths = new Set<string>();
 
   for (const file of getWorkspaceDesiredFiles(workspace)) {
-    desiredPaths.add(file.path);
+    const path = normalizePath(file.path);
+
+    desiredPaths.add(path);
 
     if (file.kind === "placeholder") {
-      if (workspace.remoteShaByPath.has(file.path)) {
+      if (workspace.remoteShaByPath.has(path)) {
         continue;
       }
 
-      nextRemoteShaByPath.set(file.path, await saveMindMapFolderPlaceholder(settings, file.folderPath, null));
+      nextRemoteShaByPath.set(path, await saveMindMapFolderPlaceholder(settings, file.folderPath, null));
       continue;
     }
 
-    if (!workspace.dirtyContentPaths.has(file.path) && workspace.remoteShaByPath.has(file.path)) {
+    if (!workspace.dirtyContentPaths.has(path) && workspace.remoteShaByPath.has(path)) {
       continue;
     }
 
     nextRemoteShaByPath.set(
-      file.path,
+      path,
       await saveMindMapDataAtPath(
         settings,
-        file.path,
+        path,
         file.data,
-        workspace.remoteShaByPath.get(file.path) ?? null,
-        `save mind map ${file.path}`,
+        workspace.remoteShaByPath.get(path) ?? null,
+        `save mind map ${path}`,
       ),
     );
   }
 
   for (const [path, sha] of workspace.remoteShaByPath) {
-    if (!desiredPaths.has(path)) {
-      await deleteMindMapManagedFile(settings, path, sha);
-      nextRemoteShaByPath.delete(path);
+    const normalizedPath = normalizePath(path);
+
+    if (!desiredPaths.has(normalizedPath)) {
+      await deleteMindMapManagedFile(settings, normalizedPath, sha);
+      nextRemoteShaByPath.delete(normalizedPath);
     }
   }
 
