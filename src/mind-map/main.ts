@@ -19,50 +19,36 @@ import {
 } from "../shared/privateData/settings";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import {
-  deleteMindMapManagedFile,
-  loadMindMapLibrary,
-  loadMindMapManagedFiles,
-  loadMindMapUnknownFiles,
-  saveMindMapFolderPlaceholder,
-} from "./mindMapLibraryRepository";
-import {
   DEFAULT_MIND_MAP_LIBRARY_ROOT,
-  findLibraryEntry,
-  getBaseName,
-  getFolderNameValidation,
-  getMapFileNameValidation,
   getMapTitleFromPath,
-  getParentPath,
-  getRelativeFolderPathValidation,
-  isPathEqualOrInside,
-  joinPath,
   normalizeMindMapLibraryRoot,
   normalizePath,
   pathExists,
 } from "./mindMapLibrary";
-import { loadMindMapLocalSnapshot, saveMindMapLocalSnapshot } from "./mindMapLocalStore";
-import { loadMindMapDataAtPath, saveMindMapDataAtPath } from "./mindMapRepository";
 import {
-  addWorkspaceFolder,
-  addWorkspaceMap,
+  createMindMapFileAction,
+  createMindMapFolderAction,
+  deleteMindMapLibraryEntryAction,
+  moveMindMapLibraryEntryAction,
+  renameMindMapLibraryEntryAction,
+  type MindMapLibraryActionContext,
+  type MindMapLibraryActionResult,
+} from "./mindMapLibraryActions";
+import {
+  loadLocalMindMapWorkspace,
+  loadRemoteMindMapWorkspace,
+  saveLocalMindMapWorkspace,
+  saveRemoteMindMapWorkspace,
+} from "./mindMapSync";
+import {
   cacheWorkspaceMapData,
-  collectWorkspaceMaps,
   createEmptyMindMapWorkspace,
-  createMindMapWorkspaceFromRemote,
-  createMindMapWorkspaceFromSnapshot,
-  createMindMapWorkspaceSnapshot,
-  getWorkspaceDesiredFiles,
-  getWorkspaceEntry,
   getWorkspaceMapData,
   hasWorkspaceChanges,
-  markWorkspaceSaved,
-  moveWorkspaceEntry,
-  removeWorkspaceEntry,
   updateWorkspaceMapData,
 } from "./mindMapWorkspace";
 import type {
   MindMapEndpoint,
-  MindMapLibraryEntry,
   MindMapLibrarySelection,
   MindMapSelection,
   MindMapState,
@@ -183,27 +169,8 @@ async function refreshLibrary(message?: string): Promise<void> {
 
 async function refreshLocalFromGitHub(settings: PrivateDataSettings, message?: string): Promise<void> {
   setStatus(elements, "正在从 GitHub 刷新本地缓存...");
-  const [remoteEntries, managedFiles, unknownFilePaths] = await Promise.all([
-    loadMindMapLibrary(settings, settings.path),
-    loadMindMapManagedFiles(settings, settings.path),
-    loadMindMapUnknownFiles(settings, settings.path),
-  ]);
-  const mapEntries = collectWorkspaceMaps(remoteEntries);
-  const nextMaps: Record<string, MindMapState["data"]> = {};
-  const remoteShaByPath = new Map(managedFiles.map((file) => [file.path, file.sha]));
-  const now = Date.now();
-
-  for (const entry of mapEntries) {
-    const result = await loadMindMapDataAtPath(settings, entry.path);
-
-    nextMaps[entry.path] = result.data;
-    if (result.sha) {
-      remoteShaByPath.set(entry.path, result.sha);
-    }
-  }
-
-  workspace = createMindMapWorkspaceFromRemote(remoteEntries, nextMaps, remoteShaByPath, unknownFilePaths, now);
-  lastOperationAt = now;
+  workspace = await loadRemoteMindMapWorkspace(settings);
+  lastOperationAt = workspace.lastRemoteRefreshAt ?? Date.now();
   syncCurrentMapAfterLocalRefresh();
   await saveLocalSnapshot();
 
@@ -303,48 +270,7 @@ async function persistMindMap(): Promise<void> {
   }
 
   setStatus(elements, "正在保存到 GitHub...");
-  const nextRemoteShaByPath = new Map(workspace.remoteShaByPath);
-  const desiredPaths = new Set<string>();
-  const desiredFiles = getWorkspaceDesiredFiles(workspace);
-
-  for (const file of desiredFiles) {
-    desiredPaths.add(file.path);
-
-    if (file.kind === "placeholder") {
-      if (workspace.remoteShaByPath.has(file.path)) {
-        continue;
-      }
-
-      const sha = await saveMindMapFolderPlaceholder(settings, file.folderPath, null);
-
-      nextRemoteShaByPath.set(file.path, sha);
-      continue;
-    }
-
-    if (!workspace.dirtyContentPaths.has(file.path) && workspace.remoteShaByPath.has(file.path)) {
-      continue;
-    }
-
-    const sha = await saveMindMapDataAtPath(
-      settings,
-      file.path,
-      file.data,
-      workspace.remoteShaByPath.get(file.path) ?? null,
-      `save mind map ${file.path}`,
-    );
-
-    nextRemoteShaByPath.set(file.path, sha);
-  }
-
-  for (const [path, sha] of workspace.remoteShaByPath) {
-    if (!desiredPaths.has(path)) {
-      await deleteMindMapManagedFile(settings, path, sha);
-      nextRemoteShaByPath.delete(path);
-    }
-  }
-
-  lastOperationAt = Date.now();
-  markWorkspaceSaved(workspace, nextRemoteShaByPath, lastOperationAt);
+  lastOperationAt = await saveRemoteMindMapWorkspace(settings, workspace);
   syncCurrentMapAfterLocalRefresh();
   await saveLocalSnapshot();
   render();
@@ -393,13 +319,13 @@ async function loadLocalSnapshot(): Promise<boolean> {
     return false;
   }
 
-  const snapshot = await loadMindMapLocalSnapshot(settings);
+  const localWorkspace = await loadLocalMindMapWorkspace(settings);
 
-  if (!snapshot) {
+  if (!localWorkspace) {
     return false;
   }
 
-  workspace = createMindMapWorkspaceFromSnapshot(snapshot);
+  workspace = localWorkspace;
   syncCurrentMapAfterLocalRefresh();
   render();
   renderLibrary();
@@ -413,11 +339,7 @@ async function saveLocalSnapshot(): Promise<void> {
     return;
   }
 
-  await saveMindMapLocalSnapshot(settings, {
-    rootPath: settings.path,
-    ...createMindMapWorkspaceSnapshot(workspace),
-    updatedAt: Date.now(),
-  });
+  await saveLocalMindMapWorkspace(settings, workspace);
 }
 
 function cacheCurrentMap(): void {
@@ -502,155 +424,37 @@ function isCurrentMapDirty(): boolean {
   );
 }
 
-function getSelectedDirectoryPath(rootPath: string): string {
-  if (!librarySelection) {
-    return rootPath;
-  }
-
-  if (librarySelection.kind === "folder") {
-    return librarySelection.path;
-  }
-
-  return getParentPath(librarySelection.path) || rootPath;
-}
-
-function getRelativePath(path: string, rootPath: string): string {
-  const normalizedPath = normalizePath(path);
-  const normalizedRootPath = normalizePath(rootPath);
-
-  if (normalizedPath === normalizedRootPath) {
-    return "";
-  }
-
-  return normalizedPath.startsWith(`${normalizedRootPath}/`)
-    ? normalizedPath.slice(normalizedRootPath.length + 1)
-    : normalizedPath;
-}
-
-function getExistingTargetFolderPath(settings: PrivateDataSettings, initialPath: string): string | null {
-  const input = prompt("输入目标文件夹路径（相对于导图库根目录，留空表示根目录）", initialPath);
-
-  if (input === null) {
-    return null;
-  }
-
-  const validation = getRelativeFolderPathValidation(input);
-
-  if (validation.error) {
-    setStatus(elements, validation.error);
-    return null;
-  }
-
-  const targetPath = validation.value ? joinPath(settings.path, validation.value) : settings.path;
-  const entry = findLibraryEntry(workspace.tree, targetPath);
-
-  if (targetPath !== settings.path && entry?.kind !== "folder") {
-    setStatus(elements, "目标文件夹不存在。");
-    return null;
-  }
-
-  return targetPath;
-}
-
-function ensureAvailablePath(path: string): boolean {
-  if (!pathExists(workspace.tree, path)) {
-    return true;
-  }
-
-  setStatus(elements, "同名文件或文件夹已存在。");
-  return false;
-}
-
-function ensureFolderHasNoRemoteUnknownFiles(folderPath: string): boolean {
-  const unknownPath = [...workspace.remoteUnknownFilePaths].find((path) => isPathEqualOrInside(path, folderPath));
-
-  if (!unknownPath) {
-    return true;
-  }
-
-  setStatus(elements, `文件夹中包含非导图库管理文件，已阻止操作：${unknownPath}`);
-  return false;
-}
-
-function syncMovedCurrentMap(fromPath: string, toPath: string): void {
-  if (!state.currentMapPath || !isPathEqualOrInside(state.currentMapPath, fromPath)) {
-    return;
-  }
-
-  const currentPath = state.currentMapPath;
-  const nextPath = normalizePath(currentPath === fromPath ? toPath : joinPath(toPath, currentPath.slice(fromPath.length + 1)));
-
-  state.currentMapPath = nextPath;
-  render();
-}
-
-function moveLocalLibraryEntry(entry: MindMapLibraryEntry, nextPath: string, rootPath: string): void {
-  moveWorkspaceEntry(workspace, entry, nextPath, rootPath);
-  syncMovedCurrentMap(entry.path, nextPath);
-  librarySelection = {
-    kind: entry.kind,
-    path: nextPath,
-  };
-  render();
-  renderLibrary();
-}
-
-function removeLocalLibraryEntry(entry: MindMapLibraryEntry): void {
-  removeWorkspaceEntry(workspace, entry);
-
-  if (entry.kind === "map" && state.currentMapPath === entry.path) {
-    clearCurrentMap();
-  } else if (entry.kind === "folder" && state.currentMapPath && isPathEqualOrInside(state.currentMapPath, entry.path)) {
-    clearCurrentMap();
-  } else {
-    render();
-  }
-
-  librarySelection = null;
-  renderLibrary();
-}
-
 async function createFolder(): Promise<void> {
-  if (!(await ensureFreshBeforeOperation())) {
-    return;
-  }
-
-  const settings = requireSettings();
-
-  if (!settings) {
-    return;
-  }
-
-  const input = prompt("新文件夹名称");
-
-  if (input === null) {
-    return;
-  }
-
-  const validation = getFolderNameValidation(input);
-
-  if (validation.error) {
-    setStatus(elements, validation.error);
-    return;
-  }
-
-  const folderPath = joinPath(getSelectedDirectoryPath(settings.path), validation.value);
-
-  if (!ensureAvailablePath(folderPath)) {
-    return;
-  }
-
-  addWorkspaceFolder(workspace, settings.path, folderPath);
-  librarySelection = {
-    kind: "folder",
-    path: folderPath,
-  };
-  markLibraryChanged("已在本地新建文件夹，尚未保存到 GitHub。");
+  await runLibraryAction(createMindMapFolderAction);
 }
 
 async function createMap(): Promise<void> {
   mapView.commitActiveEdit();
+  await cacheCurrentMapBeforeSwitch();
+  await runLibraryAction(createMindMapFileAction);
+}
 
+async function renameLibraryEntry(): Promise<void> {
+  mapView.commitActiveEdit();
+  cacheCurrentMap();
+  await runLibraryAction(renameMindMapLibraryEntryAction);
+}
+
+async function moveLibraryEntry(): Promise<void> {
+  mapView.commitActiveEdit();
+  cacheCurrentMap();
+  await runLibraryAction(moveMindMapLibraryEntryAction);
+}
+
+async function deleteLibraryEntry(): Promise<void> {
+  mapView.commitActiveEdit();
+  cacheCurrentMap();
+  await runLibraryAction(deleteMindMapLibraryEntryAction);
+}
+
+async function runLibraryAction(
+  action: (context: MindMapLibraryActionContext) => MindMapLibraryActionResult,
+): Promise<void> {
   if (!(await ensureFreshBeforeOperation())) {
     return;
   }
@@ -661,197 +465,38 @@ async function createMap(): Promise<void> {
     return;
   }
 
-  await cacheCurrentMapBeforeSwitch();
+  const result = action({
+    currentMapPath: state.currentMapPath,
+    rootPath: settings.path,
+    selection: librarySelection,
+    workspace,
+  });
 
-  const input = prompt("新导图名称");
-
-  if (input === null) {
-    return;
-  }
-
-  const validation = getMapFileNameValidation(input);
-
-  if (validation.error) {
-    setStatus(elements, validation.error);
-    return;
-  }
-
-  const filePath = joinPath(getSelectedDirectoryPath(settings.path), validation.value);
-
-  if (!ensureAvailablePath(filePath)) {
-    return;
-  }
-
-  state = {
-    data: createEmptyMindMapData(),
-    selection: null,
-    currentMapPath: filePath,
-  };
-  addWorkspaceMap(workspace, settings.path, filePath, state.data);
-  undoStack = [];
-  redoStack = [];
-  librarySelection = {
-    kind: "map",
-    path: filePath,
-  };
-  setConnectModeEnabled(false);
-  markLibraryChanged(`已在本地新建导图：${getMapTitleFromPath(filePath)}，尚未保存到 GitHub。`);
-}
-
-async function renameLibraryEntry(): Promise<void> {
-  if (!(await ensureFreshBeforeOperation())) {
-    return;
-  }
-
-  const settings = requireSettings();
-  const selection = librarySelection;
-
-  if (!settings || !selection) {
-    return;
-  }
-
-  const entry = getWorkspaceEntry(workspace, selection.path);
-
-  if (!entry) {
-    setStatus(elements, "请选择要重命名的导图或文件夹。");
-    return;
-  }
-
-  if (entry.kind === "folder" && !ensureFolderHasNoRemoteUnknownFiles(entry.path)) {
-    return;
-  }
-
-  const input = prompt("新名称", entry.kind === "map" ? getMapTitleFromPath(entry.path) : entry.name);
-
-  if (input === null) {
-    return;
-  }
-
-  if (entry.kind === "map") {
-    const validation = getMapFileNameValidation(input);
-
-    if (validation.error) {
-      setStatus(elements, validation.error);
-      return;
+  if (!result.changed) {
+    if (result.status) {
+      setStatus(elements, result.status);
     }
-
-    const nextPath = joinPath(getParentPath(entry.path), validation.value);
-
-    if (nextPath === entry.path) {
-      return;
-    }
-
-    if (!ensureAvailablePath(nextPath)) {
-      return;
-    }
-
-    moveLocalLibraryEntry(entry, nextPath, settings.path);
-    markLibraryChanged("已在本地重命名导图，尚未保存到 GitHub。");
     return;
   }
 
-  const validation = getFolderNameValidation(input);
+  librarySelection = result.selection;
 
-  if (validation.error) {
-    setStatus(elements, validation.error);
-    return;
+  if (result.openedMap) {
+    state = {
+      data: result.openedMap.data,
+      selection: null,
+      currentMapPath: result.openedMap.path,
+    };
+    undoStack = [];
+    redoStack = [];
+    setConnectModeEnabled(false);
+  } else if (result.currentMapPath === null) {
+    clearCurrentMap();
+  } else if (result.currentMapPath !== undefined) {
+    state.currentMapPath = result.currentMapPath;
   }
 
-  const nextPath = joinPath(getParentPath(entry.path), validation.value);
-
-  if (nextPath === entry.path) {
-    return;
-  }
-
-  if (!ensureAvailablePath(nextPath)) {
-    return;
-  }
-
-  moveLocalLibraryEntry(entry, nextPath, settings.path);
-  markLibraryChanged("已在本地重命名文件夹，尚未保存到 GitHub。");
-}
-
-async function moveLibraryEntry(): Promise<void> {
-  if (!(await ensureFreshBeforeOperation())) {
-    return;
-  }
-
-  const settings = requireSettings();
-  const selection = librarySelection;
-
-  if (!settings || !selection) {
-    return;
-  }
-
-  const entry = getWorkspaceEntry(workspace, selection.path);
-
-  if (!entry) {
-    setStatus(elements, "请选择要移动的导图或文件夹。");
-    return;
-  }
-
-  if (entry.kind === "folder" && !ensureFolderHasNoRemoteUnknownFiles(entry.path)) {
-    return;
-  }
-
-  const targetFolderPath = getExistingTargetFolderPath(settings, getRelativePath(getParentPath(entry.path), settings.path));
-
-  if (targetFolderPath === null) {
-    return;
-  }
-
-  if (entry.kind === "folder" && isPathEqualOrInside(targetFolderPath, entry.path)) {
-    setStatus(elements, "文件夹不能移动到自己或自己的子文件夹。");
-    return;
-  }
-
-  const nextPath = joinPath(targetFolderPath, getBaseName(entry.path));
-
-  if (nextPath === entry.path) {
-    setStatus(elements, "位置没有变化。");
-    return;
-  }
-
-  if (!ensureAvailablePath(nextPath)) {
-    return;
-  }
-
-  moveLocalLibraryEntry(entry, nextPath, settings.path);
-  markLibraryChanged(entry.kind === "map" ? "已在本地移动导图，尚未保存到 GitHub。" : "已在本地移动文件夹，尚未保存到 GitHub。");
-}
-
-async function deleteLibraryEntry(): Promise<void> {
-  if (!(await ensureFreshBeforeOperation())) {
-    return;
-  }
-
-  const settings = requireSettings();
-  const selection = librarySelection;
-
-  if (!settings || !selection) {
-    return;
-  }
-
-  const entry = getWorkspaceEntry(workspace, selection.path);
-
-  if (!entry) {
-    setStatus(elements, "请选择要删除的导图或文件夹。");
-    return;
-  }
-
-  if (entry.kind === "folder" && !ensureFolderHasNoRemoteUnknownFiles(entry.path)) {
-    return;
-  }
-
-  const label = entry.kind === "map" ? `导图“${getMapTitleFromPath(entry.path)}”` : `文件夹“${entry.name}”及其中所有导图`;
-  const ok = confirm(`确定删除${label}吗？此操作会删除 GitHub 仓库中的对应文件。`);
-
-  if (!ok) {
-    return;
-  }
-
-  removeLocalLibraryEntry(entry);
-  markLibraryChanged("已在本地删除，尚未保存到 GitHub。");
+  markLibraryChanged(result.status);
 }
 
 async function addNode(): Promise<void> {

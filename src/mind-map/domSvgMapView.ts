@@ -1,5 +1,18 @@
 import { DEFAULT_NODE_WIDTH } from "./mindMap";
 import {
+  createMindMapArrowElements,
+  createMindMapArrowMarker,
+  createMindMapNodeElement,
+  getEditableText,
+  insertPlainText,
+  placeCaretAtEnd,
+  releasePointerCapture,
+  setLinePoints,
+  setTextEditingEnabled,
+  SVG_NS,
+  type ArrowElements,
+} from "./domSvgMapElements";
+import {
   RESIZE_HANDLES,
   VISUAL_MIN_SIZE,
   clamp,
@@ -31,12 +44,6 @@ interface MapViewCallbacks {
   onContextMenu: (selection: MindMapSelection, x: number, y: number) => void;
 }
 
-interface ArrowElements {
-  group: SVGGElement;
-  line: SVGLineElement;
-  hitLine: SVGLineElement;
-}
-
 interface ActiveEdit extends TextEditSnapshot {
   id: string;
 }
@@ -60,7 +67,6 @@ interface PanState {
   startOffset: Point;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 const CONNECTOR_SIDES: ConnectorSide[] = ["top", "right", "bottom", "left"];
 const GRID_SIZE = 24;
 const MAX_SCALE = 2.5;
@@ -108,7 +114,7 @@ export class MindMapView {
     this.arrowSvg = document.createElementNS(SVG_NS, "svg");
     this.arrowSvg.classList.add("mind-map-arrows");
     this.arrowSvg.setAttribute("aria-hidden", "true");
-    this.arrowSvg.append(this.createArrowMarker());
+    this.arrowSvg.append(createMindMapArrowMarker(this.markerId));
 
     this.nodeLayer = document.createElement("div");
     this.nodeLayer.className = "mind-map-node-layer";
@@ -419,130 +425,53 @@ export class MindMapView {
   }
 
   private createNodeElement(id: string): HTMLDivElement {
-    const nodeElement = document.createElement("div");
-    nodeElement.className = "mind-map-node";
-    nodeElement.dataset.nodeId = id;
-    nodeElement.tabIndex = -1;
-
-    const textElement = document.createElement("div");
-    textElement.className = "mind-map-node-text";
-    setTextEditingEnabled(textElement, false);
-    textElement.setAttribute("role", "textbox");
-    textElement.setAttribute("aria-multiline", "true");
-    textElement.spellcheck = false;
-
-    textElement.addEventListener("pointerdown", (event) => this.handleTextPointerDown(event, id));
-    textElement.addEventListener("focus", () => this.beginTextEdit(id, false));
-    textElement.addEventListener("input", () => this.updateEditingPreview(id));
-    textElement.addEventListener("paste", (event) => this.handleTextPaste(event, id));
-    textElement.addEventListener("keydown", (event) => this.handleTextKeyDown(event, id));
-    textElement.addEventListener("blur", () => this.handleTextBlur(id));
-    textElement.addEventListener("contextmenu", (event) => this.handleTextContextMenu(event, id));
-
-    nodeElement.addEventListener("contextmenu", (event) => this.handleNodeContextMenu(event, id));
-
-    nodeElement.append(textElement);
-
-    for (const side of CONNECTOR_SIDES) {
-      const borderHit = document.createElement("div");
-
-      borderHit.className = `mind-map-border-hit mind-map-border-hit-${side}`;
-      borderHit.setAttribute("aria-hidden", "true");
-      borderHit.addEventListener("pointerdown", (event) => this.handleNodePointerDown(event, id));
-      nodeElement.append(borderHit);
-    }
-
-    for (const handle of RESIZE_HANDLES) {
-      const handleElement = document.createElement("button");
-      handleElement.type = "button";
-      handleElement.className = `mind-map-handle mind-map-handle-${handle}`;
-      handleElement.setAttribute("aria-label", `缩放 ${handle}`);
-      handleElement.addEventListener("pointerdown", (event) => this.handleResizePointerDown(event, id, handle));
-      nodeElement.append(handleElement);
-    }
-
-    for (const side of CONNECTOR_SIDES) {
-      const connector = document.createElement("button");
-      connector.type = "button";
-      connector.className = `mind-map-connector mind-map-connector-${side}`;
-      connector.dataset.side = side;
-      connector.setAttribute("aria-label", `${side} 连接点`);
-      connector.addEventListener("pointerdown", (event) => this.handleConnectorPointerDown(event));
-      connector.addEventListener("click", (event) => this.handleConnectorClick(event, id, side));
-      nodeElement.append(connector);
-    }
-
-    return nodeElement;
-  }
-
-  private createArrowMarker(): SVGDefsElement {
-    const defs = document.createElementNS(SVG_NS, "defs");
-    const marker = document.createElementNS(SVG_NS, "marker");
-    const path = document.createElementNS(SVG_NS, "path");
-
-    marker.id = this.markerId;
-    marker.setAttribute("viewBox", "0 0 10 10");
-    marker.setAttribute("refX", "9");
-    marker.setAttribute("refY", "5");
-    marker.setAttribute("markerWidth", "7");
-    marker.setAttribute("markerHeight", "7");
-    marker.setAttribute("orient", "auto");
-    marker.setAttribute("markerUnits", "strokeWidth");
-    path.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-    path.setAttribute("fill", "context-stroke");
-    marker.append(path);
-    defs.append(marker);
-
-    return defs;
+    return createMindMapNodeElement(id, CONNECTOR_SIDES, {
+      onConnectorClick: (event, side) => this.handleConnectorClick(event, id, side),
+      onConnectorPointerDown: (event) => this.handleConnectorPointerDown(event),
+      onContextMenu: (event) => this.handleNodeContextMenu(event, id),
+      onPointerDown: (event) => this.handleNodePointerDown(event, id),
+      onResizePointerDown: (event, handle) => this.handleResizePointerDown(event, id, handle),
+      onTextBlur: () => this.handleTextBlur(id),
+      onTextContextMenu: (event) => this.handleTextContextMenu(event, id),
+      onTextFocus: () => this.beginTextEdit(id, false),
+      onTextInput: () => this.updateEditingPreview(id),
+      onTextKeyDown: (event) => this.handleTextKeyDown(event, id),
+      onTextPaste: (event) => this.handleTextPaste(event, id),
+      onTextPointerDown: (event) => this.handleTextPointerDown(event, id),
+    });
   }
 
   private createArrowElements(id: string): ArrowElements {
-    const group = document.createElementNS(SVG_NS, "g");
-    const hitLine = document.createElementNS(SVG_NS, "line");
-    const line = document.createElementNS(SVG_NS, "line");
+    return createMindMapArrowElements(id, this.markerId, {
+      onContextMenu: (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.commitActiveEdit();
+        this.clearTextFocusAndSelection();
+        this.callbacks.onContextMenu(
+          {
+            type: "arrow",
+            id,
+          },
+          event.clientX,
+          event.clientY,
+        );
+      },
+      onPointerDown: (event) => {
+        if (event.button !== 0) {
+          return;
+        }
 
-    group.classList.add("mind-map-arrow");
-    group.dataset.arrowId = id;
-    hitLine.classList.add("mind-map-arrow-hit");
-    line.classList.add("mind-map-arrow-line");
-    line.setAttribute("marker-end", `url(#${this.markerId})`);
-    group.append(hitLine, line);
-
-    group.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      this.commitActiveEdit();
-      this.clearTextFocusAndSelection();
-      this.callbacks.onSelectionChange({
-        type: "arrow",
-        id,
-      });
-    });
-
-    group.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.commitActiveEdit();
-      this.clearTextFocusAndSelection();
-      this.callbacks.onContextMenu(
-        {
+        event.preventDefault();
+        event.stopPropagation();
+        this.commitActiveEdit();
+        this.clearTextFocusAndSelection();
+        this.callbacks.onSelectionChange({
           type: "arrow",
           id,
-        },
-        event.clientX,
-        event.clientY,
-      );
+        });
+      },
     });
-
-    return {
-      group,
-      line,
-      hitLine,
-    };
   }
 
   private syncNodeElement(element: HTMLDivElement, node: MindMapNode): void {
@@ -967,55 +896,5 @@ export class MindMapView {
     }
 
     window.getSelection()?.removeAllRanges();
-  }
-}
-
-function setLinePoints(line: SVGLineElement, from: Point, to: Point): void {
-  line.setAttribute("x1", String(from.x));
-  line.setAttribute("y1", String(from.y));
-  line.setAttribute("x2", String(to.x));
-  line.setAttribute("y2", String(to.y));
-}
-
-function getEditableText(element: HTMLElement): string {
-  return element.textContent ?? "";
-}
-
-function setTextEditingEnabled(element: HTMLElement, enabled: boolean): void {
-  element.setAttribute("contenteditable", enabled ? "plaintext-only" : "false");
-  element.setAttribute("aria-readonly", String(!enabled));
-}
-
-function insertPlainText(text: string): void {
-  const selection = window.getSelection();
-
-  if (!selection || selection.rangeCount === 0) {
-    return;
-  }
-
-  selection.deleteFromDocument();
-  const range = selection.getRangeAt(0);
-  const textNode = document.createTextNode(text);
-
-  range.insertNode(textNode);
-  range.setStartAfter(textNode);
-  range.collapse(true);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function placeCaretAtEnd(element: HTMLElement): void {
-  const selection = window.getSelection();
-  const range = document.createRange();
-
-  range.selectNodeContents(element);
-  range.collapse(false);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function releasePointerCapture(element: Element, pointerId: number): void {
-  if (element.hasPointerCapture(pointerId)) {
-    element.releasePointerCapture(pointerId);
   }
 }

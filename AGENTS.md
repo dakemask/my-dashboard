@@ -88,21 +88,33 @@ Responsibilities:
 - `types.ts`: mind-map persisted data, node/arrow, selection, frame, and state types.
 - `view.ts`: DOM lookup plus toolbar, settings, status, context-menu, and mode UI updates.
 - `domSvgMapView.ts`: DOM/SVG canvas rendering, pointer interactions, text editing, selection, resize handles, connectors, arrows, panning, and zooming.
+- `domSvgMapElements.ts`: DOM/SVG element factories and low-level editable text, caret, pointer-capture, and SVG line helpers used by the canvas view.
 - `nodeFrame.ts`: node frame geometry, resize handle metadata, endpoint positioning, and frame comparison helpers.
 - `textBoxLayout.ts`: text box measurement, edit-time height fitting, auto-width behavior, and resize commit fitting.
-- `main.ts`: page controller, event wiring, undo/redo, persistence orchestration, and coordination between domain, repository, and view layers.
+- `mindMapLibrary.ts`: pure path, name validation, tree lookup, tree mutation, sorting, and path-prefix helpers for the mind-map library.
+- `mindMapWorkspace.ts`: local-first workspace state model. It owns `tree`, `maps`, `dirtyContentPaths`, `dirtyTree`, `treeChangePaths`, `remoteShaByPath`, remote unknown-file protection data, and old local-cache normalization.
+- `mindMapLibraryRepository.ts`: GitHub directory traversal and managed-file transport for mind-map library folders, `.json` maps, and `.gitkeep` placeholders.
+- `mindMapLocalStore.ts`: IndexedDB storage for the mind-map workspace snapshot.
+- `mindMapSync.ts`: GitHub/IndexedDB synchronization use cases: load local workspace, save local workspace, refresh workspace from GitHub, and upload workspace changes to GitHub.
+- `mindMapLibraryActions.ts`: file-tree user operations such as create, rename, move, and delete folders/maps, including name/path validation and non-managed-file guards.
+- `main.ts`: page controller, event wiring, undo/redo, idle-refresh checks, and coordination between workspace, sync, library actions, domain operations, and view layers.
 - `style.css`: module-specific presentation.
 
 Persistence:
 
-- Uses shared private JSON repository helpers under `src/shared/privateData/`.
-- Defaults to `data/mind-map.json` in the configured private data repository.
-- Keeps mind-map-specific JSON compatibility and normalization local to this module.
+- Uses shared private GitHub Contents API helpers under `src/shared/privateData/`.
+- The settings `path` field is the mind-map library root. The default is `data/mind-maps/`; a stored legacy default `data/mind-map.json` is treated as unset and normalized to the library root.
+- Each map remains a plain `MindMapData` JSON file shaped as `{ nodes, arrows }`; map names come from filenames and are not wrapped in metadata.
+- Browser IndexedDB is the primary working cache for the whole workspace. The workspace is refreshed from GitHub on page open, on manual refresh, or before an operation after more than two hours of inactivity. User edits update the local workspace first.
+- Saving uploads the local workspace to GitHub. New paths are created without reusing old file SHAs; removed remote managed files are deleted using `remoteShaByPath`; empty folders are represented by `.gitkeep`.
+- The file tree only manages folders, `.json` map files, and `.gitkeep`. Folder move/rename/delete is blocked when the last GitHub refresh saw non-managed files under that folder.
+- The old `data/mind-map.json` single-file map is intentionally ignored by the multi-map library and is not automatically imported or migrated.
 
 Compatibility:
 
 - Keep `/modules/mind-map/` stable.
-- Preserve existing localStorage keys and persisted JSON data shapes unless explicitly changing them.
+- Preserve existing settings localStorage keys and per-map `{ nodes, arrows }` JSON shape unless explicitly changing them.
+- Keep old browser-local mind-map workspace cache normalization in `mindMapWorkspace.ts` when changing the IndexedDB snapshot shape.
 
 ## Adding A Feature Module
 
