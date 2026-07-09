@@ -17,6 +17,7 @@ import {
   markWorkspaceSaved,
   type MindMapWorkspace,
 } from "./mindMapWorkspace";
+import { normalizePath } from "./mindMapLibrary";
 import type { MindMapData } from "./types";
 
 export async function loadLocalMindMapWorkspace(settings: PrivateDataSettings): Promise<MindMapWorkspace | null> {
@@ -56,6 +57,19 @@ export async function loadRemoteMindMapWorkspace(settings: PrivateDataSettings):
   }
 
   return createMindMapWorkspaceFromRemote(remoteEntries, maps, remoteShaByPath, unknownFilePaths, now);
+}
+
+export async function refreshMindMapWorkspaceRemoteMetadata(
+  settings: PrivateDataSettings,
+  workspace: MindMapWorkspace,
+): Promise<void> {
+  const [managedFiles, unknownFilePaths] = await Promise.all([
+    loadMindMapManagedFiles(settings, settings.path),
+    loadMindMapUnknownFiles(settings, settings.path),
+  ]);
+
+  workspace.remoteShaByPath = new Map(managedFiles.map((file) => [normalizePath(file.path), file.sha]));
+  workspace.remoteUnknownFilePaths = new Set(unknownFilePaths.map((path) => normalizePath(path)));
 }
 
 export async function saveRemoteMindMapWorkspace(

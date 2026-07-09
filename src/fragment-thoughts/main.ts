@@ -11,6 +11,13 @@ import {
   loadPrivateDataSettings,
   savePrivateDataSettings,
 } from "../shared/privateData/settings";
+import {
+  createPrivateDataRevisionPoller,
+  getPrivateDataFileParentPath,
+  loadPrivateDataRevision,
+  savePrivateDataRevision,
+  type LoadedPrivateDataRevision,
+} from "../shared/privateData/revision";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import { loadFragmentThoughtData, saveFragmentThoughtData } from "./fragmentThoughtRepository";
 import type { FragmentThoughtState } from "./types";
@@ -21,11 +28,12 @@ import {
   readSettingsForm,
   renderFragmentThoughts,
   setStatus,
+  setSyncOverlayVisible,
 } from "./view";
 import "./style.css";
 
 const DEFAULT_FRAGMENT_THOUGHTS_DATA_SETTINGS: Partial<PrivateDataSettings> = {
-  path: "fragment-thoughts/fragment-thoughts.json",
+  path: "data/fragment-thoughts/fragment-thoughts.json",
 };
 
 const elements = getFragmentThoughtsElements();
@@ -35,9 +43,31 @@ let state: FragmentThoughtState = {
     notes: [],
   },
 };
+let knownRevision: string | null = null;
+let hasDirtyChanges = false;
+let saveInProgress = false;
+let queuedSaveMessage: string | null = null;
+let refreshInProgress = false;
+let revisionConflictInProgress = false;
+
+const revisionPoller = createPrivateDataRevisionPoller({
+  getSettings: getCompleteSettings,
+  getModuleRoot: getFragmentThoughtModuleRoot,
+  getKnownRevision: () => knownRevision,
+  onRevisionChange: handleRemoteRevisionChange,
+  onError: (error) => {
+    setStatus(elements, getErrorMessage(error));
+  },
+});
 
 function loadSettings(): PrivateDataSettings {
   return loadPrivateDataSettings(DEFAULT_FRAGMENT_THOUGHTS_DATA_SETTINGS);
+}
+
+function getCompleteSettings(): PrivateDataSettings | null {
+  const settings = loadSettings();
+
+  return hasCompletePrivateDataSettings(settings) ? settings : null;
 }
 
 function requireSettings(): PrivateDataSettings | null {
@@ -60,7 +90,15 @@ function render(): void {
   );
 }
 
-async function refreshFragmentThoughts(): Promise<void> {
+function getFragmentThoughtModuleRoot(settings: PrivateDataSettings): string {
+  return getPrivateDataFileParentPath(settings.path);
+}
+
+async function refreshFragmentThoughts(options: { discardDirty?: boolean } = {}): Promise<void> {
+  if (refreshInProgress) {
+    return;
+  }
+
   const settings = requireSettings();
 
   if (!settings) {
@@ -68,31 +106,123 @@ async function refreshFragmentThoughts(): Promise<void> {
     return;
   }
 
-  setStatus(elements, "正在从 GitHub 读取...");
+  if (hasDirtyChanges && !options.discardDirty) {
+    const ok = confirm("从 GitHub 刷新会放弃当前未保存的本地修改。继续吗？");
 
-  const result = await loadFragmentThoughtData(settings);
-  state = {
-    sha: result.sha,
-    data: result.data,
-  };
+    if (!ok) {
+      return;
+    }
+  }
 
-  setStatus(
-    elements,
-    result.created ? "数据文件还不存在。保存第一条想法时会自动创建。" : `已同步：${new Date().toLocaleString()}`,
-  );
-  render();
+  refreshInProgress = true;
+  setSyncOverlayVisible(elements, true);
+
+  try {
+    const [result, revision] = await Promise.all([
+      loadFragmentThoughtData(settings),
+      loadPrivateDataRevision(settings, getFragmentThoughtModuleRoot(settings)),
+    ]);
+
+    state = {
+      sha: result.sha,
+      data: result.data,
+    };
+    knownRevision = revision?.data.revision ?? null;
+    hasDirtyChanges = false;
+
+    setStatus(
+      elements,
+      result.created ? "数据文件还不存在。保存第一条想法时会自动创建。" : `已同步：${new Date().toLocaleString()}`,
+    );
+    render();
+  } finally {
+    refreshInProgress = false;
+    setSyncOverlayVisible(elements, false);
+  }
 }
 
-async function persistFragmentThoughts(message: string): Promise<void> {
+async function persistFragmentThoughts(
+  message: string,
+  options: { refreshRemoteSha?: boolean } = {},
+): Promise<void> {
+  if (saveInProgress) {
+    queuedSaveMessage = message;
+    return;
+  }
+
   const settings = requireSettings();
 
   if (!settings) {
     return;
   }
 
-  setStatus(elements, "正在保存到 GitHub...");
-  state.sha = await saveFragmentThoughtData(settings, state.data, state.sha, message);
-  setStatus(elements, `已保存：${new Date().toLocaleString()}`);
+  saveInProgress = true;
+  let savedSuccessfully = false;
+  setSyncOverlayVisible(elements, true);
+
+  try {
+    const dataToSave = state.data;
+    const remoteSha = options.refreshRemoteSha ? (await loadFragmentThoughtData(settings)).sha : state.sha;
+
+    state.sha = await saveFragmentThoughtData(settings, dataToSave, remoteSha, message);
+
+    const revision = await savePrivateDataRevision(
+      settings,
+      getFragmentThoughtModuleRoot(settings),
+      "update fragment thoughts revision",
+    );
+
+    knownRevision = revision.data.revision;
+    hasDirtyChanges = state.data !== dataToSave;
+    savedSuccessfully = true;
+    setStatus(elements, `已保存：${new Date().toLocaleString()}`);
+  } finally {
+    saveInProgress = false;
+
+    const nextMessage = queuedSaveMessage;
+
+    queuedSaveMessage = null;
+
+    if (savedSuccessfully && nextMessage && hasDirtyChanges) {
+      void persistFragmentThoughts(nextMessage).catch((error) => {
+        setStatus(elements, getErrorMessage(error));
+      });
+      return;
+    }
+
+    setSyncOverlayVisible(elements, false);
+  }
+}
+
+async function handleRemoteRevisionChange(revision: LoadedPrivateDataRevision): Promise<void> {
+  if (revision.data.revision === knownRevision) {
+    return;
+  }
+
+  if (saveInProgress || refreshInProgress || revisionConflictInProgress) {
+    return;
+  }
+
+  if (!hasDirtyChanges) {
+    await refreshFragmentThoughts({ discardDirty: true });
+    return;
+  }
+
+  revisionConflictInProgress = true;
+
+  try {
+    const shouldUploadLocal = confirm(
+      "Fragment Thoughts 的远程数据已更新。\n\n确定：保存本地未同步修改并上传新版本。\n取消：放弃本地未同步修改并拉取远程数据。",
+    );
+
+    if (shouldUploadLocal) {
+      await persistFragmentThoughts("resolve fragment thoughts revision conflict", { refreshRemoteSha: true });
+    } else {
+      await refreshFragmentThoughts({ discardDirty: true });
+    }
+  } finally {
+    revisionConflictInProgress = false;
+  }
 }
 
 async function addFragmentThought(): Promise<void> {
@@ -105,6 +235,7 @@ async function addFragmentThought(): Promise<void> {
 
   const fragmentThought = createFragmentThought(content, parseTags(elements.tagInput.value));
   state.data = addFragmentThoughtToData(state.data, fragmentThought);
+  hasDirtyChanges = true;
   clearComposer(elements);
   render();
 
@@ -123,6 +254,7 @@ async function deleteFragmentThought(id: string): Promise<void> {
   }
 
   state.data = deleteFragmentThoughtFromData(state.data, id);
+  hasDirtyChanges = true;
   render();
 
   try {
@@ -142,17 +274,23 @@ elements.settingsBtn.addEventListener("click", () => {
 
 elements.saveSettingsBtn.addEventListener("click", async () => {
   savePrivateDataSettings(readSettingsForm(elements));
+  knownRevision = null;
+  revisionPoller.stop();
   setStatus(elements, "设置已保存。");
 
   try {
     await refreshFragmentThoughts();
   } catch (error) {
     setStatus(elements, getErrorMessage(error));
+  } finally {
+    revisionPoller.start();
   }
 });
 
 elements.clearSettingsBtn.addEventListener("click", () => {
   clearPrivateDataSettings();
+  knownRevision = null;
+  revisionPoller.stop();
   fillSettingsForm(elements, loadSettings());
   setStatus(elements, "已清除当前浏览器里的设置。");
 });
@@ -172,6 +310,14 @@ elements.refreshBtn.addEventListener("click", async () => {
 elements.searchInput.addEventListener("input", render);
 
 fillSettingsForm(elements, loadSettings());
-void refreshFragmentThoughts().catch((error) => {
+void initializeFragmentThoughts().catch((error) => {
   setStatus(elements, getErrorMessage(error));
 });
+
+async function initializeFragmentThoughts(): Promise<void> {
+  try {
+    await refreshFragmentThoughts({ discardDirty: true });
+  } finally {
+    revisionPoller.start();
+  }
+}

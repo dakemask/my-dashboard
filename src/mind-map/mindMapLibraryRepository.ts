@@ -5,10 +5,12 @@ import {
   updateTextFileAtPath,
   type GitHubDirectoryItem,
 } from "../shared/privateData/githubContentApi";
+import { getPrivateDataRevisionFileName } from "../shared/privateData/revision";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import {
   FOLDER_PLACEHOLDER_FILE,
   getFolderPlaceholderPath,
+  joinPath,
   isMapFileName,
   normalizePath,
 } from "./mindMapLibrary";
@@ -29,7 +31,7 @@ export async function loadMindMapLibrary(
   rootPath: string,
 ): Promise<MindMapLibraryEntry[]> {
   try {
-    return await loadDirectoryEntries(settings, rootPath);
+    return await loadDirectoryEntries(settings, rootPath, rootPath);
   } catch (error) {
     if (error instanceof GitHubApiError && error.status === 404) {
       return [];
@@ -44,7 +46,7 @@ export async function loadMindMapManagedFiles(
   rootPath: string,
 ): Promise<ManagedLibraryFile[]> {
   try {
-    return (await scanManagedFolder(settings, rootPath)).files;
+    return (await scanManagedFolder(settings, rootPath, rootPath)).files;
   } catch (error) {
     if (error instanceof GitHubApiError && error.status === 404) {
       return [];
@@ -59,7 +61,7 @@ export async function loadMindMapUnknownFiles(
   rootPath: string,
 ): Promise<string[]> {
   try {
-    return (await scanFolderFiles(settings, rootPath)).unknownPaths;
+    return (await scanFolderFiles(settings, rootPath, rootPath)).unknownPaths;
   } catch (error) {
     if (error instanceof GitHubApiError && error.status === 404) {
       return [];
@@ -94,17 +96,22 @@ export async function deleteMindMapManagedFile(
 async function loadDirectoryEntries(
   settings: PrivateDataSettings,
   directoryPath: string,
+  rootPath: string,
 ): Promise<MindMapLibraryEntry[]> {
   const items = await listDirectoryAtPath(settings, directoryPath);
   const entries: MindMapLibraryEntry[] = [];
 
   for (const item of sortDirectoryItems(items)) {
+    if (isRootRevisionFile(item, rootPath)) {
+      continue;
+    }
+
     if (item.type === "dir") {
       entries.push({
         kind: "folder",
         name: item.name,
         path: item.path,
-        children: await loadDirectoryEntries(settings, item.path),
+        children: await loadDirectoryEntries(settings, item.path, rootPath),
       });
       continue;
     }
@@ -124,13 +131,15 @@ async function loadDirectoryEntries(
 async function scanManagedFolder(
   settings: PrivateDataSettings,
   folderPath: string,
+  rootPath: string,
 ): Promise<FolderScan> {
-  return scanFolderFiles(settings, folderPath);
+  return scanFolderFiles(settings, folderPath, rootPath);
 }
 
 async function scanFolderFiles(
   settings: PrivateDataSettings,
   folderPath: string,
+  rootPath: string,
 ): Promise<FolderScan> {
   const items = await listDirectoryAtPath(settings, folderPath);
   const scan: FolderScan = {
@@ -139,8 +148,12 @@ async function scanFolderFiles(
   };
 
   for (const item of items) {
+    if (isRootRevisionFile(item, rootPath)) {
+      continue;
+    }
+
     if (item.type === "dir") {
-      const childScan = await scanFolderFiles(settings, item.path);
+      const childScan = await scanFolderFiles(settings, item.path, rootPath);
 
       scan.files.push(...childScan.files);
       scan.unknownPaths.push(...childScan.unknownPaths);
@@ -161,6 +174,10 @@ async function scanFolderFiles(
   }
 
   return scan;
+}
+
+function isRootRevisionFile(item: GitHubDirectoryItem, rootPath: string): boolean {
+  return item.type === "file" && normalizePath(item.path) === joinPath(rootPath, getPrivateDataRevisionFileName());
 }
 
 function sortDirectoryItems(items: GitHubDirectoryItem[]): GitHubDirectoryItem[] {

@@ -17,6 +17,12 @@ import {
   loadPrivateDataSettings,
   savePrivateDataSettings,
 } from "../shared/privateData/settings";
+import {
+  createPrivateDataRevisionPoller,
+  loadPrivateDataRevision,
+  savePrivateDataRevision,
+  type LoadedPrivateDataRevision,
+} from "../shared/privateData/revision";
 import type { PrivateDataSettings } from "../shared/privateData/types";
 import {
   DEFAULT_MIND_MAP_LIBRARY_ROOT,
@@ -37,6 +43,7 @@ import {
 import {
   loadLocalMindMapWorkspace,
   loadRemoteMindMapWorkspace,
+  refreshMindMapWorkspaceRemoteMetadata,
   saveLocalMindMapWorkspace,
   saveRemoteMindMapWorkspace,
 } from "./mindMapSync";
@@ -78,7 +85,6 @@ const DEFAULT_MIND_MAP_DATA_SETTINGS: Partial<PrivateDataSettings> = {
 const SETTINGS_STORAGE_OPTIONS = {
   pathStorageKey: "private_data_mind_map_path",
 };
-const REMOTE_REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
 const elements = getMindMapElements();
 const mapView = new MindMapView(elements.mapHost, {
@@ -96,11 +102,21 @@ let state: MindMapState = {
 };
 let workspace = createEmptyMindMapWorkspace();
 let librarySelection: MindMapLibrarySelection = null;
-let lastOperationAt = Date.now();
+let knownRevision: string | null = null;
 let connectMode = false;
 let saveInProgress = false;
+let refreshInProgress = false;
+let revisionConflictInProgress = false;
 let undoStack: MindMapState["data"][] = [];
 let redoStack: MindMapState["data"][] = [];
+
+const revisionPoller = createPrivateDataRevisionPoller({
+  getSettings: getCompleteSettings,
+  getModuleRoot: getMindMapModuleRoot,
+  getKnownRevision: () => knownRevision,
+  onRevisionChange: handleRemoteRevisionChange,
+  onError: reportError,
+});
 
 function loadSettings(): PrivateDataSettings {
   const settings = loadPrivateDataSettings(DEFAULT_MIND_MAP_DATA_SETTINGS, SETTINGS_STORAGE_OPTIONS);
@@ -109,6 +125,16 @@ function loadSettings(): PrivateDataSettings {
     ...settings,
     path: normalizeMindMapLibraryRoot(settings.path),
   };
+}
+
+function getCompleteSettings(): PrivateDataSettings | null {
+  const settings = loadSettings();
+
+  return hasCompletePrivateDataSettings(settings) ? settings : null;
+}
+
+function getMindMapModuleRoot(settings: PrivateDataSettings): string {
+  return settings.path;
 }
 
 function requireSettings(): PrivateDataSettings | null {
@@ -189,13 +215,30 @@ async function refreshLibrary(): Promise<void> {
 }
 
 async function refreshLocalFromGitHub(settings: PrivateDataSettings): Promise<void> {
-  workspace = await loadRemoteMindMapWorkspace(settings);
-  lastOperationAt = workspace.lastRemoteRefreshAt ?? Date.now();
-  syncCurrentMapAfterLocalRefresh();
-  await saveLocalSnapshot();
+  if (refreshInProgress) {
+    return;
+  }
 
-  render();
-  renderLibrary();
+  refreshInProgress = true;
+  setSaveOverlayVisible(elements, true);
+
+  try {
+    const [remoteWorkspace, revision] = await Promise.all([
+      loadRemoteMindMapWorkspace(settings),
+      loadPrivateDataRevision(settings, getMindMapModuleRoot(settings)),
+    ]);
+
+    workspace = remoteWorkspace;
+    knownRevision = revision?.data.revision ?? null;
+    syncCurrentMapAfterLocalRefresh();
+    await saveLocalSnapshot();
+
+    render();
+    renderLibrary();
+  } finally {
+    refreshInProgress = false;
+    setSaveOverlayVisible(elements, false);
+  }
 }
 
 async function refreshMindMap(): Promise<void> {
@@ -261,14 +304,16 @@ async function openMindMap(
   renderLibrary();
 }
 
-async function persistMindMap(): Promise<void> {
+async function persistMindMap(
+  options: { allowDuringConflict?: boolean; refreshRemoteMetadata?: boolean } = {},
+): Promise<void> {
   if (saveInProgress) {
     return;
   }
 
   mapView.commitActiveEdit();
 
-  if (!(await ensureFreshBeforeOperation())) {
+  if (!options.allowDuringConflict && !(await ensureFreshBeforeOperation())) {
     return;
   }
 
@@ -287,8 +332,28 @@ async function persistMindMap(): Promise<void> {
   saveInProgress = true;
   setSaveOverlayVisible(elements, true);
 
+  const dirtyContentPaths = new Set(workspace.dirtyContentPaths);
+  const dirtyTree = workspace.dirtyTree;
+  const treeChangePaths = new Set(workspace.treeChangePaths);
+
   try {
-    lastOperationAt = await saveRemoteMindMapWorkspace(settings, workspace);
+    if (options.refreshRemoteMetadata) {
+      await refreshMindMapWorkspaceRemoteMetadata(settings, workspace);
+    }
+
+    await saveRemoteMindMapWorkspace(settings, workspace);
+
+    try {
+      const revision = await savePrivateDataRevision(settings, getMindMapModuleRoot(settings), "update mind map revision");
+
+      knownRevision = revision.data.revision;
+    } catch (error) {
+      workspace.dirtyContentPaths = dirtyContentPaths;
+      workspace.dirtyTree = dirtyTree;
+      workspace.treeChangePaths = treeChangePaths;
+      throw error;
+    }
+
     syncCurrentMapAfterLocalRefresh();
     await saveLocalSnapshot();
     render();
@@ -392,44 +457,58 @@ function syncCurrentMapAfterLocalRefresh(): void {
   redoStack = [];
 }
 
-function isRemoteRefreshDue(): boolean {
-  return Date.now() - lastOperationAt > REMOTE_REFRESH_INTERVAL_MS;
+async function ensureFreshBeforeOperation(): Promise<boolean> {
+  if (saveInProgress || refreshInProgress || revisionConflictInProgress) {
+    return false;
+  }
+
+  return true;
 }
 
-async function ensureFreshBeforeOperation(): Promise<boolean> {
-  if (!isRemoteRefreshDue()) {
-    lastOperationAt = Date.now();
-    return true;
+async function handleRemoteRevisionChange(revision: LoadedPrivateDataRevision): Promise<void> {
+  if (revision.data.revision === knownRevision) {
+    return;
+  }
+
+  if (saveInProgress || refreshInProgress || revisionConflictInProgress) {
+    return;
   }
 
   const settings = requireSettings();
 
   if (!settings) {
-    lastOperationAt = Date.now();
-    return true;
+    return;
   }
 
-  if (hasUnsavedLocalChanges()) {
-    const ok = confirm("距离上次操作已经超过 2 小时。是否先从 GitHub 刷新并覆盖浏览器本地缓存？确定会丢弃当前未保存修改。");
+  mapView.commitActiveEdit();
+  cacheCurrentMap();
 
-    if (!ok) {
-      lastOperationAt = Date.now();
-      return true;
-    }
+  if (!hasUnsavedLocalChanges()) {
+    await refreshLocalFromGitHub(settings);
+    return;
   }
+
+  revisionConflictInProgress = true;
 
   try {
-    await refreshLocalFromGitHub(settings);
-  } catch (error) {
-    reportError(error);
-  }
+    const shouldUploadLocal = confirm(
+      "Mind Map 的远程数据已更新。\n\n确定：保存本地未同步修改并上传新版本。\n取消：放弃本地未同步修改并拉取远程数据。",
+    );
 
-  lastOperationAt = Date.now();
-  return true;
+    if (shouldUploadLocal) {
+      await persistMindMap({
+        allowDuringConflict: true,
+        refreshRemoteMetadata: true,
+      });
+    } else {
+      await refreshLocalFromGitHub(settings);
+    }
+  } finally {
+    revisionConflictInProgress = false;
+  }
 }
 
 function markLibraryChanged(): void {
-  lastOperationAt = Date.now();
   render();
   renderLibrary();
   void saveLocalSnapshot().catch((error) => {
@@ -635,7 +714,6 @@ function markDirty(): void {
   if (state.currentMapPath) {
     updateWorkspaceMapData(workspace, state.currentMapPath, state.data);
   }
-  lastOperationAt = Date.now();
   void saveLocalSnapshot().catch((error) => {
     reportError(error);
   });
@@ -713,10 +791,6 @@ function isLibraryControlTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && Boolean(target.closest(".library-panel"));
 }
 
-function isMapInteractionTarget(target: EventTarget | null): boolean {
-  return target instanceof Node && elements.mapHost.contains(target);
-}
-
 elements.settingsBtn.addEventListener("click", () => {
   elements.settingsPanel.classList.toggle("hidden");
 });
@@ -724,9 +798,12 @@ elements.settingsBtn.addEventListener("click", () => {
 elements.saveSettingsBtn.addEventListener("click", async () => {
   savePrivateDataSettings(readNormalizedSettingsForm(), SETTINGS_STORAGE_OPTIONS);
   fillSettingsForm(elements, loadSettings());
+  knownRevision = null;
+  revisionPoller.stop();
 
   if (hasUnsavedLocalChanges()) {
     renderLibrary();
+    revisionPoller.start();
     return;
   }
 
@@ -742,11 +819,15 @@ elements.saveSettingsBtn.addEventListener("click", async () => {
     }
   } catch (error) {
     reportError(error);
+  } finally {
+    revisionPoller.start();
   }
 });
 
 elements.clearSettingsBtn.addEventListener("click", () => {
   clearPrivateDataSettings(SETTINGS_STORAGE_OPTIONS);
+  knownRevision = null;
+  revisionPoller.stop();
   fillSettingsForm(elements, loadSettings());
   workspace = createEmptyMindMapWorkspace();
   librarySelection = null;
@@ -832,8 +913,10 @@ elements.libraryTree.addEventListener("click", (event) => {
 
 elements.connectBtn.addEventListener("click", () => {
   void ensureFreshBeforeOperation()
-    .then(() => {
-      setConnectModeEnabled(!connectMode);
+    .then((ok) => {
+      if (ok) {
+        setConnectModeEnabled(!connectMode);
+      }
     })
     .catch((error) => {
       reportError(error);
@@ -861,20 +944,6 @@ elements.resetBtn.addEventListener("click", () => {
 });
 
 elements.contextDeleteBtn.addEventListener("click", deleteSelection);
-
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (!isMapInteractionTarget(event.target) || !isRemoteRefreshDue()) {
-      return;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-    void ensureFreshBeforeOperation();
-  },
-  true,
-);
 
 document.addEventListener("click", (event) => {
   if (!elements.contextMenu.contains(event.target as Node)) {
@@ -937,8 +1006,10 @@ document.addEventListener("keydown", (event) => {
       return;
     }
     void ensureFreshBeforeOperation()
-      .then(() => {
-        setConnectModeEnabled(true);
+      .then((ok) => {
+        if (ok) {
+          setConnectModeEnabled(true);
+        }
       })
       .catch((error) => {
         reportError(error);
@@ -987,6 +1058,7 @@ async function initializeMindMap(): Promise<void> {
       render();
       renderLibrary();
     }
+    revisionPoller.start();
     return;
   }
 
@@ -994,5 +1066,7 @@ async function initializeMindMap(): Promise<void> {
     await refreshLocalFromGitHub(settings);
   } catch (error) {
     reportError(error);
+  } finally {
+    revisionPoller.start();
   }
 }

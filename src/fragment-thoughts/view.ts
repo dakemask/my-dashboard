@@ -19,6 +19,7 @@ export interface FragmentThoughtsElements {
   searchInput: HTMLInputElement;
   status: HTMLElement;
   list: HTMLElement;
+  syncOverlay: HTMLElement;
 }
 
 export function getFragmentThoughtsElements(): FragmentThoughtsElements {
@@ -39,11 +40,17 @@ export function getFragmentThoughtsElements(): FragmentThoughtsElements {
     searchInput: queryRequired("#searchInput"),
     status: queryRequired("#status"),
     list: queryRequired("#list"),
+    syncOverlay: queryRequired("#syncOverlay"),
   };
 }
 
 export function setStatus(elements: FragmentThoughtsElements, message = ""): void {
   elements.status.textContent = message;
+}
+
+export function setSyncOverlayVisible(elements: FragmentThoughtsElements, visible: boolean): void {
+  elements.syncOverlay.classList.toggle("hidden", !visible);
+  elements.syncOverlay.setAttribute("aria-hidden", String(!visible));
 }
 
 export function fillSettingsForm(elements: FragmentThoughtsElements, settings: PrivateDataSettings): void {

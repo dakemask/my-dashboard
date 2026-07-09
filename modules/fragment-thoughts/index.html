@@ -83,6 +83,17 @@
       <p id="status" class="status"></p>
 
       <section id="list" class="list"></section>
+
+      <div
+        id="syncOverlay"
+        class="sync-overlay hidden"
+        role="status"
+        aria-live="polite"
+        aria-label="正在同步到 GitHub"
+        aria-hidden="true"
+      >
+        <div class="sync-spinner" aria-hidden="true"></div>
+      </div>
     </main>
 
     <script type="module" src="/src/fragment-thoughts/main.ts"></script>

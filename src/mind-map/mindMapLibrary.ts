@@ -1,3 +1,4 @@
+import { getPrivateDataRevisionFileName } from "../shared/privateData/revision";
 import type { MindMapLibraryEntry } from "./types";
 
 export const DEFAULT_MIND_MAP_LIBRARY_ROOT = "data/mind-maps";
@@ -105,6 +106,13 @@ export function getMapFileNameValidation(input: string): NameValidationResult {
   }
 
   if (title === "." || title === "..") {
+    return {
+      value,
+      error: "导图名称不可用。",
+    };
+  }
+
+  if (value.toLowerCase() === getPrivateDataRevisionFileName()) {
     return {
       value,
       error: "导图名称不可用。",
