@@ -3,20 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; connect-src 'self' https://api.github.com; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+  />
   <title>My Dashboard</title>
+  <link rel="stylesheet" href="/src/home/style.css" />
 </head>
 <body>
-  <main class="shell">
-    <header class="home-header">
-      <p class="eyebrow">My Dashboard</p>
-      <h1>功能入口</h1>
-      <p class="subtitle">选择要打开的模块。</p>
-    </header>
-
-    <section class="module-section" aria-label="功能模块">
-      <div id="moduleList" class="module-list"></div>
-    </section>
-  </main>
+  <div id="app"></div>
 
   <script type="module" src="/src/home/main.ts"></script>
 </body>

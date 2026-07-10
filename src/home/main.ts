@@ -1,11 +1,44 @@
 import { queryRequired } from "../shared/dom";
+import { createAuthService, mountLoginGate } from "../shared/auth";
 import { dashboardModules } from "./modules";
-import "./style.css";
 
-const moduleList = queryRequired<HTMLDivElement>("#moduleList");
+const app = queryRequired<HTMLDivElement>("#app");
+const authService = createAuthService();
 
-function renderModules(): void {
-  moduleList.replaceChildren();
+mountLoginGate(app, {
+  authService,
+  onAuthenticated: () => renderHome(),
+});
+
+function renderHome(): void {
+  const shell = document.createElement("main");
+  shell.className = "shell";
+
+  const header = document.createElement("header");
+  header.className = "home-header";
+
+  const eyebrow = document.createElement("p");
+  eyebrow.className = "eyebrow";
+  eyebrow.textContent = "My Dashboard";
+
+  const title = document.createElement("h1");
+  title.textContent = "功能入口";
+
+  const subtitle = document.createElement("p");
+  subtitle.className = "subtitle";
+  subtitle.textContent = "选择要打开的模块。";
+
+  header.append(eyebrow, title, subtitle);
+
+  const section = document.createElement("section");
+  section.className = "module-section";
+  section.setAttribute("aria-label", "功能模块");
+
+  const moduleList = document.createElement("div");
+  moduleList.className = "module-list";
+  section.append(moduleList);
+  shell.append(header, section);
+  app.replaceChildren(shell);
 
   if (dashboardModules.length === 0) {
     const empty = document.createElement("div");
@@ -42,5 +75,3 @@ function renderModules(): void {
 
   moduleList.append(...links);
 }
-
-renderModules();

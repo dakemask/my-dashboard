@@ -1,0 +1,29 @@
+.shared-cloud-operation-active {
+  filter: blur(3px);
+}
+
+.shared-cloud-operation-overlay {
+  align-items: center;
+  backdrop-filter: blur(4px);
+  background: rgb(15 23 42 / 28%);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 2147483647;
+}
+
+.shared-cloud-operation-spinner {
+  animation: shared-operation-spin 750ms linear infinite;
+  border: 4px solid rgb(255 255 255 / 45%);
+  border-radius: 50%;
+  border-top-color: #fff;
+  height: 2.5rem;
+  width: 2.5rem;
+}
+
+@keyframes shared-operation-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
