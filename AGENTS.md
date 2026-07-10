@@ -38,24 +38,17 @@
 
 需要持久化的模块通过浏览器使用 GitHub Contents API，将模块数据（比如 JSON 文件）保存在用户自有的私有 GitHub 仓库中。
 
-当用户操作时，是先将 GitHub 数据拉取到本地 IndexedDB 中，后续
-
 每个持久化模块应维护一个独立的 `revision.json`，用于表示该模块远程数据的版本。revision 文件内容固定为 `{ revision, updatedAt }`，应保持足够小，只用于判断远程状态是否变化。`revision.json` 放在模块数据根目录下，也就是模块数据文件夹内。
 
-每个已打开的标签页独立轮询该模块的 revision JSON：
+数据持久化标准的具体流程如下：
 
-- 前台标签页默认每 `60s` 轮询一次，有 `0-15s` 的随机抖动。
-- 后台标签页默认每 `5min` 轮询一次，有 `0-60s` 的随机抖动。
-- 轮询只检查 revision；只有 revision 变化后才拉取完整模块数据。
+用户在打开或刷新模块对应的网页时，首先从 GitHub 拉取当前最新版本的云端数据，将其保存到当前模块的工作区 workspace 缓存。
 
-当 revision 变化时：
+用户在本地使用模块时，与 workspace 中的数据交互，完成一定程度的修改后，才将本地的 dirty 数据上传到 GitHub。上传之前，本地会为当前的待上传 workspace 内容生成一份新的 `revision.json`，然后将 dirty 内容、`revision.json` 一并提交到 GitHub。
 
-- 如果本地没有未同步改动，模块应自动从 GitHub 拉取数据，并刷新本地工作区和视图。
-- 如果本地有未同步改动，模块必须先阻止进一步编辑，并要求用户处理本地改动：上传到 GitHub 覆盖远程数据，或放弃本地改动后拉取远程数据。
+如果提交成功，就取消编辑内容的 dirty 标记，并将这份 `revision.json` 更新为当前 workspace 的 `revision.json`；如果提交失败，则会在页面顶部显示堆叠报错气泡。
 
-各模块自主将本地数据上传到 GitHub 的时机可以不同，应根据模块交互特性自行定义。例如 `fragment-thoughts` 模块是每次添加、修改、编辑想法时上传到 GitHub；`mind-map` 模块是每次用户主动保存（点击保存键或按下 `Ctrl+S`）时上传到 Github。同步过程中需要用 Loading Spinner + 模糊遮罩来阻止用户操作。
-
-一般情况下，不应频繁同步。设计思想是用户
+整个上传过程
 
 ## 功能模块
 
