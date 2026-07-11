@@ -26,13 +26,13 @@ flowchart LR
   L <--> C["5. 云端数据层"]
 ```
 
-| 层 | 持有什么 | 典型寿命 |
-| --- | --- | --- |
-| 用户命令层 | 用户此刻想做的事 | 一次命令 |
-| 实时状态层 | 正在编辑、拖拽、选择或呈现的页面状态 | 当前标签页 |
-| 数据暂存层 | 当前完整业务 payload，以及用于撤销/重做的可逆业务 event | 当前标签页 |
-| 本地数据层 | 已成功保存到当前设备的完整 payload | 跨刷新和浏览器重启 |
-| 云端数据层 | 用于跨设备同步的完整 payload 的远端编码 | 跨设备 |
+| 层         | 持有什么                                                | 典型寿命           |
+| ---------- | ------------------------------------------------------- | ------------------ |
+| 用户命令层 | 用户此刻想做的事                                        | 一次命令           |
+| 实时状态层 | 正在编辑、拖拽、选择或呈现的页面状态                    | 当前标签页         |
+| 数据暂存层 | 当前完整业务 payload，以及用于撤销/重做的可逆业务 event | 当前标签页         |
+| 本地数据层 | 已成功保存到当前设备的完整 payload                      | 跨刷新和浏览器重启 |
+| 云端数据层 | 用于跨设备同步的完整 payload                            | 跨设备             |
 
 基本方向固定为：
 
@@ -144,12 +144,12 @@ Shared 不注册任何键盘快捷键。按钮、菜单和键盘只是模块把�
 
 同步只允许四种结果：
 
-| 云端变化 | 本地变化 | 结果 |
-| --- | --- | --- |
-| 否 | 否 | 不处理 |
-| 否 | 是 | 等待用户上传 |
-| 是 | 否 | 自动拉取并建立新会话 |
-| 是 | 是 | 持久化冲突，不自动覆盖 |
+| 云端变化 | 本地变化 | 结果                   |
+| -------- | -------- | ---------------------- |
+| 否       | 否       | 不处理                 |
+| 否       | 是       | 等待用户上传           |
+| 是       | 否       | 自动拉取并建立新会话   |
+| 是       | 是       | 持久化冲突，不自动覆盖 |
 
 如果云端变化与当前本地内容（包括刚由 `settle` 返回并 dispatch 的 event）同时存在，Shared 必须把**当前完整 payload、它的 content hash 和 conflict 信息放在同一个 IndexedDB CAS 事务中持久化**，事务成功后再把该 payload 标记为本地已保存基线。这样刷新后不会丢失冲突的本地一侧。此时 `dirty` 可以变为 false，但它只表示“已经保存到本机”，不表示“已经同步到云端”。
 
@@ -182,7 +182,9 @@ interface ModuleDefinition<TPayload, TEvent> {
   createEmpty(): TPayload;
   validate(value: unknown): TPayload;
   contentKey(payload: TPayload): string;
-  encode(payload: TPayload): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
+  encode(
+    payload: TPayload,
+  ): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
   decode(files: ReadonlyMap<string, string>): TPayload | Promise<TPayload>;
   readonly history: {
     readonly capacity: number | "unlimited";
@@ -203,7 +205,9 @@ interface ModuleRuntime<TPayload, TEvent> {
   save(): Promise<SyncActionResult>;
   upload(): Promise<SyncActionResult>;
   pull(): Promise<SyncActionResult>;
-  resolveConflict(direction: "local-wins" | "cloud-wins"): Promise<SyncActionResult>;
+  resolveConflict(
+    direction: "local-wins" | "cloud-wins",
+  ): Promise<SyncActionResult>;
   pollNow(): Promise<void>;
   getSnapshot(): ModuleRuntimeSnapshot;
   dispose(): Promise<void>;
