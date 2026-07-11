@@ -18,7 +18,7 @@
 src/shared/index.ts          业务模块唯一入口
 src/shared/module/           模块 SDK 门面与定义辅助函数
 src/shared/auth/             首页认证与凭据状态
-src/shared/history/          完整 payload 历史
+src/shared/history/          当前 payload 与页面内可逆 event 历史
 src/shared/persistence/      每模块 IndexedDB
 src/shared/concurrency/      操作队列与 Web Locks
 src/shared/github/           Git Data API 与原子模块仓库
@@ -26,7 +26,7 @@ src/shared/sync/             同步协调器与轮询器
 src/shared/ui/               公共遮罩、spinner 和阻止页面
 ```
 
-业务模块只获得 `ModuleRuntime`，不得获得或长期持有 token、client、repository、store、coordinator、gate 或 lease。
+业务模块只获得 `ModuleRuntime<TPayload, TEvent>`，不得获得或长期持有 token、client、repository、store、coordinator、gate 或 lease。
 
 `startModuleRuntime(options)` 是业务入口。第二个 `ModuleRuntimeEnvironment` 参数只用于平台组合与测试注入，因此不从 Shared 根入口导出；内部维护代码需要时从 `shared/module/runtime` 读取，业务模块必须省略。
 
@@ -40,9 +40,11 @@ src/shared/ui/               公共遮罩、spinner 和阻止页面
 | 模块清单 | `data/<moduleId>/revision.json` |
 | 本地数据库 | `my-dashboard.module.<moduleId>` |
 | 编辑锁 | `my-dashboard.module.<moduleId>.editor` |
-| 历史容量 | 100 个完整 payload 版本 |
+| 历史容量 | 由模块定义为正整数或 `"unlimited"`，按 event 数量计 |
+| 暂存历史 | 一个当前完整 payload 加 forward/inverse event 对，仅当前页面存活 |
+| 持久化内容 | IndexedDB 和 GitHub 均保存完整 payload，不保存 event 队列 |
 | 远端受管内容 | UTF-8 文本文件 |
-| Payload 复制 | 原生 `structuredClone` |
+| 边界复制 | 原生 `structuredClone` |
 
 `moduleId` 必须匹配 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`。目标浏览器必须支持 ES2022、IndexedDB、Web Crypto、Web Locks、`structuredClone` 和 `inert`。
 
@@ -69,15 +71,17 @@ src/shared/ui/               公共遮罩、spinner 和阻止页面
 
 1. 停止轮询；
 2. 等待当前命令和 OperationGate；
-3. 移除快捷键和页面监听；
+3. 移除 Shared 的认证与页面生命周期监听；
 4. 关闭本地 store；
 5. 释放 lease；
 6. 清空对 coordinator/client/token 的可达引用；
 7. 返回首页登录边界。
 
+Shared 不拥有业务模块注册的键盘或 UI 监听，因此不负责清理它们；模块卸载流程必须自行移除。
+
 ### 4.3 token 不变量
 
-token 只能存在于认证存储和发往 `https://api.github.com` 的 `Authorization` 请求头。它不得进入 DOM、URL、异常消息、日志、业务 payload、IndexedDB 模块记录、历史、Git commit、测试快照或模拟错误文本。
+token 只能存在于认证存储和发往 `https://api.github.com` 的 `Authorization` 请求头。它不得进入 DOM、URL、异常消息、日志、业务 payload、业务 event、IndexedDB 模块记录、Git commit、测试快照或模拟错误文本。
 
 展示错误不得直接使用 GitHub 响应体、请求头或任意序列化的捕获异常。
 
@@ -111,23 +115,26 @@ form-action 'self'
 5. 创建公共 DOM presentation 与 `OperationGate`；
 6. 创建 `ModuleLocalStore`；
 7. 使用认证会话创建 GitHub client 和 `RemoteModuleRepository`；
-8. 创建并初始化 `SyncCoordinator`；
-9. 安装经过 coordinator 的异步 `Ctrl+Z`/`Ctrl+Y`；
-10. 创建 revision poller；
-11. 注册 auth anonymous 和 `pagehide` 清理；
-12. 启动轮询并返回不暴露内部对象的 runtime 门面。
+8. 创建并初始化 `SyncCoordinator<TPayload, TEvent>`；
+9. 创建 revision poller；
+10. 注册 auth anonymous 和 `pagehide` 清理；
+11. 启动轮询并返回不暴露内部对象的 runtime 门面。
+
+Shared 在任何步骤都不得注册 `keydown` 或其他业务命令快捷键。键盘属于模块 UI 层，不在 runtime 自动装配范围内。
 
 每获得一个资源都必须立即登记逆序清理函数。启动任一步失败都要继续尝试全部清理，且不得用清理错误覆盖原始启动错误。
 
-### 5.2 命令和销毁
+### 5.2 runtime 命令和销毁
 
-runtime 的 undo、redo、save、upload、pull、冲突解决和轮询状态写入经过同一命令尾队列。快速快捷键必须串行，不能绕过 `settle` 直接操作 `StagingHistory`。
+`dispatch(event)` 是同步页面内命令：runtime ready、没有排队命令且 OperationGate 空闲时，交给 coordinator 原子应用并记录 event；busy 时抛出 `ModuleRuntimeBusyError`。它不进入持久化命令尾队列。
+
+runtime 的 undo、redo、save、upload、pull、冲突解决和轮询产生的状态写入经过同一命令尾队列。undo/redo 必须先异步调用 `settle`，不能绕过 coordinator 直接操作 `StagingHistory`。
 
 `dispose()` 是幂等、one-shot 的：先把状态设为 disposing，再停止新命令、停止并等待 poller、等待命令尾和 gate、关闭 coordinator/store、释放 lease，最后清空内部引用并进入 disposed。
 
 401 回调可能发生在当前 gate 命令内部，因此只能异步触发 dispose，不能在 GitHub 请求栈中同步等待自身命令。
 
-正常页面关闭由 `pagehide` 自动调用 dispose。单页应用卸载模块时由宿主显式调用。
+正常页面关闭由 `pagehide` 自动调用 dispose。单页应用卸载模块时，宿主先移除业务模块自己的监听，再显式调用 dispose。
 
 ### 5.3 平台与测试注入
 
@@ -135,44 +142,99 @@ runtime 的 undo、redo、save、upload、pull、冲突解决和轮询状态写�
 
 `autoStartPolling: false` 只用于测试启动和资源清理，不是业务模块关闭同步的开关。
 
-## 6. Payload、定义和历史内部规则
+## 6. ModuleDefinition 与 clone 边界
 
-`ModuleDefinition<T>` 同时是校验、内容标识和远端 codec：
+`ModuleDefinition<TPayload, TEvent>` 同时定义完整 payload codec 和页面内 event 历史策略：
 
 ```ts
-interface ModuleDefinition<T> {
+interface ModuleDefinition<TPayload, TEvent> {
   readonly moduleId: string;
-  createEmpty(): T;
-  validate(value: unknown): T;
-  contentKey(payload: T): string;
-  encode(payload: T): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
-  decode(files: ReadonlyMap<string, string>): T | Promise<T>;
+  createEmpty(): TPayload;
+  validate(value: unknown): TPayload;
+  contentKey(payload: TPayload): string;
+  encode(payload: TPayload): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
+  decode(files: ReadonlyMap<string, string>): TPayload | Promise<TPayload>;
+  readonly history: {
+    readonly capacity: number | "unlimited";
+    apply(payload: TPayload, event: TEvent): TPayload;
+    invert(event: TEvent, before: TPayload, after: TPayload): TEvent;
+  };
 }
 ```
 
-所有进入 Shared 的 payload 先 validate，再 structured clone，并对 clone 后形态复验。所有传给模块回调、codec、hooks 和公共 getter 的 payload 都是 clone，不能暴露内部版本引用。
+`capacity` 的 number 在 runtime 建立历史时验证为正整数；没有隐式默认容量。`defineModule`/`defineJsonModule` 冻结 definition 和 history 外壳，但纯函数和不修改参数仍是模块契约。
+
+所有进入 Shared 的 payload 先 validate，再 structured clone，并对 clone 后形态复验。所有传给模块 codec、history 回调、hooks 和公共 getter 的 payload 都是 clone，不能暴露内部 current 引用。
+
+业务 event 也必须能 `structuredClone`。dispatch 保存的 forward event、`invert` 返回的 inverse event 以及应用时传给模块的 event 都相互隔离。event 没有通用运行时 schema；它的合法性、可逆性和纯函数行为由模块定义及模块测试保证。
 
 `RemoteModuleRepository.pull()` 在 decode 后独立调用 validate；`SyncCoordinator` 在写入本地前再次验证和计算 hash。两层校验不能因当前调用路径看似重复而删除。
 
-`StagingHistory`：
+content hash 是 `SHA-256(UTF-8(contentKey))`。业务 payload 和 event 都不包含保存或同步元数据，也不包含业务 `schemaVersion`。
 
-- 内部只保存完整 payload clone 和 content key；
-- current/undo/redo 返回新的 clone；
-- content-key 回调只获得 clone；
-- 空提交不剪掉 redo 分支；
-- 非空提交先剪 redo，再加入版本；
-- 超过 100 步时淘汰最旧版本；
-- 本地 baseline 只保存 key，不成为历史步骤。
+## 7. StagingHistory 内部规则
 
-content hash 是 `SHA-256(UTF-8(contentKey))`。业务 payload 不包含保存或同步元数据，也不包含业务 `schemaVersion`。
+`StagingHistory<TPayload, TEvent>` 长期保存：
 
-## 7. IndexedDB 内部记录
+- 一个当前完整 payload 及其 content key；
+- 一个保存基线 content key；
+- 若干 `{ forward, inverse, beforeKey, afterKey }` event 条目；
+- 当前撤销/重做位置。
+
+它不长期保存每一步完整 payload。before/after payload 只作为一次 dispatch、undo 或 redo 计算中的临时 clone。
+
+### 7.1 dispatch 原子流程
+
+`dispatch(event)` 固定执行：
+
+1. clone 当前 payload 为 `before`，clone 输入 event 为 `forward`；
+2. 用隔离参数调用 `apply(before, forward)`，clone 返回值，并通过 coordinator 的 validate/contentKey 边界；
+3. 如果 after key 等于 current key，判定为 no-op，返回 current clone；不调用 `invert`，不记录 event，也不剪 redo；
+4. 用隔离的 forward/before/after 调用 `invert`，并 clone inverse；
+5. 在临时数组中剪掉当前位置后的 redo，追加 forward/inverse/key 条目；
+6. 若容量为正整数，按 event 条目数淘汰最旧超额项并调整位置；`"unlimited"` 不淘汰；
+7. 最后一次性替换 entries、position、current 和 current key。
+
+apply、validate、contentKey、invert 或任一 structured clone 抛错时，第 7 步不得发生，因此 current、event 队列、position、redo 和保存基线全部保持原样。一个失败的真实 event 也不得提前删除 redo 分支。
+
+### 7.2 undo 与 redo
+
+- undo 先确认 current key 等于条目的 `afterKey`，再用 inverse event 计算 next；只有 next key 等于 `beforeKey` 才推进 current 和 position。
+- redo 先确认 current key 等于条目的 `beforeKey`，再用 forward event 计算 next；只有 next key 等于 `afterKey` 才推进 current 和 position。
+- apply、validate、clone、contentKey 或 key 校验失败时，undo/redo 同样保持完全原子。
+- `current`、dispatch/undo/redo 返回值都是 clone。
+- 本地保存只更新保存基线 key，不创建、删除或截断 event 条目。
+
+`history.apply` 和 `history.invert` 必须是确定、无副作用的纯函数。Shared 会给它们 clone，但不能允许它们依赖 DOM、网络、时钟、随机数、存储或可变全局状态；否则 redo 和跨调用验证将不可靠。
+
+## 8. settle、投影与会话寿命
+
+`settle(reason)` 返回 `TEvent | null | Promise<TEvent | null>`，reason 固定为：
+
+```text
+local-save | upload | pull | remote-change | undo | redo
+```
+
+coordinator 在继续原操作前用正常 dispatch 路径处理非 null event。因此 settle event 与直接业务 event 具有相同的 clone、验证、no-op、分支和错误原子性；settle/dispatch 失败时原命令失败，不能在部分推进后继续保存或同步。
+
+触发时机：
+
+- save 和 upload 在读取当前 payload 前结算；
+- 主动 pull 只有确认远端 revision 变化后才用 `pull` 结算；
+- 轮询观察到不同 revision 后用 `remote-change` 结算，再判断本地变化或自动拉取；
+- undo/redo 先结算，再执行相应 event。
+
+`project(payload, reason)` 只用于 `initialize | undo | redo`。云端拉取会把完整 payload 原子写入 IndexedDB、建立新的空 event 会话并 reload，而不是把旧 event 队列迁移到云端 payload 上。
+
+event 队列从不写入 IndexedDB、GitHub、localStorage 或同步元数据。页面刷新后由 IndexedDB 完整 payload 新建一个 position 为 0 的历史。
+
+## 9. IndexedDB 内部记录
 
 每模块一个数据库、一个完整记录：
 
 ```ts
-interface ModuleRecord<T> {
-  payload: T;
+interface ModuleRecord<TPayload> {
+  payload: TPayload;
   contentHash: string;
   localRevision: string;
   lastSyncedContentHash: string | null;
@@ -194,9 +256,9 @@ interface ModuleRecord<T> {
 
 CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/conflict 也必须 clone，防止 readonly 类型之外的运行时别名修改。
 
-历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保存。
+event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保存。
 
-## 8. OperationGate、公共 UI 和编辑锁
+## 10. OperationGate、公共 UI 和编辑锁
 
 同一 runtime 的持久化操作由 `OperationGate` 串行执行：
 
@@ -208,9 +270,9 @@ CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/confli
 
 编辑锁使用 `navigator.locks.request(name, { mode: "exclusive", ifAvailable: true })` 并让 callback 在整个会话期间 pending。第二标签只显示公共 blocker。不支持 Web Locks 时禁止编辑；不得使用 localStorage、BroadcastChannel 或心跳降级锁。
 
-## 9. GitHub 远端格式
+## 11. GitHub 远端格式
 
-### 9.1 revision.json
+### 11.1 revision.json
 
 每个已初始化模块根包含：
 
@@ -226,7 +288,7 @@ CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/confli
 
 未知文件永远保留。只有旧清单包含、而新清单不再包含的受管路径可以删除。缺少清单表示模块未初始化，不授权接管目录内未知文件。损坏清单、缺失受管文件或解码失败必须停止。
 
-### 9.2 单次原子上传
+### 11.2 单次原子上传
 
 上传只用 Git Data API：
 
@@ -238,9 +300,9 @@ CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/confli
 6. 以 `force: false` 更新 `refs/heads/main`；
 7. 确认 revision 后，在一个本地事务中更新同步 baseline 并清空 pending。
 
-一次模块上传只有一个可见 commit。不得逐文件使用 Contents API，不得 force push。
+一次模块上传只有一个可见 commit。不得逐文件使用 Contents API，不得 force push。上传输入来自 IndexedDB 中已经保存的完整 payload，与页面 event 队列无关。
 
-### 9.3 ref 竞态和幂等
+### 11.3 ref 竞态和幂等
 
 非强制 ref 更新失败后重新读取新头：
 
@@ -250,12 +312,12 @@ CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/confli
 
 网络结果不确定时保留 pending revision。`local-wins` 也只能基于最新头创建一个新 commit，不能 force 更新。
 
-## 10. SyncCoordinator 状态机
+## 12. SyncCoordinator 状态机
 
 状态判断使用：
 
 - `cloudChanged`：远端 revision 与 `lastSyncedRemoteRevision` 不同；
-- `localChanged`：暂存或本地内容 hash 与 `lastSyncedContentHash` 不同。
+- `localChanged`：暂存 current 或本地完整 payload 的 hash 与 `lastSyncedContentHash` 不同。
 
 | cloudChanged | localChanged | 内部行为 |
 | --- | --- | --- |
@@ -266,14 +328,16 @@ CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/confli
 
 普通 pull 必须先 reconciliation pending upload，再比较远端 baseline；“云端未变、本地已变”不得制造假冲突。
 
-冲突存在时允许继续本地 commit/save，但 upload 或主动 pull 前必须显式 resolve：
+冲突存在时允许继续本地 dispatch/save，但 upload 或主动 pull 前必须显式 resolve：
 
-- local-wins：结算并保存当前暂存 payload，再 overwrite 当前模块；
+- local-wins：结算并保存当前完整 payload，再 overwrite 当前模块；
 - cloud-wins：拉取最新完整模块，清空 pending/conflict，写入本地并 reload。
 
-所有传给远端 port 的 payload 都必须 clone；所有传给模块 hooks 的 payload/conflict 也必须隔离。
+`#recordConflict(remoteRevision)` 不能只写 conflict 标记。它必须读取 `history.current` 并计算 content hash，在**同一次 IndexedDB compare-and-swap** 中写入当前完整 payload、content hash、新 local revision 和 conflict；只有 CAS 成功后才能调用 `history.updateBaseline(payload)` 和 `onConflict`。这保证由 `pull`/`remote-change` settle event 产生的本地一侧跨刷新仍存在。该写入不得推进 `lastSyncedContentHash` 或 `lastSyncedRemoteRevision`：history dirty 可因成为本地已保存基线而变为 false，但 local-changed-since-sync 仍必须为 true。
 
-## 11. 轮询
+所有传给远端 port 的 payload 都必须 clone；所有传给模块 hooks 的 payload/conflict 也必须隔离。业务 event 不进入远端 port。
+
+## 13. 轮询
 
 poller 使用上一次完成后再安排下一次的一次性 timer：
 
@@ -286,41 +350,47 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 
 `stop()` 必须 abort 当前 signal、等待 in-flight 结束，并在停止后禁止调用 `onRevision` 或认证回调。`RemoteModuleRepository.readRevision(signal)` 和 GitHub branch/blob 读取必须贯通 AbortSignal，避免 runtime dispose 后继续写已关闭 store。
 
-## 12. 失败不变量
+## 14. 失败不变量
 
 任何失败路径都必须满足：
 
-1. token 不进入输出、日志、业务状态或持久化记录；
-2. 未提交的 IndexedDB 事务不推进任何 baseline；
-3. 未确认 GitHub commit 不推进同步 baseline；
-4. 保存失败不清空历史或 dirty；
-5. 上传、拉取和覆盖失败不自动选择冲突方向；
-6. inert、spinner 和 overlay 必须恢复；
-7. 未知文件不删除，main 不 force-update；
-8. 损坏 payload 在 validate 边界停止，不尝试旧格式迁移；
-9. runtime 启动失败逆序释放已经获得的每一个资源；
-10. dispose 后不得有 poller、listener、lease、store 或 token 可达链继续存活。
+1. token 不进入输出、日志、业务 payload/event 或持久化记录；
+2. history 的 apply、invert、clone、校验或 contentKey 失败不改变 current、event 队列、position、redo、dirty 或 baseline；
+3. 未提交的 IndexedDB 事务不推进任何本地或同步 baseline；冲突 CAS 失败也不得只留下 conflict 标记或提前更新 history baseline；
+4. 未确认 GitHub commit 不推进同步 baseline；
+5. 保存失败不清空 event 历史或 dirty；
+6. 上传、拉取和覆盖失败不自动选择冲突方向；
+7. inert、spinner 和 overlay 必须恢复；
+8. 未知文件不删除，main 不 force-update；
+9. 损坏 payload 在 validate 边界停止，不尝试旧格式迁移；
+10. runtime 启动失败逆序释放已经获得的每一个资源；
+11. dispose 后不得有 poller、Shared listener、lease、store 或 token 可达链继续存活。
 
-## 13. Shared 验收
+## 15. Shared 验收
 
-### 13.1 模块 SDK
+### 15.1 模块 SDK
 
 - 业务模块只从 Shared 根入口导入。
-- 一次启动自动装配 auth、lease、gate、store、repository、coordinator、shortcuts 和 poller。
+- 一次启动自动装配 auth、lease、gate、store、repository、coordinator 和 poller。
+- Shared 不注册键盘快捷键；集成测试确认没有自动 `keydown` 监听，业务调用 `undo/redo/save` 仍工作。
 - ready、authentication-required、blocked、unsupported 都有集成测试。
 - 初始化失败会释放锁并允许重试。
 - 401 会清凭据、等待命令结束、dispose 并返回登录边界。
-- 快速快捷键经过异步 settle 串行执行。
+- `dispatch(event)` 受 ready/busy 边界保护；异步 undo/redo 经 settle 串行执行。
 - 公共 spinner/overlay 由 runtime 自动使用。
 
-### 13.2 历史和持久化
+### 15.2 event 历史和持久化
 
-- 100 步、分支、保存后撤销、回到 baseline clean、刷新清空正确。
-- JSON 和非 JSON structured-clone payload 都有测试。
-- 调用者、contentKey、codec、hook 和 snapshot 都不能修改内部引用。
-- 每模块数据库隔离，CAS 原子，失败不推进，pending/conflict 跨刷新。
+- 不同正整数容量、`"unlimited"`、分支、no-op 保留 redo、保存后撤销、回到 baseline clean 和刷新清空正确。
+- apply/invert 的 forward → inverse 可逆性以及 undo/redo key 校验有测试。
+- apply、invert、structuredClone、validate、contentKey 抛错均不推进任何历史状态。
+- JSON 和非 JSON structured-clone payload/event 都有测试。
+- 调用者、contentKey、codec、history 回调、hook 和 snapshot 都不能修改内部引用。
+- event 队列不进入 IndexedDB/GitHub；每模块数据库隔离，CAS 原子，失败不推进，pending/conflict 跨刷新。
+- 远端冲突会把 settle 后的当前完整 payload、hash 和 conflict 同事务保存，成功后更新本地基线，但不推进同步基线。
+- 六种 settle reason 在相应协调器路径有测试，非 null event 经正常 dispatch 处理。
 
-### 13.3 GitHub 和同步
+### 15.3 GitHub 和同步
 
 - 测试全部注入 fake fetch，绝不访问真实 GitHub。
 - 单模块一个 commit、未知文件保留、受管差集删除。
@@ -329,7 +399,7 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 - 同步四象限、两个显式覆盖方向、普通 pull 不制造假冲突。
 - 前后台轮询、不重叠、stop 等待与失败静默。
 
-### 13.4 工程
+### 15.4 工程
 
 - `npm test` 独立通过；部署工作流在 build 前测试。
 - `npm run build` 通过。

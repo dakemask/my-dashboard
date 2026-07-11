@@ -22,6 +22,13 @@ interface TestData {
   value: string;
 }
 
+interface TestEvent {
+  readonly type: "set-value";
+  readonly value: string;
+}
+
+const setValue = (value: string): TestEvent => ({ type: "set-value", value });
+
 class FakeRemote implements RemoteModulePort<TestData> {
   readonly moduleId: string;
   revision: string | null = null;
@@ -70,7 +77,7 @@ class FakeRemote implements RemoteModulePort<TestData> {
   }
 }
 
-function definition(moduleId: string): ModuleDefinition<TestData> {
+function definition(moduleId: string): ModuleDefinition<TestData, TestEvent> {
   return {
     moduleId,
     createEmpty: () => ({ value: "empty" }),
@@ -81,13 +88,23 @@ function definition(moduleId: string): ModuleDefinition<TestData> {
       return { value: (value as TestData).value };
     },
     contentKey: jsonContentKey,
+    history: {
+      capacity: 100,
+      apply: (_payload, event) => ({ value: event.value }),
+      invert: (_event, before) => setValue(before.value),
+    },
     encode: (data) => new Map([["data.json", JSON.stringify(data)]]),
     decode: (files) => JSON.parse(files.get("data.json") ?? "null") as TestData,
   };
 }
 
-function createHarness(moduleId: string, remote = new FakeRemote(moduleId)) {
-  const localStore = new ModuleLocalStore<TestData>(moduleId, { indexedDB: new IDBFactory() });
+function createHarness(
+  moduleId: string,
+  remote = new FakeRemote(moduleId),
+  settle: () => TestEvent | null = () => null,
+) {
+  const indexedDB = new IDBFactory();
+  const localStore = new ModuleLocalStore<TestData>(moduleId, { indexedDB });
   const project = vi.fn();
   const reload = vi.fn();
   const conflict = vi.fn();
@@ -96,14 +113,23 @@ function createHarness(moduleId: string, remote = new FakeRemote(moduleId)) {
     localStore,
     remoteRepository: remote,
     operationGate: new OperationGate(),
-    hooks: { settle: () => null, project, reload, onConflict: conflict },
+    hooks: { settle, project, reload, onConflict: conflict },
     now: () => new Date("2026-07-10T00:00:00.000Z"),
     createUuid: (() => {
       let id = 0;
       return () => `remote-${++id}`;
     })(),
   });
-  return { coordinator, localStore, remote, project, reload, conflict };
+  return {
+    coordinator,
+    localStore,
+    indexedDB,
+    remote,
+    project,
+    reload,
+    conflict,
+    settle,
+  };
 }
 
 beforeEach(() => vi.restoreAllMocks());
@@ -126,7 +152,7 @@ describe("SyncCoordinator", () => {
   it("automatically saves a dirty staging payload before upload", async () => {
     const harness = createHarness("module-upload");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "local change" });
+    harness.coordinator.dispatch(setValue("local change"));
 
     await expect(harness.coordinator.upload()).resolves.toBe("uploaded");
     expect(harness.remote.data).toEqual({ value: "local change" });
@@ -137,10 +163,47 @@ describe("SyncCoordinator", () => {
     });
   });
 
+  it("dispatches a settled event before upload and uploads its resulting payload", async () => {
+    const settle = vi.fn(() => setValue("settled for upload"));
+    const harness = createHarness(
+      "module-upload-settle",
+      new FakeRemote("module-upload-settle"),
+      settle,
+    );
+    await harness.coordinator.initialize();
+
+    await expect(harness.coordinator.upload()).resolves.toBe("uploaded");
+    expect(settle).toHaveBeenCalledWith("upload");
+    expect(harness.remote.data).toEqual({ value: "settled for upload" });
+    expect(harness.coordinator.history.dirty).toBe(false);
+  });
+
+  it("dispatches a redo settlement event before deciding the old redo branch", async () => {
+    let pending: TestEvent | null = null;
+    const settle = vi.fn(() => {
+      const event = pending;
+      pending = null;
+      return event;
+    });
+    const harness = createHarness(
+      "module-redo-settle",
+      new FakeRemote("module-redo-settle"),
+      settle,
+    );
+    await harness.coordinator.initialize();
+    harness.coordinator.dispatch(setValue("B"));
+    await harness.coordinator.undo();
+    pending = setValue("C");
+
+    await expect(harness.coordinator.redo()).resolves.toEqual({ value: "C" });
+    expect(settle).toHaveBeenCalledWith("redo");
+    expect(harness.coordinator.history.canRedo).toBe(false);
+  });
+
   it("persists a conflict when both local and remote changed", async () => {
     const harness = createHarness("module-conflict");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "unsaved local" });
+    harness.coordinator.dispatch(setValue("unsaved local"));
     harness.remote.revision = "cloud-new";
     harness.remote.data = { value: "remote" };
 
@@ -159,7 +222,7 @@ describe("SyncCoordinator", () => {
   it("does not create a conflict when pull sees an unchanged cloud and local edits", async () => {
     const harness = createHarness("module-local-only");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "local edit" });
+    harness.coordinator.dispatch(setValue("local edit"));
 
     await expect(harness.coordinator.pull()).resolves.toBe("unchanged");
     expect(harness.coordinator.getSnapshot().conflict).toBeNull();
@@ -177,10 +240,62 @@ describe("SyncCoordinator", () => {
     expect(harness.reload).toHaveBeenCalledOnce();
   });
 
+  it("settles a live event before a polled cloud change can be treated as clean", async () => {
+    const settle = vi.fn(() => setValue("live edit"));
+    const harness = createHarness(
+      "module-poll-settle",
+      new FakeRemote("module-poll-settle"),
+      settle,
+    );
+    await harness.coordinator.initialize();
+    harness.remote.revision = "cloud-new";
+    harness.remote.data = { value: "remote" };
+
+    await expect(
+      harness.coordinator.handleObservedRemoteRevision("cloud-new"),
+    ).resolves.toBe("conflict");
+    expect(settle).toHaveBeenCalledWith("remote-change");
+    expect(harness.coordinator.history.current).toEqual({ value: "live edit" });
+    expect(harness.reload).not.toHaveBeenCalled();
+    const refreshedStore = new ModuleLocalStore<TestData>("module-poll-settle", {
+      indexedDB: harness.indexedDB,
+    });
+    await expect(refreshedStore.load()).resolves.toMatchObject({
+      payload: { value: "live edit" },
+      conflict: { observedRemoteRevision: "cloud-new" },
+    });
+    refreshedStore.close();
+  });
+
+  it("settles a live event before an explicit pull compares local state", async () => {
+    const settle = vi.fn(() => setValue("live edit"));
+    const harness = createHarness(
+      "module-pull-settle",
+      new FakeRemote("module-pull-settle"),
+      settle,
+    );
+    await harness.coordinator.initialize();
+    harness.remote.revision = "cloud-new";
+    harness.remote.data = { value: "remote" };
+
+    await expect(harness.coordinator.pull()).resolves.toBe("conflict");
+    expect(settle).toHaveBeenCalledWith("pull");
+    expect(harness.coordinator.history.current).toEqual({ value: "live edit" });
+    expect(harness.reload).not.toHaveBeenCalled();
+    const refreshedStore = new ModuleLocalStore<TestData>("module-pull-settle", {
+      indexedDB: harness.indexedDB,
+    });
+    await expect(refreshedStore.load()).resolves.toMatchObject({
+      payload: { value: "live edit" },
+      conflict: { observedRemoteRevision: "cloud-new" },
+    });
+    refreshedStore.close();
+  });
+
   it("uses the persisted next revision to confirm a lost upload response", async () => {
     const harness = createHarness("module-idempotent");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "important" });
+    harness.coordinator.dispatch(setValue("important"));
     harness.remote.loseNextPushResponse = true;
 
     await expect(harness.coordinator.upload()).rejects.toThrow("response lost");
@@ -197,25 +312,34 @@ describe("SyncCoordinator", () => {
   it("supports explicit cloud-wins conflict resolution", async () => {
     const harness = createHarness("module-cloud-wins");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "local" });
+    harness.coordinator.dispatch(setValue("local"));
     harness.remote.revision = "cloud-2";
     harness.remote.data = { value: "remote wins" };
     await harness.coordinator.handleObservedRemoteRevision("cloud-2");
 
     await expect(harness.coordinator.resolveConflict("cloud-wins")).resolves.toBe("reloaded");
     expect((await harness.localStore.load())?.payload).toEqual({ value: "remote wins" });
+    expect(harness.coordinator.history.current).toEqual({ value: "remote wins" });
+    expect(harness.coordinator.history.canUndo).toBe(false);
+    expect(harness.coordinator.history.dirty).toBe(false);
     expect(harness.reload).toHaveBeenCalledOnce();
   });
 
   it("supports explicit local-wins conflict resolution", async () => {
-    const harness = createHarness("module-local-wins");
+    const settle = vi.fn(() => null);
+    const harness = createHarness(
+      "module-local-wins",
+      new FakeRemote("module-local-wins"),
+      settle,
+    );
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "local wins" });
+    harness.coordinator.dispatch(setValue("local wins"));
     harness.remote.revision = "cloud-2";
     harness.remote.data = { value: "remote loses" };
     await harness.coordinator.handleObservedRemoteRevision("cloud-2");
 
     await expect(harness.coordinator.resolveConflict("local-wins")).resolves.toBe("uploaded");
+    expect(settle).toHaveBeenLastCalledWith("upload");
     expect(harness.remote.data).toEqual({ value: "local wins" });
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       sessionDirty: false,
@@ -225,15 +349,14 @@ describe("SyncCoordinator", () => {
     });
   });
 
-  it("does not auto-pull a persisted conflict after current content returns to the baseline", async () => {
+  it("does not auto-pull after the conflict snapshot becomes the saved baseline", async () => {
     const harness = createHarness("module-conflict-stays");
     await harness.coordinator.initialize();
-    harness.coordinator.commit({ value: "temporary" });
+    harness.coordinator.dispatch(setValue("temporary"));
     harness.remote.revision = "cloud-3";
     harness.remote.data = { value: "remote" };
     await harness.coordinator.handleObservedRemoteRevision("cloud-3");
 
-    await harness.coordinator.undo();
     expect(harness.coordinator.getSnapshot().sessionDirty).toBe(false);
 
     await expect(harness.coordinator.pull()).resolves.toBe("conflict");
@@ -246,9 +369,13 @@ describe("SyncCoordinator", () => {
       readonly updatedAt: Date;
       readonly counters: Map<string, number>;
     }
+    interface RichEvent {
+      readonly type: "replace";
+      readonly payload: RichPayload;
+    }
 
     const moduleId = "module-rich-payload";
-    const richDefinition: ModuleDefinition<RichPayload> = {
+    const richDefinition: ModuleDefinition<RichPayload, RichEvent> = {
       moduleId,
       createEmpty: () => ({ updatedAt: new Date(0), counters: new Map() }),
       validate(value: unknown): RichPayload {
@@ -264,6 +391,11 @@ describe("SyncCoordinator", () => {
           .map(([name, count]) => `${name}:${count}`)
           .join("|");
         return `${payload.updatedAt.toISOString()}|${counters}`;
+      },
+      history: {
+        capacity: "unlimited",
+        apply: (_payload, event) => event.payload,
+        invert: (_event, before) => ({ type: "replace", payload: before }),
       },
       encode: (payload) => new Map([["data.txt", JSON.stringify({
         updatedAt: payload.updatedAt.toISOString(),
@@ -299,9 +431,12 @@ describe("SyncCoordinator", () => {
     });
     await coordinator.initialize();
 
-    coordinator.commit({
-      updatedAt: new Date("2026-07-11T01:02:03.000Z"),
-      counters: new Map([["ideas", 2]]),
+    coordinator.dispatch({
+      type: "replace",
+      payload: {
+        updatedAt: new Date("2026-07-11T01:02:03.000Z"),
+        counters: new Map([["ideas", 2]]),
+      },
     });
     await expect(coordinator.saveLocal()).resolves.toBe("saved");
 

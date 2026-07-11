@@ -7,11 +7,15 @@ import type {
   RemoteRevisionSnapshot,
 } from "../github";
 import type { PersistedConflict, PendingUpload } from "../persistence";
+import type { ModuleHistoryPolicy } from "../history";
 
-export interface ModuleDefinition<T> extends RemoteModuleCodec<T> {
-  createEmpty(): T;
+export interface ModuleDefinition<TPayload, TEvent>
+  extends RemoteModuleCodec<TPayload> {
+  createEmpty(): TPayload;
   /** Deterministically represents all semantic payload content. */
-  contentKey(payload: T): string;
+  contentKey(payload: TPayload): string;
+  /** Defines the module-owned, page-lifetime event history. */
+  readonly history: ModuleHistoryPolicy<TPayload, TEvent>;
 }
 
 export interface RemoteModulePort<T> {
@@ -22,13 +26,19 @@ export interface RemoteModulePort<T> {
   overwrite(data: T, options: RemoteModuleOverwriteOptions): Promise<RemoteModulePushResult>;
 }
 
-export type SettleReason = "local-save" | "upload" | "undo" | "redo";
+export type SettleReason =
+  | "local-save"
+  | "upload"
+  | "pull"
+  | "remote-change"
+  | "undo"
+  | "redo";
 export type ProjectionReason = "initialize" | "undo" | "redo";
 export type ConflictResolution = "local-wins" | "cloud-wins";
 
-export interface SyncCoordinatorHooks<T> {
-  settle(reason: SettleReason): T | null | Promise<T | null>;
-  project(payload: T, reason: ProjectionReason): void;
+export interface SyncCoordinatorHooks<TPayload, TEvent> {
+  settle(reason: SettleReason): TEvent | null | Promise<TEvent | null>;
+  project(payload: TPayload, reason: ProjectionReason): void;
   reload(): void;
   onConflict?(conflict: PersistedConflict): void;
 }

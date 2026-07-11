@@ -25,28 +25,28 @@ import {
   type SyncCoordinatorSnapshot,
 } from "./types";
 
-interface SyncCoordinatorOptions<T> {
-  definition: ModuleDefinition<T>;
+interface SyncCoordinatorOptions<T, E> {
+  definition: ModuleDefinition<T, E>;
   localStore: ModuleLocalStore<T>;
   remoteRepository: RemoteModulePort<T>;
   operationGate: OperationGate;
-  hooks: SyncCoordinatorHooks<T>;
+  hooks: SyncCoordinatorHooks<T, E>;
   now?: () => Date;
   createUuid?: () => string;
 }
 
-export class SyncCoordinator<T> {
-  readonly #definition: ModuleDefinition<T>;
+export class SyncCoordinator<T, E> {
+  readonly #definition: ModuleDefinition<T, E>;
   readonly #localStore: ModuleLocalStore<T>;
   readonly #remoteRepository: RemoteModulePort<T>;
   readonly #operationGate: OperationGate;
-  readonly #hooks: SyncCoordinatorHooks<T>;
+  readonly #hooks: SyncCoordinatorHooks<T, E>;
   readonly #now: () => Date;
   readonly #createUuid: () => string;
-  #history: StagingHistory<T> | null = null;
+  #history: StagingHistory<T, E> | null = null;
   #local: ModuleLocalEnvelope<T> | null = null;
 
-  constructor(options: SyncCoordinatorOptions<T>) {
+  constructor(options: SyncCoordinatorOptions<T, E>) {
     if (options.definition.moduleId !== options.remoteRepository.moduleId) {
       throw new TypeError("The module definition and remote repository must use the same moduleId.");
     }
@@ -64,7 +64,7 @@ export class SyncCoordinator<T> {
     this.#createUuid = options.createUuid ?? (() => crypto.randomUUID());
   }
 
-  get history(): StagingHistory<T> {
+  get history(): StagingHistory<T, E> {
     this.#assertInitialized();
     return this.#history!;
   }
@@ -118,9 +118,7 @@ export class SyncCoordinator<T> {
     }
 
     this.#local = local;
-    this.#history = new StagingHistory(local.payload, {
-      contentKey: (payload) => this.#getContentKey(payload),
-    });
+    this.#history = this.#createHistory(local.payload);
     this.#hooks.project(this.#history.current, "initialize");
     if (local.conflict) {
       this.#hooks.onConflict?.(structuredClone(local.conflict));
@@ -128,20 +126,37 @@ export class SyncCoordinator<T> {
     return this.#history.current;
   }
 
-  commit(payload: T): T {
+  #createHistory(payload: T): StagingHistory<T, E> {
+    return new StagingHistory(payload, {
+      contentKey: (payload) => this.#getContentKey(payload),
+      policy: {
+        capacity: this.#definition.history.capacity,
+        apply: (payload, event) => this.#preparePayload(
+          this.#definition.history.apply(payload, event),
+        ),
+        invert: (event, before, after) => this.#definition.history.invert(
+          event,
+          before,
+          after,
+        ),
+      },
+    });
+  }
+
+  dispatch(event: E): T {
     this.#assertInitialized();
-    return this.#history!.commit(this.#preparePayload(payload));
+    return this.#history!.dispatch(event);
   }
 
   async undo(): Promise<T> {
-    await this.#settleAndCommit("undo");
+    await this.#settleAndDispatch("undo");
     const payload = this.history.undo();
     this.#hooks.project(payload, "undo");
     return payload;
   }
 
   async redo(): Promise<T> {
-    await this.#settleAndCommit("redo");
+    await this.#settleAndDispatch("redo");
     const payload = this.history.redo();
     this.#hooks.project(payload, "redo");
     return payload;
@@ -150,7 +165,7 @@ export class SyncCoordinator<T> {
   async saveLocal(): Promise<SyncActionResult> {
     this.#assertInitialized();
     return this.#operationGate.runLocal(async () => {
-      await this.#settleAndCommit("local-save");
+      await this.#settleAndDispatch("local-save");
       return this.#saveCurrentInsideGate();
     });
   }
@@ -158,7 +173,7 @@ export class SyncCoordinator<T> {
   async upload(): Promise<SyncActionResult> {
     this.#assertInitialized();
     return this.#operationGate.runCloud(async () => {
-      await this.#settleAndCommit("upload");
+      await this.#settleAndDispatch("upload");
       if (this.history.dirty) {
         await this.#saveCurrentInsideGate();
       }
@@ -207,6 +222,7 @@ export class SyncCoordinator<T> {
         return "unchanged";
       }
 
+      await this.#settleAndDispatch("pull");
       if (this.#hasLocalChanges()) {
         await this.#recordConflict(remote?.revision ?? null);
         return "conflict";
@@ -222,7 +238,7 @@ export class SyncCoordinator<T> {
         return this.#pullInsideGate();
       }
 
-      await this.#settleAndCommit("upload");
+      await this.#settleAndDispatch("upload");
       if (this.history.dirty) {
         await this.#saveCurrentInsideGate();
       }
@@ -257,6 +273,7 @@ export class SyncCoordinator<T> {
       return "unchanged";
     }
 
+    await this.#settleAndDispatch("remote-change");
     if (this.#hasLocalChanges()) {
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
         await this.#recordConflict(remoteRevision);
@@ -382,6 +399,7 @@ export class SyncCoordinator<T> {
       pendingUpload: null,
       conflict: null,
     }));
+    this.#history = this.#createHistory(payload);
     this.#hooks.reload();
     return "reloaded";
   }
@@ -396,11 +414,16 @@ export class SyncCoordinator<T> {
       observedRemoteRevision: remoteRevision,
       detectedAt: this.#now().toISOString(),
     };
+    const payload = this.history.current;
+    const contentHash = await this.#hashPayload(payload);
     await this.#writeLocal((local, nextLocalRevision) => ({
       ...local,
+      payload,
+      contentHash,
       localRevision: nextLocalRevision,
       conflict,
     }));
+    this.history.updateBaseline(payload);
     this.#hooks.onConflict?.(conflict);
     return conflict;
   }
@@ -436,11 +459,11 @@ export class SyncCoordinator<T> {
     return hashContentKey(this.#getContentKey(payload));
   }
 
-  async #settleAndCommit(reason: SettleReason): Promise<void> {
+  async #settleAndDispatch(reason: SettleReason): Promise<void> {
     this.#assertInitialized();
-    const pendingPayload = await this.#hooks.settle(reason);
-    if (pendingPayload !== null) {
-      this.commit(pendingPayload);
+    const pendingEvent = await this.#hooks.settle(reason);
+    if (pendingEvent !== null) {
+      this.dispatch(pendingEvent);
     }
   }
 

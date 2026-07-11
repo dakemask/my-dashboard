@@ -9,13 +9,13 @@ export {
   ModuleRuntimeUnavailableError,
   startModuleRuntime,
   type ModuleRuntime,
-  type ModuleRuntimeCommand,
   type ModuleRuntimeHooks,
   type ModuleRuntimeStartResult,
   type ModuleRuntimeState,
   type StartModuleRuntimeOptions,
 } from "./runtime";
 export { jsonContentKey } from "../history";
+export type { HistoryCapacity, ModuleHistoryPolicy } from "../history";
 export type {
   ConflictResolution,
   ProjectionReason,

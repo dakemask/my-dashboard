@@ -1,10 +1,7 @@
 export {
-  DEFAULT_HISTORY_LIMIT,
   StagingHistory,
+  type HistoryCapacity,
+  type ModuleHistoryPolicy,
   type StagingHistoryOptions,
 } from "./StagingHistory";
-export {
-  installHistoryShortcuts,
-  type HistoryShortcutOptions,
-} from "./shortcuts";
 export { createJsonSnapshot, jsonContentKey, jsonSnapshotKey } from "./jsonSnapshot";

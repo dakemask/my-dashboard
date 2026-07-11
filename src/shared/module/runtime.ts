@@ -27,29 +27,18 @@ export type ModuleRuntimeState =
   | "disposing"
   | "disposed";
 
-export type ModuleRuntimeCommand =
-  | "undo"
-  | "redo"
-  | "save"
-  | "upload"
-  | "pull"
-  | "resolve-conflict"
-  | "poll";
-
-export interface ModuleRuntimeHooks<T> {
+export interface ModuleRuntimeHooks<TPayload, TEvent> {
   /** Ends or cancels live UI interaction before a shared action reads the payload. */
-  settle(reason: SettleReason): T | null | Promise<T | null>;
+  settle(reason: SettleReason): TEvent | null | Promise<TEvent | null>;
   /** Rebuilds the module UI after initialization, undo, or redo. */
-  project(payload: T, reason: ProjectionReason): void;
+  project(payload: TPayload, reason: ProjectionReason): void;
   onConflict?(conflict: PersistedConflict): void;
-  /** Receives errors raised by keyboard-triggered commands. Direct method calls reject normally. */
-  onCommandError?(error: unknown, command: ModuleRuntimeCommand): void;
 }
 
-export interface StartModuleRuntimeOptions<T> {
-  readonly definition: ModuleDefinition<T>;
+export interface StartModuleRuntimeOptions<TPayload, TEvent> {
+  readonly definition: ModuleDefinition<TPayload, TEvent>;
   readonly appRoot: HTMLElement;
-  readonly hooks: ModuleRuntimeHooks<T>;
+  readonly hooks: ModuleRuntimeHooks<TPayload, TEvent>;
   readonly cloudStatusLabel?: string;
 }
 
@@ -69,15 +58,15 @@ export interface ModuleRuntimeEnvironment {
   readonly onAuthenticationRequired?: () => void;
 }
 
-export interface ModuleRuntime<T> {
+export interface ModuleRuntime<TPayload, TEvent> {
   readonly state: ModuleRuntimeState;
-  readonly current: T;
+  readonly current: TPayload;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
   readonly dirty: boolean;
-  commit(payload: T): T;
-  undo(): Promise<T>;
-  redo(): Promise<T>;
+  dispatch(event: TEvent): TPayload;
+  undo(): Promise<TPayload>;
+  redo(): Promise<TPayload>;
   save(): Promise<SyncActionResult>;
   upload(): Promise<SyncActionResult>;
   pull(): Promise<SyncActionResult>;
@@ -87,8 +76,12 @@ export interface ModuleRuntime<T> {
   dispose(): Promise<void>;
 }
 
-export type ModuleRuntimeStartResult<T> =
-  | { readonly status: "ready"; readonly initialPayload: T; readonly runtime: ModuleRuntime<T> }
+export type ModuleRuntimeStartResult<TPayload, TEvent> =
+  | {
+      readonly status: "ready";
+      readonly initialPayload: TPayload;
+      readonly runtime: ModuleRuntime<TPayload, TEvent>;
+    }
   | { readonly status: "blocked" }
   | { readonly status: "unsupported" }
   | { readonly status: "authentication-required" };
@@ -107,37 +100,34 @@ export class ModuleRuntimeBusyError extends Error {
   }
 }
 
-class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
+class DefaultModuleRuntime<TPayload, TEvent>
+  implements ModuleRuntime<TPayload, TEvent> {
   #state: ModuleRuntimeState = "starting";
-  #coordinator: SyncCoordinator<T> | null;
+  #coordinator: SyncCoordinator<TPayload, TEvent> | null;
   #operationGate: OperationGate | null;
   #lease: ModuleEditorLease | null;
   #poller: RevisionPoller | null = null;
-  #removeShortcuts: (() => void) | null = null;
   #unsubscribeAuth: (() => void) | null = null;
   #removePageHide: (() => void) | null = null;
   #commandTail: Promise<void> = Promise.resolve();
   #queuedCommands = 0;
   #disposePromise: Promise<void> | null = null;
-  readonly #onCommandError: ModuleRuntimeHooks<T>["onCommandError"];
 
   constructor(
-    coordinator: SyncCoordinator<T>,
+    coordinator: SyncCoordinator<TPayload, TEvent>,
     operationGate: OperationGate,
     lease: ModuleEditorLease,
-    onCommandError: ModuleRuntimeHooks<T>["onCommandError"],
   ) {
     this.#coordinator = coordinator;
     this.#operationGate = operationGate;
     this.#lease = lease;
-    this.#onCommandError = onCommandError;
   }
 
   get state(): ModuleRuntimeState {
     return this.#state;
   }
 
-  get current(): T {
+  get current(): TPayload {
     return this.#requireReadyCoordinator().history.current;
   }
 
@@ -162,47 +152,45 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
 
   attachLifecycle(options: {
     poller: RevisionPoller;
-    removeShortcuts: () => void;
     unsubscribeAuth: () => void;
     removePageHide: () => void;
   }): void {
     this.#poller = options.poller;
-    this.#removeShortcuts = options.removeShortcuts;
     this.#unsubscribeAuth = options.unsubscribeAuth;
     this.#removePageHide = options.removePageHide;
   }
 
-  commit(payload: T): T {
+  dispatch(event: TEvent): TPayload {
     const coordinator = this.#requireReadyCoordinator();
     if (this.#queuedCommands > 0 || this.#operationGate!.busy) {
       throw new ModuleRuntimeBusyError();
     }
-    return coordinator.commit(payload);
+    return coordinator.dispatch(event);
   }
 
-  undo(): Promise<T> {
-    return this.#enqueue("undo", (coordinator) => coordinator.undo());
+  undo(): Promise<TPayload> {
+    return this.#enqueue((coordinator) => coordinator.undo());
   }
 
-  redo(): Promise<T> {
-    return this.#enqueue("redo", (coordinator) => coordinator.redo());
+  redo(): Promise<TPayload> {
+    return this.#enqueue((coordinator) => coordinator.redo());
   }
 
   save(): Promise<SyncActionResult> {
-    return this.#enqueue("save", (coordinator) => coordinator.saveLocal());
+    return this.#enqueue((coordinator) => coordinator.saveLocal());
   }
 
   upload(): Promise<SyncActionResult> {
-    return this.#enqueue("upload", (coordinator) =>
+    return this.#enqueue((coordinator) =>
       conflictAsResult(() => coordinator.upload()));
   }
 
   pull(): Promise<SyncActionResult> {
-    return this.#enqueue("pull", (coordinator) => coordinator.pull());
+    return this.#enqueue((coordinator) => coordinator.pull());
   }
 
   resolveConflict(strategy: ConflictResolution): Promise<SyncActionResult> {
-    return this.#enqueue("resolve-conflict", (coordinator) =>
+    return this.#enqueue((coordinator) =>
       conflictAsResult(() => coordinator.resolveConflict(strategy)));
   }
 
@@ -212,15 +200,11 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
   }
 
   observeRemoteRevision(revision: string | null): Promise<SyncActionResult> {
-    return this.#enqueue("poll", (coordinator) => coordinator.handleObservedRemoteRevision(revision));
+    return this.#enqueue((coordinator) => coordinator.handleObservedRemoteRevision(revision));
   }
 
   getSnapshot(): SyncCoordinatorSnapshot {
     return this.#requireReadyCoordinator().getSnapshot();
-  }
-
-  reportShortcutError(error: unknown, command: "undo" | "redo"): void {
-    this.#onCommandError?.(error, command);
   }
 
   dispose(): Promise<void> {
@@ -231,8 +215,6 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
     this.#state = "disposing";
     const poller = this.#poller;
     this.#poller = null;
-    const removeShortcuts = this.#removeShortcuts;
-    this.#removeShortcuts = null;
     const unsubscribeAuth = this.#unsubscribeAuth;
     this.#unsubscribeAuth = null;
     const removePageHide = this.#removePageHide;
@@ -256,7 +238,6 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
 
       await attempt(() => removePageHide?.());
       await attempt(() => unsubscribeAuth?.());
-      await attempt(() => removeShortcuts?.());
       await attempt(async () => poller?.stop());
       await attempt(async () => this.#commandTail);
       await attempt(async () => operationGate?.whenIdle());
@@ -271,8 +252,7 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
   }
 
   #enqueue<R>(
-    _command: ModuleRuntimeCommand,
-    operation: (coordinator: SyncCoordinator<T>) => R | Promise<R>,
+    operation: (coordinator: SyncCoordinator<TPayload, TEvent>) => R | Promise<R>,
   ): Promise<R> {
     this.#requireReadyCoordinator();
     this.#queuedCommands += 1;
@@ -292,7 +272,7 @@ class DefaultModuleRuntime<T> implements ModuleRuntime<T> {
     return result;
   }
 
-  #requireReadyCoordinator(): SyncCoordinator<T> {
+  #requireReadyCoordinator(): SyncCoordinator<TPayload, TEvent> {
     if (this.#state !== "ready" || !this.#coordinator) {
       throw new ModuleRuntimeUnavailableError(this.#state);
     }
@@ -313,10 +293,10 @@ async function conflictAsResult(
   }
 }
 
-export async function startModuleRuntime<T>(
-  options: StartModuleRuntimeOptions<T>,
+export async function startModuleRuntime<TPayload, TEvent>(
+  options: StartModuleRuntimeOptions<TPayload, TEvent>,
   environment: ModuleRuntimeEnvironment = {},
-): Promise<ModuleRuntimeStartResult<T>> {
+): Promise<ModuleRuntimeStartResult<TPayload, TEvent>> {
   const pageDocument = environment.document ?? options.appRoot.ownerDocument;
   const pageWindow = environment.window ?? pageDocument.defaultView;
   if (!pageWindow) {
@@ -357,7 +337,7 @@ export async function startModuleRuntime<T>(
   }
 
   const cleanupStack: Array<() => void | Promise<void>> = [() => lease.release()];
-  let runtime: DefaultModuleRuntime<T> | null = null;
+  let runtime: DefaultModuleRuntime<TPayload, TEvent> | null = null;
   let runtimeOwnsLifecycle = false;
 
   try {
@@ -366,7 +346,7 @@ export async function startModuleRuntime<T>(
       cloudStatusLabel: options.cloudStatusLabel,
     });
     const operationGate = new OperationGate(presentation);
-    const localStore = new ModuleLocalStore<T>(options.definition.moduleId, {
+    const localStore = new ModuleLocalStore<TPayload>(options.definition.moduleId, {
       indexedDB: environment.indexedDB,
     });
     cleanupStack.push(() => localStore.close());
@@ -400,7 +380,6 @@ export async function startModuleRuntime<T>(
       coordinator,
       operationGate,
       lease,
-      options.hooks.onCommandError,
     );
     runtime = createdRuntime;
 
@@ -419,8 +398,6 @@ export async function startModuleRuntime<T>(
       onAuthenticationError: () => authService.invalidate(),
     });
     cleanupStack.push(() => poller.stop());
-    const removeShortcuts = installRuntimeShortcuts(createdRuntime, pageDocument);
-    cleanupStack.push(removeShortcuts);
     const unsubscribeAuth = authService.subscribe((state) => {
       if (state.status === "anonymous") {
         void createdRuntime.dispose().then(
@@ -438,7 +415,6 @@ export async function startModuleRuntime<T>(
     cleanupStack.push(removePageHide);
     createdRuntime.attachLifecycle({
       poller,
-      removeShortcuts,
       unsubscribeAuth,
       removePageHide,
     });
@@ -477,32 +453,4 @@ async function runCleanupStack(stack: Array<() => void | Promise<void>>): Promis
     }
   }
   stack.length = 0;
-}
-
-function installRuntimeShortcuts<T>(
-  runtime: DefaultModuleRuntime<T>,
-  target: Document,
-): () => void {
-  const onKeyDown = (event: KeyboardEvent): void => {
-    if (
-      !event.ctrlKey ||
-      event.metaKey ||
-      event.altKey ||
-      event.shiftKey
-    ) {
-      return;
-    }
-    const key = event.key.toLowerCase();
-    if (key !== "z" && key !== "y") {
-      return;
-    }
-
-    event.preventDefault();
-    const command = key === "z" ? "undo" : "redo";
-    const action = command === "undo" ? runtime.undo() : runtime.redo();
-    void action.catch((error: unknown) => runtime.reportShortcutError(error, command));
-  };
-  const listener = onKeyDown as EventListener;
-  target.addEventListener("keydown", listener);
-  return () => target.removeEventListener("keydown", listener);
 }

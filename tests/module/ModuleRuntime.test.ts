@@ -14,6 +14,13 @@ interface TestPayload {
   readonly value: string;
 }
 
+interface TestEvent {
+  readonly type: "set-value";
+  readonly value: string;
+}
+
+const setValue = (value: string): TestEvent => ({ type: "set-value", value });
+
 const session = {
   credentials: { username: "octocat", token: "secret-token" },
   repository: {
@@ -172,8 +179,11 @@ class EmptyGitHub {
   });
 }
 
-function definition(moduleId = "runtime-test") {
-  return defineJsonModule<TestPayload>({
+function definition(
+  moduleId = "runtime-test",
+  capacity: number | "unlimited" = 250,
+) {
+  return defineJsonModule<TestPayload, TestEvent>({
     moduleId,
     createEmpty: () => ({ value: "A" }),
     validate(value: unknown): TestPayload {
@@ -181,6 +191,11 @@ function definition(moduleId = "runtime-test") {
         throw new TypeError("invalid test payload");
       }
       return { value: (value as TestPayload).value };
+    },
+    history: {
+      capacity,
+      apply: (_payload, event) => ({ value: event.value }),
+      invert: (_event, before) => setValue(before.value),
     },
     encode: (payload) => new Map([["data.json", JSON.stringify(payload)]]),
     decode: (files) => JSON.parse(files.get("data.json") ?? "null") as TestPayload,
@@ -218,17 +233,17 @@ afterEach(() => {
 });
 
 describe("ModuleRuntime", () => {
-  it("starts from one public entry and routes shortcuts through settle", async () => {
+  it("starts from one public entry and settles an event before direct undo", async () => {
     const auth = new FakeAuthService();
     const github = new EmptyGitHub();
     const project = vi.fn();
-    let pendingPayload: TestPayload | null = null;
+    let pendingEvent: TestEvent | null = null;
     const settle = vi.fn(() => {
-      const payload = pendingPayload;
-      pendingPayload = null;
-      return payload;
+      const event = pendingEvent;
+      pendingEvent = null;
+      return event;
     });
-    const hooks: ModuleRuntimeHooks<TestPayload> = { settle, project };
+    const hooks: ModuleRuntimeHooks<TestPayload, TestEvent> = { settle, project };
     const result = await startModuleRuntime(
       { definition: definition(), appRoot: createRoot(), hooks },
       createEnvironment(auth, github, new FakeLockManager()),
@@ -239,22 +254,68 @@ describe("ModuleRuntime", () => {
     const { runtime } = result;
     expect(project).toHaveBeenCalledWith({ value: "A" }, "initialize");
 
-    runtime.commit({ value: "B" });
-    pendingPayload = { value: "C" };
-    document.dispatchEvent(new KeyboardEvent("keydown", {
-      key: "z",
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    }));
-    await vi.waitFor(() => expect(project).toHaveBeenCalledWith({ value: "B" }, "undo"));
+    runtime.dispatch(setValue("B"));
+    pendingEvent = setValue("C");
+    await runtime.undo();
+    expect(project).toHaveBeenCalledWith({ value: "B" }, "undo");
     expect(settle).toHaveBeenCalledWith("undo");
     expect(runtime.current).toEqual({ value: "B" });
 
+    pendingEvent = setValue("D");
     await expect(runtime.save()).resolves.toBe("saved");
+    expect(settle).toHaveBeenCalledWith("local-save");
+    expect(runtime.current).toEqual({ value: "D" });
     expect(runtime.dirty).toBe(false);
     await runtime.dispose();
     expect(runtime.state).toBe("disposed");
+  });
+
+  it("does not bind or intercept Ctrl+Z, Ctrl+Y, or Ctrl+S", async () => {
+    const result = await startModuleRuntime(
+      {
+        definition: definition("no-shortcuts-test"),
+        appRoot: createRoot(),
+        hooks: { settle: () => null, project: () => undefined },
+      },
+      createEnvironment(new FakeAuthService(), new EmptyGitHub(), new FakeLockManager()),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    result.runtime.dispatch(setValue("B"));
+    for (const key of ["z", "y", "s"]) {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(result.runtime.current).toEqual({ value: "B" });
+    expect(result.runtime.dirty).toBe(true);
+    await result.runtime.dispose();
+  });
+
+  it("uses the event capacity selected by the module", async () => {
+    const result = await startModuleRuntime(
+      {
+        definition: definition("custom-capacity-test", 1),
+        appRoot: createRoot(),
+        hooks: { settle: () => null, project: () => undefined },
+      },
+      createEnvironment(new FakeAuthService(), new EmptyGitHub(), new FakeLockManager()),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    result.runtime.dispatch(setValue("B"));
+    result.runtime.dispatch(setValue("C"));
+    await expect(result.runtime.undo()).resolves.toEqual({ value: "B" });
+    expect(result.runtime.canUndo).toBe(false);
+    await expect(result.runtime.undo()).resolves.toEqual({ value: "B" });
+    await result.runtime.dispose();
   });
 
   it("automatically uses the shared cloud spinner and overlay", async () => {
