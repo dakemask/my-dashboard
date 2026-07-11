@@ -18,7 +18,7 @@ describe("RevisionPoller", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(readRevision).toHaveBeenCalledTimes(2);
-    poller.stop();
+    await poller.stop();
   });
 
   it("silently retries ordinary failures on the next cycle", async () => {
@@ -36,7 +36,7 @@ describe("RevisionPoller", () => {
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(onRevision).toHaveBeenCalledWith("remote-2");
-    poller.stop();
+    await poller.stop();
   });
 
   it("reports authentication failures through the dedicated callback", async () => {
@@ -54,7 +54,7 @@ describe("RevisionPoller", () => {
     poller.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(onAuthenticationError).toHaveBeenCalledWith(authError);
-    poller.stop();
+    await poller.stop();
   });
 
   it("reschedules in both directions when page visibility changes", async () => {
@@ -85,6 +85,24 @@ describe("RevisionPoller", () => {
     pageDocument.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(60_000);
     expect(readRevision).toHaveBeenCalledTimes(3);
-    poller.stop();
+    await poller.stop();
+  });
+
+  it("waits for an in-flight read and suppresses callbacks after stop", async () => {
+    vi.useFakeTimers();
+    let resolveRead!: (revision: string | null) => void;
+    const readRevision = vi.fn(() => new Promise<string | null>((resolve) => {
+      resolveRead = resolve;
+    }));
+    const onRevision = vi.fn();
+    const poller = createRevisionPoller({ readRevision, onRevision, random: () => 0 });
+
+    poller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const stopped = poller.stop();
+    resolveRead("late-revision");
+    await stopped;
+
+    expect(onRevision).not.toHaveBeenCalled();
   });
 });

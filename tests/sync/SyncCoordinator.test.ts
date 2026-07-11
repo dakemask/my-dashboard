@@ -9,6 +9,7 @@ import {
   type RemoteModuleSnapshot,
   type RemoteRevisionSnapshot,
 } from "../../src/shared/github";
+import { jsonContentKey } from "../../src/shared/history";
 import { ModuleLocalStore } from "../../src/shared/persistence";
 import {
   SyncConflictPendingError,
@@ -79,6 +80,7 @@ function definition(moduleId: string): ModuleDefinition<TestData> {
       }
       return { value: (value as TestData).value };
     },
+    contentKey: jsonContentKey,
     encode: (data) => new Map([["data.json", JSON.stringify(data)]]),
     decode: (files) => JSON.parse(files.get("data.json") ?? "null") as TestData,
   };
@@ -146,6 +148,12 @@ describe("SyncCoordinator", () => {
     expect(harness.coordinator.getSnapshot().conflict?.observedRemoteRevision).toBe("cloud-new");
     expect((await harness.localStore.load())?.conflict?.observedRemoteRevision).toBe("cloud-new");
     expect(harness.conflict).toHaveBeenCalled();
+
+    const exposed = harness.coordinator.getSnapshot().conflict as {
+      observedRemoteRevision: string | null;
+    };
+    exposed.observedRemoteRevision = "tampered";
+    expect(harness.coordinator.getSnapshot().conflict?.observedRemoteRevision).toBe("cloud-new");
   });
 
   it("does not create a conflict when pull sees an unchanged cloud and local edits", async () => {
@@ -231,5 +239,78 @@ describe("SyncCoordinator", () => {
     await expect(harness.coordinator.pull()).resolves.toBe("conflict");
     expect(harness.reload).not.toHaveBeenCalled();
     expect(harness.coordinator.getSnapshot().conflict?.observedRemoteRevision).toBe("cloud-3");
+  });
+
+  it("saves a non-JSON payload using the module's content key", async () => {
+    interface RichPayload {
+      readonly updatedAt: Date;
+      readonly counters: Map<string, number>;
+    }
+
+    const moduleId = "module-rich-payload";
+    const richDefinition: ModuleDefinition<RichPayload> = {
+      moduleId,
+      createEmpty: () => ({ updatedAt: new Date(0), counters: new Map() }),
+      validate(value: unknown): RichPayload {
+        const candidate = value as Partial<RichPayload>;
+        if (!(candidate?.updatedAt instanceof Date) || !(candidate.counters instanceof Map)) {
+          throw new TypeError("invalid rich payload");
+        }
+        return candidate as RichPayload;
+      },
+      contentKey: (payload) => {
+        const counters = [...payload.counters]
+          .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+          .map(([name, count]) => `${name}:${count}`)
+          .join("|");
+        return `${payload.updatedAt.toISOString()}|${counters}`;
+      },
+      encode: (payload) => new Map([["data.txt", JSON.stringify({
+        updatedAt: payload.updatedAt.toISOString(),
+        counters: [...payload.counters].sort(
+          ([left], [right]) => left < right ? -1 : left > right ? 1 : 0,
+        ),
+      })]]),
+      decode: (files) => {
+        const decoded = JSON.parse(files.get("data.txt") ?? "null") as {
+          updatedAt: string;
+          counters: Array<[string, number]>;
+        };
+        return {
+          updatedAt: new Date(decoded.updatedAt),
+          counters: new Map(decoded.counters),
+        };
+      },
+    };
+    const remoteRepository: RemoteModulePort<RichPayload> = {
+      moduleId,
+      readRevision: async () => null,
+      pull: async () => null,
+      push: async () => Promise.reject(new Error("not used")),
+      overwrite: async () => Promise.reject(new Error("not used")),
+    };
+    const localStore = new ModuleLocalStore<RichPayload>(moduleId, { indexedDB: new IDBFactory() });
+    const coordinator = new SyncCoordinator({
+      definition: richDefinition,
+      localStore,
+      remoteRepository,
+      operationGate: new OperationGate(),
+      hooks: { settle: () => null, project: () => undefined, reload: () => undefined },
+    });
+    await coordinator.initialize();
+
+    coordinator.commit({
+      updatedAt: new Date("2026-07-11T01:02:03.000Z"),
+      counters: new Map([["ideas", 2]]),
+    });
+    await expect(coordinator.saveLocal()).resolves.toBe("saved");
+
+    const stored = await localStore.load();
+    expect(stored?.payload.updatedAt).toBeInstanceOf(Date);
+    expect(stored?.payload.counters).toEqual(new Map([["ideas", 2]]));
+    expect(coordinator.getSnapshot()).toMatchObject({
+      sessionDirty: false,
+      localChangedSinceSync: true,
+    });
   });
 });

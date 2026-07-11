@@ -59,8 +59,8 @@ export class RemoteModuleRepository<T> {
     }
   }
 
-  async readRevision(): Promise<RemoteRevisionSnapshot | null> {
-    const head = await this.#loadHead();
+  async readRevision(signal?: AbortSignal): Promise<RemoteRevisionSnapshot | null> {
+    const head = await this.#loadHead(signal);
     return head.revision ? toRevisionSnapshot(head.revision, head.snapshot.commitSha) : null;
   }
 
@@ -86,7 +86,7 @@ export class RemoteModuleRepository<T> {
     );
 
     const stableFiles = new Map([...files].sort(([left], [right]) => comparePaths(left, right)));
-    const data = await this.#codec.decode(stableFiles);
+    const data = this.#codec.validate(await this.#codec.decode(stableFiles));
 
     return {
       ...toRevisionSnapshot(head.revision, head.snapshot.commitSha),
@@ -264,8 +264,8 @@ export class RemoteModuleRepository<T> {
     }
   }
 
-  async #loadHead(): Promise<LoadedHead> {
-    const snapshot = await this.#client.getBranchSnapshot();
+  async #loadHead(signal?: AbortSignal): Promise<LoadedHead> {
+    const snapshot = await this.#client.getBranchSnapshot(signal);
     const blobByPath = new Map(
       snapshot.entries
         .filter((entry) => entry.type === "blob")
@@ -277,7 +277,7 @@ export class RemoteModuleRepository<T> {
       return { snapshot, revision: null, blobByPath };
     }
 
-    const revision = parseRemoteRevision(await this.#client.readBlobText(revisionEntry.sha));
+    const revision = parseRemoteRevision(await this.#client.readBlobText(revisionEntry.sha, signal));
     validateManifestPaths(revision.managedFiles);
 
     for (const relativePath of revision.managedFiles) {

@@ -15,6 +15,13 @@ interface TestData {
 
 const codec: RemoteModuleCodec<TestData> = {
   moduleId: "test-module",
+  validate(value: unknown): TestData {
+    const files = (value as Partial<TestData>)?.files;
+    if (!(files instanceof Map)) {
+      throw new TypeError("invalid test module data");
+    }
+    return { files: new Map(files) };
+  },
   encode: (data) => data.files,
   decode: (files) => ({ files: new Map(files) }),
 };
@@ -73,6 +80,25 @@ describe("RemoteModuleRepository", () => {
     ]);
     expect(github.requestedCommitShas).toEqual([originalHead]);
     expect(github.requestedTreeShas).toEqual([github.commits.get(originalHead)!.tree]);
+  });
+
+  it("validates a decoded payload before returning it", async () => {
+    const github = new FakeGitHub();
+    github.seedModule("test-module", revision("r1", ["data.txt"]), { "data.txt": "invalid" });
+    const client = new GitHubGitDataClient({
+      owner: "alice",
+      token: "secret-token",
+      fetch: github.fetch,
+      onCredentialsInvalid: () => undefined,
+    });
+    const repository = new RemoteModuleRepository(client, {
+      ...codec,
+      validate: () => {
+        throw new TypeError("decoded payload rejected");
+      },
+    });
+
+    await expect(repository.pull()).rejects.toThrow("decoded payload rejected");
   });
 
   it("uses one commit, preserves unknown files, and deletes only removed managed files", async () => {

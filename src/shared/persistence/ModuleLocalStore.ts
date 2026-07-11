@@ -104,8 +104,9 @@ export class ModuleLocalStore<T> {
     expectedLocalRevision: string | null,
     next: ModuleLocalEnvelope<T>,
   ): Promise<ModuleLocalEnvelope<T>> {
-    validateRevision(next.localRevision, "next.localRevision");
-    if (next.localRevision === expectedLocalRevision) {
+    const stored = structuredClone(next);
+    validateRevision(stored.localRevision, "next.localRevision");
+    if (stored.localRevision === expectedLocalRevision) {
       throw new TypeError("A successful write must use a new local revision.");
     }
 
@@ -120,7 +121,7 @@ export class ModuleLocalStore<T> {
         "complete",
         () => {
           if (putStarted) {
-            resolve(next);
+            resolve(structuredClone(stored));
           } else {
             reject(failure ?? new Error("IndexedDB write completed unexpectedly."));
           }
@@ -163,7 +164,7 @@ export class ModuleLocalStore<T> {
           }
 
           try {
-            const putRequest = store.put(next, RECORD_KEY);
+            const putRequest = store.put(stored, RECORD_KEY);
             putStarted = true;
             putRequest.addEventListener(
               "error",

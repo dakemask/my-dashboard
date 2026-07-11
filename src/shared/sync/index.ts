@@ -1,4 +1,4 @@
-export { hashJsonPayload } from "./contentHash";
+export { hashContentKey } from "./contentHash";
 export { createRevisionPoller, type RevisionPoller } from "./revisionPoller";
 export { SyncCoordinator } from "./SyncCoordinator";
 export {

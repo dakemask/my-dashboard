@@ -79,15 +79,19 @@ export class GitHubGitDataClient {
     this.#onCredentialsInvalid = options.onCredentialsInvalid;
   }
 
-  async getBranchSnapshot(): Promise<GitHubTreeSnapshot> {
+  async getBranchSnapshot(signal?: AbortSignal): Promise<GitHubTreeSnapshot> {
     const reference = await this.#request<GitReferenceResponse>(
       "GET",
       `/git/ref/heads/${encodePath(this.coordinates.branch)}`,
+      undefined,
+      signal,
     );
-    const commit = await this.getCommit(reference.object.sha);
+    const commit = await this.getCommit(reference.object.sha, signal);
     const tree = await this.#request<GitTreeResponse>(
       "GET",
       `/git/trees/${encodeURIComponent(commit.tree.sha)}?recursive=1`,
+      undefined,
+      signal,
     );
 
     if (tree.truncated) {
@@ -106,12 +110,17 @@ export class GitHubGitDataClient {
     };
   }
 
-  getCommit(commitSha: string): Promise<GitCommitResponse> {
-    return this.#request("GET", `/git/commits/${encodeURIComponent(commitSha)}`);
+  getCommit(commitSha: string, signal?: AbortSignal): Promise<GitCommitResponse> {
+    return this.#request("GET", `/git/commits/${encodeURIComponent(commitSha)}`, undefined, signal);
   }
 
-  async readBlobText(blobSha: string): Promise<string> {
-    const blob = await this.#request<GitBlobResponse>("GET", `/git/blobs/${encodeURIComponent(blobSha)}`);
+  async readBlobText(blobSha: string, signal?: AbortSignal): Promise<string> {
+    const blob = await this.#request<GitBlobResponse>(
+      "GET",
+      `/git/blobs/${encodeURIComponent(blobSha)}`,
+      undefined,
+      signal,
+    );
 
     if (blob.encoding !== "base64" || typeof blob.content !== "string") {
       throw new GitHubApiError("GitHub returned an unsupported blob encoding.", 422, "GET", "/git/blobs/:sha");
@@ -153,7 +162,12 @@ export class GitHubGitDataClient {
     );
   }
 
-  async #request<T>(method: string, endpoint: string, body?: unknown): Promise<T> {
+  async #request<T>(
+    method: string,
+    endpoint: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const url = `${GITHUB_API_BASE_URL}${this.#repositoryPath()}${endpoint}`;
     const headers: Record<string, string> = {
       Accept: "application/vnd.github+json",
@@ -168,6 +182,7 @@ export class GitHubGitDataClient {
     const response = await this.#fetch(url, {
       method,
       headers,
+      signal,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
 

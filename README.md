@@ -9,6 +9,22 @@ npm install
 npm run dev
 ```
 
+## 模块开发文档
+
+业务模块开发 agent 按顺序阅读：
+
+1. [通用模块约束](./docs/general-module-constraints.md)
+2. [Shared 模块 SDK 使用指南](./docs/shared-module-sdk-guide.md)
+3. 当前模块设计，例如 [Mind Map 专用设计](./docs/mindmap-greenfield-architecture.md)
+
+只有维护 Shared、认证或同步基础设施时才阅读 [Shared 与平台内部规范](./docs/shared-platform-internals.md)。业务模块只从 `src/shared` 根入口使用模块 SDK，不直接依赖内部目录。
+
+## 测试
+
+```bash
+npm test
+```
+
 ## 构建
 
 ```bash

@@ -7,4 +7,4 @@ export {
   installHistoryShortcuts,
   type HistoryShortcutOptions,
 } from "./shortcuts";
-export { createJsonSnapshot, jsonSnapshotKey } from "./jsonSnapshot";
+export { createJsonSnapshot, jsonContentKey, jsonSnapshotKey } from "./jsonSnapshot";

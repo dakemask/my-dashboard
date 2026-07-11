@@ -11,7 +11,7 @@ import {
   type ModuleLocalEnvelope,
   type PersistedConflict,
 } from "../persistence";
-import { hashJsonPayload } from "./contentHash";
+import { hashContentKey } from "./contentHash";
 import {
   LocalDataIntegrityError,
   SyncConflictPendingError,
@@ -86,8 +86,8 @@ export class SyncCoordinator<T> {
       sessionDirty: this.#history.dirty,
       localChangedSinceSync: this.#local.contentHash !== this.#local.lastSyncedContentHash,
       lastSyncedRemoteRevision: this.#local.lastSyncedRemoteRevision,
-      pendingUpload: this.#local.pendingUpload,
-      conflict: this.#local.conflict,
+      pendingUpload: structuredClone(this.#local.pendingUpload),
+      conflict: structuredClone(this.#local.conflict),
     };
   }
 
@@ -98,16 +98,16 @@ export class SyncCoordinator<T> {
 
     let local = await this.#localStore.load();
     if (local) {
-      const payload = this.#definition.validate(local.payload);
-      if (await hashJsonPayload(payload) !== local.contentHash) {
+      const payload = this.#preparePayload(local.payload);
+      if (await this.#hashPayload(payload) !== local.contentHash) {
         throw new LocalDataIntegrityError();
       }
       local = { ...local, payload };
     } else {
       local = await this.#operationGate.runCloud(async () => {
         const remote = await this.#remoteRepository.pull();
-        const payload = this.#definition.validate(remote?.data ?? this.#definition.createEmpty());
-        const contentHash = await hashJsonPayload(payload);
+        const payload = this.#preparePayload(remote?.data ?? this.#definition.createEmpty());
+        const contentHash = await this.#hashPayload(payload);
         const initial = {
           ...createModuleLocalEnvelope(payload, contentHash),
           lastSyncedContentHash: contentHash,
@@ -118,17 +118,19 @@ export class SyncCoordinator<T> {
     }
 
     this.#local = local;
-    this.#history = new StagingHistory(local.payload);
+    this.#history = new StagingHistory(local.payload, {
+      contentKey: (payload) => this.#getContentKey(payload),
+    });
     this.#hooks.project(this.#history.current, "initialize");
     if (local.conflict) {
-      this.#hooks.onConflict?.(local.conflict);
+      this.#hooks.onConflict?.(structuredClone(local.conflict));
     }
     return this.#history.current;
   }
 
   commit(payload: T): T {
     this.#assertInitialized();
-    return this.#history!.commit(this.#definition.validate(payload));
+    return this.#history!.commit(this.#preparePayload(payload));
   }
 
   async undo(): Promise<T> {
@@ -275,7 +277,7 @@ export class SyncCoordinator<T> {
     }
 
     const payload = this.history.current;
-    const contentHash = await hashJsonPayload(payload);
+    const contentHash = await this.#hashPayload(payload);
     await this.#writeLocal((local, nextLocalRevision) => ({
       ...local,
       payload,
@@ -302,11 +304,11 @@ export class SyncCoordinator<T> {
 
     try {
       const result = overwrite
-        ? await this.#remoteRepository.overwrite(this.#local!.payload, {
+        ? await this.#remoteRepository.overwrite(structuredClone(this.#local!.payload), {
             nextRevision: pending.nextRemoteRevision,
             updatedAt: pending.updatedAt,
           })
-        : await this.#remoteRepository.push(this.#local!.payload, {
+        : await this.#remoteRepository.push(structuredClone(this.#local!.payload), {
             expectedRevision: this.#local!.lastSyncedRemoteRevision,
             nextRevision: pending.nextRemoteRevision,
             updatedAt: pending.updatedAt,
@@ -369,8 +371,8 @@ export class SyncCoordinator<T> {
 
   async #pullInsideGate(): Promise<SyncActionResult> {
     const remote = await this.#remoteRepository.pull();
-    const payload = this.#definition.validate(remote?.data ?? this.#definition.createEmpty());
-    const contentHash = await hashJsonPayload(payload);
+    const payload = this.#preparePayload(remote?.data ?? this.#definition.createEmpty());
+    const contentHash = await this.#hashPayload(payload);
     await this.#writeLocal((_local, nextLocalRevision) => ({
       payload,
       contentHash,
@@ -413,6 +415,25 @@ export class SyncCoordinator<T> {
 
   #hasLocalChanges(): boolean {
     return this.history.dirty || this.#local!.contentHash !== this.#local!.lastSyncedContentHash;
+  }
+
+  #preparePayload(value: unknown): T {
+    const payload = structuredClone(this.#definition.validate(value));
+    this.#definition.validate(structuredClone(payload));
+    this.#getContentKey(payload);
+    return payload;
+  }
+
+  #getContentKey(payload: T): string {
+    const key = this.#definition.contentKey(structuredClone(payload));
+    if (typeof key !== "string") {
+      throw new TypeError("ModuleDefinition.contentKey must return a string.");
+    }
+    return key;
+  }
+
+  #hashPayload(payload: T): Promise<string> {
+    return hashContentKey(this.#getContentKey(payload));
   }
 
   async #settleAndCommit(reason: SettleReason): Promise<void> {

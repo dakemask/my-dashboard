@@ -1,68 +1,122 @@
-# Mind Map 从零开发规则
+# Mind Map 专用设计
 
-## 范围
+## 1. 阅读范围
 
-Mind Map 必须遵守 [通用模块五层模型](./general-module-layer-model.md) 和 [通用模块技术规范](./general-module-technical-spec.md)。本文只补充 Mind Map 特有的 payload 边界和交互结算规则；认证、历史容量、IndexedDB、编辑锁、GitHub commit、轮询及冲突算法均以通用规范为准。
+开发 Mind Map 前依次阅读：
 
-本模块按全新实现处理，不复用旧 Mind Map 源码、状态结构或数据格式。
+1. [通用模块约束](./general-module-constraints.md)；
+2. [Shared 模块 SDK 使用指南](./shared-module-sdk-guide.md)；
+3. 本文。
 
-## 模块身份与数据边界
+本文只规定 Mind Map 特有的 payload 边界、交互结算和投影行为。登录、IndexedDB、编辑锁、GitHub、轮询、spinner 和冲突算法都由模块 SDK 负责，Mind Map 不得自行实现。
+
+本模块从零开发，不复用旧 Mind Map 源码、状态结构或数据格式。
+
+## 2. 模块定义
 
 - `moduleId` 固定为 `mind-maps`。
-- 远端根目录固定为 `data/mind-maps/`。
-- 一个 payload 覆盖整个 Mind Map 资料库以及其中的全部脑图，不按单张脑图建立独立保存边界。
-- 节点、箭头、资料库结构等所有可持久化业务数据都属于这个完整 payload；选中、焦点、DOM 引用、pointer ID 和交互中间值不属于 payload。
-- payload 的具体字段由新实现定义，但不得为旧格式兼容加入业务 `schemaVersion` 或迁移分支。
+- 远端根由 SDK 派生为 `data/mind-maps/`。
+- 使用 `defineJsonModule`；payload 选择 JSON 兼容结构和 SDK 的规范 JSON content key。
+- `validate`、`encode` 和 `decode` 的具体字段由新实现定义，但必须覆盖整个资料库。
+- 不为旧格式兼容加入业务 `schemaVersion` 或迁移分支。
 
-## 提交与整模块保存
+## 3. 完整 payload 边界
 
-每次提交给 `StagingHistory` 的都是整个资料库的完整 payload。一次语义完整的复合动作只产生一个历史步骤。
+一份 payload 覆盖整个 Mind Map 资料库以及其中全部脑图，不按单张脑图建立保存、历史或冲突边界。
 
-保存按钮和 `Ctrl+S` 执行同一个整模块保存命令。在读取待保存 payload 前，必须按以下顺序结算实时状态：
+payload 包含所有可持久化业务数据，例如：
 
-1. 若文本框正在编辑，将当前文本作为一个完整业务变更提交到暂存历史，并退出文本编辑状态。
-2. 取消正在进行的拖拽、resize 和连线；未到提交点的中间值不得进入 payload，实时表现恢复到当前暂存版本。
-3. 清空节点、箭头及其他对象的全部选择状态。
-4. 将结算后的完整模块 payload 通过一个 IndexedDB 事务保存。
+- 资料库和脑图的组织结构；
+- 节点及其文本、位置、尺寸和业务属性；
+- 箭头、连接关系和其他持久化画布对象。
 
-保存不拆分为“当前脑图保存”和“资料库保存”，也不能只保存 dirty 对象。保存失败时遵循通用规范，结算后的 payload 和历史仍留在暂存层供用户重试。
+payload 不包含：
 
-## Mind Map 的撤销与重做结算
+- 当前选中、悬停和焦点；
+- DOM、SVG element 或 view object 引用；
+- pointer ID、pointer capture；
+- 正在拖拽、resize、连线的临时几何值；
+- 文本编辑器的临时状态和动画中间值；
+- 保存、同步、冲突和 revision 元数据。
 
-### 撤销
+每个提交给 `runtime.commit` 的值都是整个资料库的完整 payload。一次语义完整的复合动作只提交一次。
 
-- 文本编辑中按 `Ctrl+Z`：先把当前文本提交为一个完整历史步骤并退出编辑，再执行一次模块撤销。因此结果回到提交前的完整 payload，而不是调用输入框原生撤销。
-- 拖拽、resize 或连线进行中按 `Ctrl+Z`：先取消当前指针交互、丢弃未提交中间值，再执行一次模块撤销。
+## 4. 保存和上传前结算
 
-### 重做
+保存按钮和 `Ctrl+S` 必须调用同一个 `runtime.save()`。`Ctrl+S` 是 Mind Map 自己安装的模块快捷键，页面销毁时必须移除。
 
-- 文本编辑中按 `Ctrl+Y`：先提交当前文本并退出编辑，再尝试模块重做。若这次提交发生在撤销后的旧版本上，它是一个新分支，必须先删除原 redo 分支；此时通常已无旧步骤可重做。
-- 拖拽、resize 或连线进行中按 `Ctrl+Y`：先取消当前指针交互、丢弃未提交中间值，再执行一次模块重做。
+`settle("local-save")` 和 `settle("upload")` 按以下顺序处理：
 
-### 投影后的实时默认状态
+1. 如果文本框正在编辑，把当前文本纳入一个新的完整 payload，并退出文本编辑；
+2. 取消正在进行的拖拽、resize 和连线，丢弃未到提交点的中间值；
+3. 让被取消的指针交互恢复到当前暂存 payload 的投影；
+4. 清空节点、箭头和其他对象的全部选择状态；
+5. 有新的文本业务变更时返回结算后的完整 payload，否则返回 `null`。
 
-任何撤销或重做得到的新 payload 投影到画布后，全部纯实时交互状态必须恢复默认：
+SDK 随后原子保存整个模块。不得拆成“当前脑图保存”和“资料库保存”，不得只保存 dirty 对象。
 
-- 没有节点或箭头被选中；
+保存失败后，结算得到的 payload、历史和 dirty 必须保留，用户可以再次调用同一保存命令。
+
+## 5. 撤销结算
+
+`settle("undo")`：
+
+- 文本编辑中：先把当前文本组成新的完整 payload 并退出编辑，然后返回该 payload；SDK 会先提交它，再执行一次撤销，所以最终回到文本提交前的完整版本。
+- 拖拽、resize 或连线中：先取消交互并丢弃未提交中间值，返回 `null`，然后由 SDK 撤销。
+
+输入框不得保留或调用浏览器原生文本撤销；SDK 的 `Ctrl+Z` 始终操作模块历史。
+
+## 6. 重做结算
+
+`settle("redo")`：
+
+- 文本编辑中：先提交当前文本并退出编辑。这个新提交会删除当前 redo 分支，因此随后通常没有旧步骤可重做。
+- 拖拽、resize 或连线中：先取消交互并丢弃中间值，再由 SDK 重做。
+
+Mind Map 不支持 `Ctrl+Shift+Z`，只使用 SDK 的 `Ctrl+Y`。
+
+## 7. project 投影规则
+
+`project(payload, reason)` 必须完全从给定完整 payload 重建资料库和画布表现。初始化、撤销或重做投影完成后，所有纯实时状态恢复默认：
+
+- 没有节点、箭头或其他对象被选中；
 - 没有文本框处于编辑状态；
 - 没有焦点、悬停、拖拽、resize 或连线会话；
-- 不保留 pointer capture、临时几何值、DOM 引用或动画中间状态。
+- 不保留 pointer capture、临时几何值、旧 DOM 引用或动画中间状态。
 
-投影只能从完整暂存 payload 重建，不得把旧实时对象继续当作数据真源。
+不得继续把投影前的实时对象当作数据真源。
 
-## 冲突的模块级约束
+## 8. 冲突 UI
 
-Mind Map 冲突覆盖整个资料库，不能只解决当前打开的脑图。发现冲突后可以暂不选择方向；冲突记录必须跨刷新保留，用户仍可继续本地编辑和本地保存。
+冲突覆盖整个资料库，不能只解决当前打开的脑图。
 
-在下一次上传或主动拉取之前，用户必须显式选择 `local-wins` 或 `cloud-wins`，并按通用技术规范处理整个模块。不得自动逐节点或逐脑图合并。冲突提示的具体布局、文案和交互形式留给后续 UI 设计，不在本文规定。
+`onConflict` 触发后可以暂不选择方向，用户仍可继续本地编辑和 `runtime.save()`。下一次上传或主动拉取前，UI 必须让用户显式选择：
 
-## 与旧实现和旧数据的关系
+```ts
+await runtime.resolveConflict("local-wins");
+await runtime.resolveConflict("cloud-wins");
+```
 
-新模块与旧代码、旧本地格式和旧云端数据完全不兼容：
+不得自动逐节点或逐脑图合并。冲突提示的布局、文案和按钮样式留给后续 UI 设计。
+
+## 9. 旧实现和旧数据
+
+新版与旧代码、旧本地格式和旧云端数据完全不兼容：
 
 - 不读取、转换或迁移旧业务数据；
-- 不保留旧源码作为适配层或参考实现；
+- 不保留旧源码作为适配层；
 - 不由程序自动删除真实 GitHub 数据；
 - 用户在使用新版前自行删除 `data/mind-maps/` 中的旧远端数据。
 
-首次新版上传只能在旧数据已由用户处理后进行。shared 不得把缺少新版合法 `revision.json` 的旧目录猜测为可迁移模块。
+缺少新版合法 `revision.json` 的旧目录不得被 Shared 猜测或接管。
+
+## 10. Mind Map 模块验收
+
+- 使用 Shared 根入口、`defineJsonModule` 和 `startModuleRuntime`。
+- 完整 payload 覆盖资料库和所有脑图。
+- 文本、拖拽、resize、连线的提交点各自清楚。
+- 保存、上传、撤销、重做四种 settle reason 均有测试。
+- `project` 会重置全部实时交互状态。
+- 保存按钮和 `Ctrl+S` 调用同一个 `runtime.save()`。
+- 冲突只提供整个模块的 local-wins/cloud-wins。
+- 模块内没有 token、IndexedDB、GitHub client、poller、Web Lock 或 spinner 实现。

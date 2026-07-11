@@ -1,6 +1,6 @@
 export interface RevisionPoller {
   start(options?: { immediate?: boolean }): void;
-  stop(): void;
+  stop(): Promise<void>;
   pollNow(): Promise<void>;
 }
 
@@ -66,9 +66,11 @@ export function createRevisionPoller(options: RevisionPollerOptions): RevisionPo
     inFlight = (async () => {
       try {
         const revision = await options.readRevision(controller!.signal);
-        await options.onRevision(revision);
+        if (running && !controller!.signal.aborted) {
+          await options.onRevision(revision);
+        }
       } catch (error) {
-        if (options.isAuthenticationError?.(error)) {
+        if (running && !controller!.signal.aborted && options.isAuthenticationError?.(error)) {
           options.onAuthenticationError?.(error);
         }
       } finally {
@@ -93,16 +95,19 @@ export function createRevisionPoller(options: RevisionPollerOptions): RevisionPo
       schedule(startOptions.immediate === false ? undefined : 0);
     },
 
-    stop(): void {
+    async stop(): Promise<void> {
       if (!running) {
+        await inFlight?.catch(() => undefined);
         return;
       }
 
       running = false;
       clearTimer();
+      const pending = inFlight;
       controller?.abort();
       pageDocument.removeEventListener("visibilitychange", onVisibilityChange);
       pageWindow.removeEventListener("online", onOnline);
+      await pending?.catch(() => undefined);
     },
 
     pollNow,

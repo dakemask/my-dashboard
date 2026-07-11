@@ -52,6 +52,36 @@ describe("ModuleLocalStore", () => {
     expect((await beta.load())?.payload.value).toBe("beta");
   });
 
+  it("stores non-JSON structured-clone payloads without retaining caller aliases", async () => {
+    interface RichPayload {
+      readonly createdAt: Date;
+      readonly assets: Map<string, Uint8Array>;
+    }
+
+    const store = new ModuleLocalStore<RichPayload>("rich-data", { indexedDB: factory });
+    const payload: RichPayload = {
+      createdAt: new Date("2026-07-11T00:00:00.000Z"),
+      assets: new Map([["icon", new Uint8Array([1, 2, 3])]]),
+    };
+    const record: ModuleLocalEnvelope<RichPayload> = {
+      payload,
+      contentHash: "rich-hash",
+      localRevision: "00000000-0000-4000-8000-000000000010",
+      lastSyncedContentHash: null,
+      lastSyncedRemoteRevision: null,
+      pendingUpload: null,
+      conflict: null,
+    };
+
+    await store.initialize(record);
+    payload.assets.get("icon")![0] = 9;
+
+    const loaded = await store.load();
+    expect(loaded?.payload.createdAt).toBeInstanceOf(Date);
+    expect(loaded?.payload.assets).toBeInstanceOf(Map);
+    expect([...loaded!.payload.assets.get("icon")!]).toEqual([1, 2, 3]);
+  });
+
   it("atomically replaces the complete envelope using CAS", async () => {
     const store = new ModuleLocalStore<Payload>("atomic", { indexedDB: factory });
     const firstRevision = "00000000-0000-4000-8000-000000000001";

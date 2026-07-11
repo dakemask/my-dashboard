@@ -41,7 +41,8 @@ export interface GitHubCreateTreeEntry {
 }
 
 export interface RemoteModuleCodec<T> {
-  moduleId: string;
+  readonly moduleId: string;
+  validate(value: unknown): T;
   encode(data: T): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
   decode(files: ReadonlyMap<string, string>): T | Promise<T>;
 }

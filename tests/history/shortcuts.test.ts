@@ -4,8 +4,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   installHistoryShortcuts,
+  jsonContentKey,
   StagingHistory,
 } from "../../src/shared/history";
+
+function createHistory<T>(initial: T): StagingHistory<T> {
+  return new StagingHistory(initial, { contentKey: jsonContentKey });
+}
 
 describe("history shortcuts", () => {
   afterEach(() => {
@@ -17,7 +22,7 @@ describe("history shortcuts", () => {
     document.body.append(input);
     input.focus();
 
-    const history = new StagingHistory({ value: "A" });
+    const history = createHistory({ value: "A" });
     history.commit({ value: "B" });
     const onProject = vi.fn();
     const dispose = installHistoryShortcuts(history, { onProject });
@@ -37,7 +42,7 @@ describe("history shortcuts", () => {
   });
 
   it("does not treat Ctrl+Shift+Z as redo", () => {
-    const history = new StagingHistory({ value: "A" });
+    const history = createHistory({ value: "A" });
     history.commit({ value: "B" });
     history.undo();
     const onProject = vi.fn();
@@ -60,7 +65,7 @@ describe("history shortcuts", () => {
   it("blocks native input history even when the module queue cannot move", () => {
     const input = document.createElement("input");
     document.body.append(input);
-    const history = new StagingHistory({ value: "A" });
+    const history = createHistory({ value: "A" });
     const dispose = installHistoryShortcuts(history);
     const event = new KeyboardEvent("keydown", {
       key: "z",
@@ -77,7 +82,7 @@ describe("history shortcuts", () => {
   });
 
   it("settles a module interaction before deciding whether history can move", () => {
-    const history = new StagingHistory({ value: "A" });
+    const history = createHistory({ value: "A" });
     const beforeAction = vi.fn(() => history.commit({ value: "B" }));
     const onProject = vi.fn();
     const dispose = installHistoryShortcuts(history, { beforeAction, onProject });

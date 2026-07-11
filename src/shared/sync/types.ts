@@ -10,12 +10,13 @@ import type { PersistedConflict, PendingUpload } from "../persistence";
 
 export interface ModuleDefinition<T> extends RemoteModuleCodec<T> {
   createEmpty(): T;
-  validate(value: unknown): T;
+  /** Deterministically represents all semantic payload content. */
+  contentKey(payload: T): string;
 }
 
 export interface RemoteModulePort<T> {
   readonly moduleId: string;
-  readRevision(): Promise<RemoteRevisionSnapshot | null>;
+  readRevision(signal?: AbortSignal): Promise<RemoteRevisionSnapshot | null>;
   pull(): Promise<RemoteModuleSnapshot<T> | null>;
   push(data: T, options: RemoteModulePushOptions): Promise<RemoteModulePushResult>;
   overwrite(data: T, options: RemoteModuleOverwriteOptions): Promise<RemoteModulePushResult>;

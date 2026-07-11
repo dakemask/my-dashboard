@@ -1,9 +1,9 @@
-import { createJsonSnapshot, jsonSnapshotKey } from "./jsonSnapshot";
-
 export const DEFAULT_HISTORY_LIMIT = 100;
 
-export interface StagingHistoryOptions {
+export interface StagingHistoryOptions<T> {
   readonly maxVersions?: number;
+  /** A deterministic, collision-resistant key for the payload's semantic content. */
+  readonly contentKey: (payload: T) => string;
 }
 
 interface Version<T> {
@@ -17,24 +17,29 @@ interface Version<T> {
  */
 export class StagingHistory<T> {
   readonly #maxVersions: number;
+  readonly #contentKey: (payload: T) => string;
   #versions: Version<T>[];
   #position = 0;
   #savedBaselineKey: string;
 
-  constructor(initialPayload: T, options: StagingHistoryOptions = {}) {
+  constructor(initialPayload: T, options: StagingHistoryOptions<T>) {
+    if (typeof options?.contentKey !== "function") {
+      throw new TypeError("A payload contentKey function is required.");
+    }
     const maxVersions = options.maxVersions ?? DEFAULT_HISTORY_LIMIT;
     if (!Number.isInteger(maxVersions) || maxVersions < 1) {
       throw new RangeError("maxVersions must be a positive integer.");
     }
 
-    const initial = this.#makeVersion(initialPayload);
     this.#maxVersions = maxVersions;
+    this.#contentKey = options.contentKey;
+    const initial = this.#makeVersion(initialPayload);
     this.#versions = [initial];
     this.#savedBaselineKey = initial.key;
   }
 
   get current(): T {
-    return this.#versions[this.#position]!.payload;
+    return structuredClone(this.#versions[this.#position]!.payload);
   }
 
   get canUndo(): boolean {
@@ -98,13 +103,26 @@ export class StagingHistory<T> {
    * Updates the local baseline without altering the version queue. This is
    * useful when a caller already knows the payload committed by an atomic save.
    */
-  updateBaseline(payload: T = this.current): void {
-    const snapshot = createJsonSnapshot(payload);
-    this.#savedBaselineKey = jsonSnapshotKey(snapshot);
+  updateBaseline(payload?: T): void {
+    if (arguments.length === 0) {
+      this.#savedBaselineKey = this.#versions[this.#position]!.key;
+      return;
+    }
+
+    const snapshot = structuredClone(payload as T);
+    this.#savedBaselineKey = this.#getContentKey(snapshot);
   }
 
   #makeVersion(payload: T): Version<T> {
-    const snapshot = createJsonSnapshot(payload);
-    return Object.freeze({ payload: snapshot, key: jsonSnapshotKey(snapshot) });
+    const snapshot = structuredClone(payload);
+    return Object.freeze({ payload: snapshot, key: this.#getContentKey(snapshot) });
+  }
+
+  #getContentKey(payload: T): string {
+    const key = this.#contentKey(structuredClone(payload));
+    if (typeof key !== "string") {
+      throw new TypeError("contentKey must return a string.");
+    }
+    return key;
   }
 }
