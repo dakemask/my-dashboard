@@ -35,6 +35,11 @@ interface SyncCoordinatorOptions<T, E> {
   createUuid?: () => string;
 }
 
+interface ObservedRemoteVersion {
+  readonly revision: string | null;
+  readonly updatedAt: string | null;
+}
+
 export class SyncCoordinator<T, E> {
   readonly #definition: ModuleDefinition<T, E>;
   readonly #localStore: ModuleLocalStore<T>;
@@ -75,16 +80,28 @@ export class SyncCoordinator<T, E> {
         initialized: false,
         sessionDirty: false,
         localChangedSinceSync: false,
+        localSavedAt: null,
+        knownRemoteRevision: null,
+        knownRemoteUpdatedAt: null,
         lastSyncedRemoteRevision: null,
         pendingUpload: null,
         conflict: null,
       };
     }
 
+    const knownRemoteRevision = this.#local.conflict
+      ? this.#local.conflict.observedRemoteRevision
+      : this.#local.lastSyncedRemoteRevision;
+    const knownRemoteUpdatedAt = this.#local.conflict
+      ? this.#local.conflict.observedRemoteUpdatedAt
+      : this.#local.lastSyncedRemoteUpdatedAt;
     return {
       initialized: true,
       sessionDirty: this.#history.dirty,
       localChangedSinceSync: this.#local.contentHash !== this.#local.lastSyncedContentHash,
+      localSavedAt: this.#local.localSavedAt,
+      knownRemoteRevision,
+      knownRemoteUpdatedAt,
       lastSyncedRemoteRevision: this.#local.lastSyncedRemoteRevision,
       pendingUpload: structuredClone(this.#local.pendingUpload),
       conflict: structuredClone(this.#local.conflict),
@@ -110,8 +127,10 @@ export class SyncCoordinator<T, E> {
         const contentHash = await this.#hashPayload(payload);
         const initial = {
           ...createModuleLocalEnvelope(payload, contentHash),
+          localSavedAt: this.#now().toISOString(),
           lastSyncedContentHash: contentHash,
           lastSyncedRemoteRevision: remote?.revision ?? null,
+          lastSyncedRemoteUpdatedAt: remote?.updatedAt ?? null,
         };
         return this.#localStore.initialize(initial);
       });
@@ -187,11 +206,13 @@ export class SyncCoordinator<T, E> {
 
       if ((observed?.revision ?? null) !== this.#local!.lastSyncedRemoteRevision) {
         if (this.#hasLocalChanges()) {
-          await this.#recordConflict(observed?.revision ?? null);
+          await this.#recordConflict(toObservedRemoteVersion(observed));
           throw new SyncConflictPendingError(observed?.revision ?? null);
         }
         return this.#pullInsideGate();
       }
+
+      await this.#backfillSyncedRemoteUpdatedAt(observed);
 
       if (this.#local!.contentHash === this.#local!.lastSyncedContentHash) {
         return "unchanged";
@@ -219,12 +240,13 @@ export class SyncCoordinator<T, E> {
       }
 
       if ((remote?.revision ?? null) === this.#local!.lastSyncedRemoteRevision) {
+        await this.#backfillSyncedRemoteUpdatedAt(remote);
         return "unchanged";
       }
 
       await this.#settleAndDispatch("pull");
       if (this.#hasLocalChanges()) {
-        await this.#recordConflict(remote?.revision ?? null);
+        await this.#recordConflict(toObservedRemoteVersion(remote));
         return "conflict";
       }
       return this.#pullInsideGate();
@@ -246,23 +268,35 @@ export class SyncCoordinator<T, E> {
     });
   }
 
-  async handleObservedRemoteRevision(remoteRevision: string | null): Promise<SyncActionResult> {
+  async handleObservedRemoteRevision(
+    observed: RemoteRevisionSnapshot | null,
+  ): Promise<SyncActionResult> {
     this.#assertInitialized();
     if (this.#operationGate.busy) {
       return "busy";
     }
 
+    const remoteRevision = observed?.revision ?? null;
     if (this.#local!.pendingUpload?.nextRemoteRevision === remoteRevision) {
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
-        await this.#confirmPendingUpload(remoteRevision);
+        await this.#confirmPendingUpload(toObservedRemoteVersion(observed));
         return "uploaded";
       });
     }
 
     if (this.#local!.conflict) {
-      if (this.#local!.conflict.observedRemoteRevision !== remoteRevision) {
+      const remoteVersion = toObservedRemoteVersion(observed);
+      const revisionChanged = this.#local!.conflict.observedRemoteRevision !== remoteVersion.revision;
+      if (
+        revisionChanged
+        || (
+          remoteVersion.updatedAt !== null
+          && this.#local!.conflict.observedRemoteUpdatedAt !== remoteVersion.updatedAt
+        )
+      ) {
+        if (revisionChanged) await this.#settleAndDispatch("remote-change");
         return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
-          await this.#recordConflict(remoteRevision);
+          await this.#recordConflict(remoteVersion);
           return "conflict";
         });
       }
@@ -270,13 +304,19 @@ export class SyncCoordinator<T, E> {
     }
 
     if (remoteRevision === this.#local!.lastSyncedRemoteRevision) {
+      if (this.#needsSyncedRemoteTimestampBackfill(observed)) {
+        return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
+          await this.#backfillSyncedRemoteUpdatedAt(observed);
+          return "unchanged";
+        });
+      }
       return "unchanged";
     }
 
     await this.#settleAndDispatch("remote-change");
     if (this.#hasLocalChanges()) {
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
-        await this.#recordConflict(remoteRevision);
+        await this.#recordConflict(toObservedRemoteVersion(observed));
         return "conflict";
       });
     }
@@ -300,6 +340,7 @@ export class SyncCoordinator<T, E> {
       payload,
       contentHash,
       localRevision: nextLocalRevision,
+      localSavedAt: this.#now().toISOString(),
     }));
     this.history.updateBaseline(payload);
     return "saved";
@@ -331,11 +372,14 @@ export class SyncCoordinator<T, E> {
             updatedAt: pending.updatedAt,
           });
 
-      await this.#confirmPendingUpload(result.revision);
+      await this.#confirmPendingUpload(toObservedRemoteVersion(result));
       return "uploaded";
     } catch (error) {
       if (error instanceof RemoteModuleConflictError) {
-        await this.#recordConflict(error.actualRevision);
+        await this.#recordConflict({
+          revision: error.actualRevision,
+          updatedAt: error.actualUpdatedAt,
+        });
         throw new SyncConflictPendingError(error.actualRevision);
       }
       throw error;
@@ -351,12 +395,12 @@ export class SyncCoordinator<T, E> {
     }
 
     if (observed?.revision === pending.nextRemoteRevision) {
-      await this.#confirmPendingUpload(observed.revision);
+      await this.#confirmPendingUpload(toObservedRemoteVersion(observed));
       return observed;
     }
 
     if ((observed?.revision ?? null) !== this.#local!.lastSyncedRemoteRevision) {
-      await this.#recordConflict(observed?.revision ?? null);
+      await this.#recordConflict(toObservedRemoteVersion(observed));
       throw new SyncConflictPendingError(observed?.revision ?? null);
     }
 
@@ -370,7 +414,7 @@ export class SyncCoordinator<T, E> {
     return observed;
   }
 
-  async #confirmPendingUpload(remoteRevision: string): Promise<void> {
+  async #confirmPendingUpload(remote: ObservedRemoteVersion): Promise<void> {
     const pending = this.#local!.pendingUpload;
     if (!pending) {
       return;
@@ -380,7 +424,8 @@ export class SyncCoordinator<T, E> {
       ...local,
       localRevision: nextLocalRevision,
       lastSyncedContentHash: pending.contentHash,
-      lastSyncedRemoteRevision: remoteRevision,
+      lastSyncedRemoteRevision: remote.revision,
+      lastSyncedRemoteUpdatedAt: remote.updatedAt ?? pending.updatedAt,
       pendingUpload: null,
       conflict: null,
     }));
@@ -394,8 +439,10 @@ export class SyncCoordinator<T, E> {
       payload,
       contentHash,
       localRevision: nextLocalRevision,
+      localSavedAt: this.#now().toISOString(),
       lastSyncedContentHash: contentHash,
       lastSyncedRemoteRevision: remote?.revision ?? null,
+      lastSyncedRemoteUpdatedAt: remote?.updatedAt ?? null,
       pendingUpload: null,
       conflict: null,
     }));
@@ -404,14 +451,27 @@ export class SyncCoordinator<T, E> {
     return "reloaded";
   }
 
-  async #recordConflict(remoteRevision: string | null): Promise<PersistedConflict> {
+  async #recordConflict(remote: ObservedRemoteVersion): Promise<PersistedConflict> {
     const existing = this.#local!.conflict;
-    if (existing?.observedRemoteRevision === remoteRevision) {
-      return existing;
+    if (existing?.observedRemoteRevision === remote.revision) {
+      const observedRemoteUpdatedAt = remote.updatedAt ?? existing.observedRemoteUpdatedAt;
+      if (existing.observedRemoteUpdatedAt === observedRemoteUpdatedAt) {
+        return existing;
+      }
+
+      const updatedConflict = { ...existing, observedRemoteUpdatedAt };
+      await this.#writeLocal((local, nextLocalRevision) => ({
+        ...local,
+        localRevision: nextLocalRevision,
+        conflict: updatedConflict,
+      }));
+      this.#hooks.onConflict?.(structuredClone(updatedConflict));
+      return updatedConflict;
     }
 
     const conflict: PersistedConflict = {
-      observedRemoteRevision: remoteRevision,
+      observedRemoteRevision: remote.revision,
+      observedRemoteUpdatedAt: remote.updatedAt,
       detectedAt: this.#now().toISOString(),
     };
     const payload = this.history.current;
@@ -421,11 +481,32 @@ export class SyncCoordinator<T, E> {
       payload,
       contentHash,
       localRevision: nextLocalRevision,
+      localSavedAt: this.#now().toISOString(),
       conflict,
     }));
     this.history.updateBaseline(payload);
-    this.#hooks.onConflict?.(conflict);
+    this.#hooks.onConflict?.(structuredClone(conflict));
     return conflict;
+  }
+
+  #needsSyncedRemoteTimestampBackfill(observed: RemoteRevisionSnapshot | null): boolean {
+    return observed !== null
+      && observed.revision === this.#local!.lastSyncedRemoteRevision
+      && observed.updatedAt !== this.#local!.lastSyncedRemoteUpdatedAt;
+  }
+
+  async #backfillSyncedRemoteUpdatedAt(
+    observed: RemoteRevisionSnapshot | null,
+  ): Promise<void> {
+    if (!this.#needsSyncedRemoteTimestampBackfill(observed)) {
+      return;
+    }
+
+    await this.#writeLocal((local, nextLocalRevision) => ({
+      ...local,
+      localRevision: nextLocalRevision,
+      lastSyncedRemoteUpdatedAt: observed!.updatedAt,
+    }));
   }
 
   async #writeLocal(
@@ -472,4 +553,13 @@ export class SyncCoordinator<T, E> {
       throw new SyncCoordinatorNotInitializedError();
     }
   }
+}
+
+function toObservedRemoteVersion(
+  snapshot: Pick<RemoteRevisionSnapshot, "revision" | "updatedAt"> | null,
+): ObservedRemoteVersion {
+  return {
+    revision: snapshot?.revision ?? null,
+    updatedAt: snapshot?.updatedAt ?? null,
+  };
 }

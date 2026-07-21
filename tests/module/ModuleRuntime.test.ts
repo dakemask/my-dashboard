@@ -318,6 +318,56 @@ describe("ModuleRuntime", () => {
     await result.runtime.dispose();
   });
 
+  it("reports snapshots across runtime commands, isolates observer errors, and stops after dispose", async () => {
+    const onSnapshotChange = vi.fn(() => {
+      throw new Error("observer failed");
+    });
+    const result = await startModuleRuntime(
+      {
+        definition: definition("snapshot-hook-test"),
+        appRoot: createRoot(),
+        hooks: {
+          settle: () => null,
+          project: () => undefined,
+          onSnapshotChange,
+        },
+      },
+      createEnvironment(new FakeAuthService(), new EmptyGitHub(), new FakeLockManager(), {
+        now: () => new Date("2026-07-13T01:02:03.000Z"),
+      }),
+    );
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+
+    expect(onSnapshotChange).toHaveBeenCalledTimes(1);
+    expect(onSnapshotChange.mock.calls[0]?.[0]).toMatchObject({
+      initialized: true,
+      sessionDirty: false,
+      localSavedAt: "2026-07-13T01:02:03.000Z",
+      knownRemoteRevision: null,
+      knownRemoteUpdatedAt: null,
+    });
+
+    expect(() => result.runtime.dispatch(setValue("B"))).not.toThrow();
+    expect(onSnapshotChange).toHaveBeenCalledTimes(2);
+    expect(onSnapshotChange.mock.calls[1]?.[0]).toMatchObject({ sessionDirty: true });
+    await expect(result.runtime.undo()).resolves.toEqual({ value: "A" });
+    expect(onSnapshotChange).toHaveBeenCalledTimes(3);
+    result.runtime.dispatch(setValue("C"));
+    await expect(result.runtime.save()).resolves.toBe("saved");
+    expect(onSnapshotChange).toHaveBeenCalledTimes(5);
+    expect(onSnapshotChange.mock.calls[4]?.[0]).toMatchObject({
+      sessionDirty: false,
+      localChangedSinceSync: true,
+      localSavedAt: "2026-07-13T01:02:03.000Z",
+    });
+
+    await result.runtime.dispose();
+    expect(() => result.runtime.dispatch(setValue("D"))).toThrow();
+    expect(() => result.runtime.save()).toThrow();
+    expect(onSnapshotChange).toHaveBeenCalledTimes(5);
+  });
+
   it("automatically uses the shared cloud spinner and overlay", async () => {
     const auth = new FakeAuthService();
     const github = new EmptyGitHub();
@@ -444,11 +494,16 @@ describe("ModuleRuntime", () => {
     const auth = new FakeAuthService();
     const github = new EmptyGitHub();
     const timers = new ManualTimerWindow(window);
+    const onSnapshotChange = vi.fn();
     const result = await startModuleRuntime(
       {
         definition: definition("automatic-poll-test"),
         appRoot: createRoot(),
-        hooks: { settle: () => null, project: () => undefined },
+        hooks: {
+          settle: () => null,
+          project: () => undefined,
+          onSnapshotChange,
+        },
       },
       createEnvironment(auth, github, new FakeLockManager(), {
         autoStartPolling: true,
@@ -459,17 +514,21 @@ describe("ModuleRuntime", () => {
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
     expect(github.fetch).toHaveBeenCalledTimes(3);
+    expect(onSnapshotChange).toHaveBeenCalledTimes(1);
     expect(timers.nextDelay).toBe(0);
 
     timers.runNext();
     await vi.waitFor(() => expect(github.fetch).toHaveBeenCalledTimes(6));
+    await vi.waitFor(() => expect(onSnapshotChange).toHaveBeenCalledTimes(2));
     expect(timers.nextDelay).toBe(60_000);
     timers.runNext();
     await vi.waitFor(() => expect(github.fetch).toHaveBeenCalledTimes(9));
+    await vi.waitFor(() => expect(onSnapshotChange).toHaveBeenCalledTimes(3));
 
     await result.runtime.dispose();
     expect(timers.size).toBe(0);
     expect(github.fetch).toHaveBeenCalledTimes(9);
+    expect(onSnapshotChange).toHaveBeenCalledTimes(3);
   });
 
   it("invalidates authentication when an automatic poll receives a 401", async () => {

@@ -1,3 +1,5 @@
+import type { RemoteRevisionSnapshot } from "../github";
+
 export interface RevisionPoller {
   start(options?: { immediate?: boolean }): void;
   stop(): Promise<void>;
@@ -5,8 +7,8 @@ export interface RevisionPoller {
 }
 
 interface RevisionPollerOptions {
-  readRevision: (signal: AbortSignal) => Promise<string | null>;
-  onRevision: (revision: string | null) => Promise<void> | void;
+  readRevision: (signal: AbortSignal) => Promise<RemoteRevisionSnapshot | null>;
+  onRevision: (revision: RemoteRevisionSnapshot | null) => Promise<void> | void;
   onAuthenticationError?: (error: unknown) => void;
   isAuthenticationError?: (error: unknown) => boolean;
   document?: Document;

@@ -145,6 +145,7 @@ describe("RemoteModuleRepository", () => {
     )).rejects.toEqual(expect.objectContaining<Partial<RemoteModuleConflictError>>({
       expectedRevision: "stale-r1",
       actualRevision: "cloud-r2",
+      actualUpdatedAt: "2026-07-10T09:00:00.000Z",
     }));
     expect(github.writeCount).toBe(writesBefore);
   });

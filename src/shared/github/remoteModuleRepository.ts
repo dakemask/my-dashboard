@@ -125,7 +125,11 @@ export class RemoteModuleRepository<T> {
       }
 
       if (actualRevision !== options.expectedRevision) {
-        throw new RemoteModuleConflictError(options.expectedRevision, actualRevision);
+        throw new RemoteModuleConflictError(
+          options.expectedRevision,
+          actualRevision,
+          head.revision?.updatedAt ?? null,
+        );
       }
 
       this.#assertUnknownFilesArePreserved(head, desiredFiles, head.revision?.managedFiles ?? []);
@@ -191,7 +195,11 @@ export class RemoteModuleRepository<T> {
     }
 
     if (actualRevision !== options.expectedRevision) {
-      throw new RemoteModuleConflictError(options.expectedRevision, actualRevision);
+      throw new RemoteModuleConflictError(
+        options.expectedRevision,
+        actualRevision,
+        latest.revision?.updatedAt ?? null,
+      );
     }
 
     if (retryCount >= this.#maxRefRetries) {

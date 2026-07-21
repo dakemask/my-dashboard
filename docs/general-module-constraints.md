@@ -70,7 +70,7 @@ payload 表示模块的一份完整业务数据，不是 JSON 的同义词。它
 
 `Map`、`Set`、`Date`、`ArrayBuffer`、类型化数组和循环引用等非 JSON 值都可以成为 payload，只要模块能稳定校验、比较和编码。函数、DOM 引用、`WeakMap` 等不能可靠持久化的值不得进入 payload。
 
-当前规划中的 Mind Map 和碎片想法选择 JSON payload；这是模块选择，不是 Shared 的通用限制。
+新版 Mind Map 选择 JSON payload；这是模块选择，不是 Shared 的通用限制。
 
 ### 3.3 内容标识和远端编码
 
@@ -212,7 +212,39 @@ interface ModuleRuntime<TPayload, TEvent> {
   getSnapshot(): ModuleRuntimeSnapshot;
   dispose(): Promise<void>;
 }
+
+interface ModuleRuntimeSnapshot {
+  initialized: boolean;
+  sessionDirty: boolean;
+  localChangedSinceSync: boolean;
+  localSavedAt: string | null;
+  knownRemoteRevision: string | null;
+  knownRemoteUpdatedAt: string | null;
+  lastSyncedRemoteRevision: string | null;
+  pendingUpload: {
+    localRevision: string;
+    contentHash: string;
+    nextRemoteRevision: string;
+    updatedAt: string;
+  } | null;
+  conflict: PersistedConflict | null;
+}
+
+interface ModuleRuntimeHooks<TPayload, TEvent> {
+  settle(reason: SettleReason): TEvent | null | Promise<TEvent | null>;
+  project(payload: TPayload, reason: ProjectionReason): void;
+  onConflict?(conflict: PersistedConflict): void;
+  onSnapshotChange?(snapshot: ModuleRuntimeSnapshot): void;
+}
+
+interface PersistedConflict {
+  observedRemoteRevision: string | null;
+  observedRemoteUpdatedAt: string | null;
+  detectedAt: string;
+}
 ```
+
+`localSavedAt` 是当前完整 payload 最近一次成功落到本机的 ISO 时间；`knownRemoteRevision` 与 `knownRemoteUpdatedAt` 是 runtime 当前所知的云端版本及其 ISO 时间。未知值为 `null`。模块可用 `getSnapshot()` 主动读取，也可用可选的 `onSnapshotChange` 更新状态 UI；该观察回调不属于命令事务，回调抛错不得回滚或使已经完成的 runtime 操作失败。
 
 `capacity` 的 `number` 在运行时必须是正整数。模块不得直接依赖 `StagingHistory`、`ModuleLocalStore`、`GitHubGitDataClient`、`RemoteModuleRepository`、`SyncCoordinator`、`OperationGate` 或 `ModuleEditorLease`。这些是 Shared 内部零件，不是模块 API。
 
@@ -242,6 +274,7 @@ interface ModuleRuntime<TPayload, TEvent> {
 - `settle` 覆盖模块在六种 reason 下可能存在的实时交互，并返回 event 或 `null`。
 - `project` 会重置模块实时交互状态。
 - 保存、上传、拉取和两个冲突方向均通过 runtime 调用。
+- 需要版本/状态 UI 时只读取 runtime snapshot；`onSnapshotChange` 只观察，不参与命令成败。
 - 模块需要的按钮、菜单或快捷键由模块绑定到 runtime 方法，并在卸载时清理。
 - 模块没有自己的 token、IndexedDB、GitHub、轮询、锁或 spinner 实现。
 - 页面销毁时调用 `runtime.dispose()`；正常页面关闭由 SDK 自动处理。

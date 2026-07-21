@@ -5,6 +5,7 @@ import {
   GitHubGitDataClient,
   RemoteModuleRepository,
   type GitHubFetch,
+  type RemoteRevisionSnapshot,
 } from "../github";
 import { ModuleLocalStore, type PersistedConflict } from "../persistence";
 import {
@@ -33,6 +34,8 @@ export interface ModuleRuntimeHooks<TPayload, TEvent> {
   /** Rebuilds the module UI after initialization, undo, or redo. */
   project(payload: TPayload, reason: ProjectionReason): void;
   onConflict?(conflict: PersistedConflict): void;
+  /** Observes runtime status without becoming part of command execution. */
+  onSnapshotChange?(snapshot: SyncCoordinatorSnapshot): void;
 }
 
 export interface StartModuleRuntimeOptions<TPayload, TEvent> {
@@ -112,15 +115,18 @@ class DefaultModuleRuntime<TPayload, TEvent>
   #commandTail: Promise<void> = Promise.resolve();
   #queuedCommands = 0;
   #disposePromise: Promise<void> | null = null;
+  readonly #onSnapshotChange: ((snapshot: SyncCoordinatorSnapshot) => void) | null;
 
   constructor(
     coordinator: SyncCoordinator<TPayload, TEvent>,
     operationGate: OperationGate,
     lease: ModuleEditorLease,
+    onSnapshotChange?: (snapshot: SyncCoordinatorSnapshot) => void,
   ) {
     this.#coordinator = coordinator;
     this.#operationGate = operationGate;
     this.#lease = lease;
+    this.#onSnapshotChange = onSnapshotChange ?? null;
   }
 
   get state(): ModuleRuntimeState {
@@ -148,6 +154,7 @@ class DefaultModuleRuntime<TPayload, TEvent>
       throw new ModuleRuntimeUnavailableError(this.#state);
     }
     this.#state = "ready";
+    this.#notifySnapshotChange();
   }
 
   attachLifecycle(options: {
@@ -165,7 +172,9 @@ class DefaultModuleRuntime<TPayload, TEvent>
     if (this.#queuedCommands > 0 || this.#operationGate!.busy) {
       throw new ModuleRuntimeBusyError();
     }
-    return coordinator.dispatch(event);
+    const payload = coordinator.dispatch(event);
+    this.#notifySnapshotChange();
+    return payload;
   }
 
   undo(): Promise<TPayload> {
@@ -199,7 +208,9 @@ class DefaultModuleRuntime<TPayload, TEvent>
     return this.#poller?.pollNow() ?? Promise.resolve();
   }
 
-  observeRemoteRevision(revision: string | null): Promise<SyncActionResult> {
+  observeRemoteRevision(
+    revision: RemoteRevisionSnapshot | null,
+  ): Promise<SyncActionResult> {
     return this.#enqueue((coordinator) => coordinator.handleObservedRemoteRevision(revision));
   }
 
@@ -262,6 +273,7 @@ class DefaultModuleRuntime<TPayload, TEvent>
         return await operation(coordinator);
       } finally {
         this.#queuedCommands -= 1;
+        this.#notifySnapshotChange();
       }
     };
     const result = this.#commandTail.then(execute, execute);
@@ -277,6 +289,22 @@ class DefaultModuleRuntime<TPayload, TEvent>
       throw new ModuleRuntimeUnavailableError(this.#state);
     }
     return this.#coordinator;
+  }
+
+  #notifySnapshotChange(): void {
+    if (
+      this.#state !== "ready"
+      || !this.#coordinator
+      || !this.#onSnapshotChange
+    ) {
+      return;
+    }
+
+    try {
+      this.#onSnapshotChange(this.#coordinator.getSnapshot());
+    } catch {
+      // Status observers cannot roll back or fail a completed runtime command.
+    }
   }
 }
 
@@ -380,6 +408,7 @@ export async function startModuleRuntime<TPayload, TEvent>(
       coordinator,
       operationGate,
       lease,
+      options.hooks.onSnapshotChange,
     );
     runtime = createdRuntime;
 
@@ -390,7 +419,7 @@ export async function startModuleRuntime<TPayload, TEvent>(
       document: pageDocument,
       window: pageWindow,
       random: environment.random,
-      readRevision: async (signal) => (await repository.readRevision(signal))?.revision ?? null,
+      readRevision: (signal) => repository.readRevision(signal),
       onRevision: async (revision) => {
         await createdRuntime.observeRemoteRevision(revision);
       },

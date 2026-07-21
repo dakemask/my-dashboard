@@ -47,6 +47,9 @@ export interface SyncCoordinatorSnapshot {
   initialized: boolean;
   sessionDirty: boolean;
   localChangedSinceSync: boolean;
+  localSavedAt: string | null;
+  knownRemoteRevision: string | null;
+  knownRemoteUpdatedAt: string | null;
   lastSyncedRemoteRevision: string | null;
   pendingUpload: PendingUpload | null;
   conflict: PersistedConflict | null;

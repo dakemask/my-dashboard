@@ -20,8 +20,10 @@ function envelope(
     payload: { value },
     contentHash: `hash-${value}`,
     localRevision,
+    localSavedAt: null,
     lastSyncedContentHash: null,
     lastSyncedRemoteRevision: null,
+    lastSyncedRemoteUpdatedAt: null,
     pendingUpload: null,
     conflict: null,
     ...overrides,
@@ -67,8 +69,10 @@ describe("ModuleLocalStore", () => {
       payload,
       contentHash: "rich-hash",
       localRevision: "00000000-0000-4000-8000-000000000010",
+      localSavedAt: null,
       lastSyncedContentHash: null,
       lastSyncedRemoteRevision: null,
+      lastSyncedRemoteUpdatedAt: null,
       pendingUpload: null,
       conflict: null,
     };
@@ -89,8 +93,10 @@ describe("ModuleLocalStore", () => {
     await store.initialize(envelope("A", firstRevision));
 
     const next = envelope("B", secondRevision, {
+      localSavedAt: "2026-07-10T08:59:00.000Z",
       lastSyncedContentHash: "hash-A",
       lastSyncedRemoteRevision: "10000000-0000-4000-8000-000000000001",
+      lastSyncedRemoteUpdatedAt: "2026-07-10T08:58:00.000Z",
       pendingUpload: {
         localRevision: secondRevision,
         contentHash: "hash-B",
@@ -99,6 +105,7 @@ describe("ModuleLocalStore", () => {
       },
       conflict: {
         observedRemoteRevision: "30000000-0000-4000-8000-000000000001",
+        observedRemoteUpdatedAt: "2026-07-10T09:00:30.000Z",
         detectedAt: "2026-07-10T09:01:00.000Z",
       },
     });
@@ -161,6 +168,7 @@ describe("ModuleLocalStore", () => {
       },
       conflict: {
         observedRemoteRevision: null,
+        observedRemoteUpdatedAt: null,
         detectedAt: "2026-07-10T09:01:00.000Z",
       },
     });
@@ -174,5 +182,38 @@ describe("ModuleLocalStore", () => {
       indexedDB: factory,
     });
     expect(await afterRefresh.load()).toEqual(stored);
+  });
+
+  it("normalizes timestamp fields missing from a version-one record without upgrading the database", async () => {
+    const store = new ModuleLocalStore<Payload>("legacy-timestamps", {
+      indexedDB: factory,
+    });
+    const legacy = {
+      payload: { value: "legacy" },
+      contentHash: "hash-legacy",
+      localRevision: "00000000-0000-4000-8000-000000000020",
+      lastSyncedContentHash: "hash-legacy",
+      lastSyncedRemoteRevision: "10000000-0000-4000-8000-000000000020",
+      pendingUpload: null,
+      conflict: {
+        observedRemoteRevision: "20000000-0000-4000-8000-000000000020",
+        detectedAt: "2026-07-09T00:00:00.000Z",
+      },
+    } as unknown as ModuleLocalEnvelope<Payload>;
+
+    await store.initialize(legacy);
+
+    await expect(store.load()).resolves.toMatchObject({
+      localSavedAt: null,
+      lastSyncedRemoteUpdatedAt: null,
+      conflict: { observedRemoteUpdatedAt: null },
+    });
+    const openRequest = factory.open(store.databaseName);
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      openRequest.addEventListener("success", () => resolve(openRequest.result), { once: true });
+      openRequest.addEventListener("error", () => reject(openRequest.error), { once: true });
+    });
+    expect(database.version).toBe(1);
+    database.close();
   });
 });

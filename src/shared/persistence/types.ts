@@ -7,6 +7,7 @@ export interface PendingUpload {
 
 export interface PersistedConflict {
   readonly observedRemoteRevision: string | null;
+  readonly observedRemoteUpdatedAt: string | null;
   readonly detectedAt: string;
 }
 
@@ -15,8 +16,10 @@ export interface ModuleLocalEnvelope<T> {
   readonly payload: T;
   readonly contentHash: string;
   readonly localRevision: string;
+  readonly localSavedAt: string | null;
   readonly lastSyncedContentHash: string | null;
   readonly lastSyncedRemoteRevision: string | null;
+  readonly lastSyncedRemoteUpdatedAt: string | null;
   readonly pendingUpload: PendingUpload | null;
   readonly conflict: PersistedConflict | null;
 }
@@ -39,8 +42,10 @@ export function createModuleLocalEnvelope<T>(
     payload,
     contentHash,
     localRevision,
+    localSavedAt: null,
     lastSyncedContentHash: null,
     lastSyncedRemoteRevision: null,
+    lastSyncedRemoteUpdatedAt: null,
     pendingUpload: null,
     conflict: null,
   };

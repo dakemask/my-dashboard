@@ -132,6 +132,8 @@ runtime 的 undo、redo、save、upload、pull、冲突解决和轮询产生的�
 
 `dispose()` 是幂等、one-shot 的：先把状态设为 disposing，再停止新命令、停止并等待 poller、等待命令尾和 gate、关闭 coordinator/store、释放 lease，最后清空内部引用并进入 disposed。
 
+runtime 在进入 ready 后先调用一次可选的 `onSnapshotChange`；同步 `dispatch` 完成后以及命令尾中的 undo、redo、save、upload、pull、冲突解决和轮询观察处理结束后再次提供 coordinator 最新 snapshot。通知发生在业务/持久化状态已经完成推进或失败保持原状之后，不能成为事务的一部分。runtime 必须捕获观察者异常，使其不能回滚、覆盖或改写原命令结果；disposing/disposed 后不得继续通知。snapshot 中的 `pendingUpload` 和 `conflict` 必须 clone。
+
 401 回调可能发生在当前 gate 命令内部，因此只能异步触发 dispose，不能在 GitHub 请求栈中同步等待自身命令。
 
 正常页面关闭由 `pagehide` 自动调用 dispose。单页应用卸载模块时，宿主先移除业务模块自己的监听，再显式调用 dispose。
@@ -233,12 +235,14 @@ event 队列从不写入 IndexedDB、GitHub、localStorage 或同步元数据。
 每模块一个数据库、一个完整记录：
 
 ```ts
-interface ModuleRecord<TPayload> {
+interface ModuleLocalEnvelope<TPayload> {
   payload: TPayload;
   contentHash: string;
   localRevision: string;
+  localSavedAt: string | null;
   lastSyncedContentHash: string | null;
   lastSyncedRemoteRevision: string | null;
+  lastSyncedRemoteUpdatedAt: string | null;
   pendingUpload: {
     localRevision: string;
     contentHash: string;
@@ -247,6 +251,7 @@ interface ModuleRecord<TPayload> {
   } | null;
   conflict: {
     observedRemoteRevision: string | null;
+    observedRemoteUpdatedAt: string | null;
     detectedAt: string;
   } | null;
 }
@@ -257,6 +262,8 @@ interface ModuleRecord<TPayload> {
 CAS 的输入和返回值都必须 clone，公共 snapshot 中的 pending/conflict 也必须 clone，防止 readonly 类型之外的运行时别名修改。
 
 event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保存。
+
+数据库版本仍固定为 1，不为显示时间升级 schema。旧记录在读取边界把缺少的 `localSavedAt`、`lastSyncedRemoteUpdatedAt` 和 `conflict.observedRemoteUpdatedAt` 规范化为 `null`；随后任一次整记录 CAS 会自然写入新形态。`localSavedAt` 只描述当前完整 payload 最近一次成功落盘的时间，不是每次元数据 CAS 的时间：创建初始记录、用户保存、云端拉取和首次持久化某个新冲突会推进它；pending 写入、上传确认和仅补齐远端时间不会推进它。
 
 ## 10. OperationGate、公共 UI 和编辑锁
 
@@ -312,6 +319,8 @@ event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保�
 
 网络结果不确定时保留 pending revision。`local-wins` 也只能基于最新头创建一个新 commit，不能 force 更新。
 
+`pendingUpload.updatedAt` 同时写入新 `revision.json`。上传确认使用仓库实际返回/轮询观察到的 `updatedAt`；响应丢失而只确认到相同 pending revision 时，如果远端没有提供时间，才回退到 pending 时间。确认事务一起推进 `lastSyncedRemoteRevision` 与 `lastSyncedRemoteUpdatedAt`。同 revision 的后续完整观察可只用一次本地 CAS 补齐旧记录中缺少的远端时间。
+
 ## 12. SyncCoordinator 状态机
 
 状态判断使用：
@@ -326,6 +335,14 @@ event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保�
 | 是 | 否 | cloud gate 拉取、原子替换 IndexedDB、reload |
 | 是 | 是 | CAS 持久化 conflict |
 
+公共 `SyncCoordinatorSnapshot` 的时间/版本投影固定为：
+
+- `localSavedAt` 直接来自本地 envelope；
+- 没有冲突时，`knownRemoteRevision` / `knownRemoteUpdatedAt` 来自最近同步的 revision / updatedAt；
+- 有冲突时，两者改为 conflict 观察到的 revision / updatedAt；
+- `lastSyncedRemoteRevision` 始终保留真正同步基线，不能被冲突观察推进；
+- 尚未见过时间或读取旧记录时返回 `null`，不得用客户端当前时间伪造云端时间。
+
 普通 pull 必须先 reconciliation pending upload，再比较远端 baseline；“云端未变、本地已变”不得制造假冲突。
 
 冲突存在时允许继续本地 dispatch/save，但 upload 或主动 pull 前必须显式 resolve：
@@ -333,7 +350,7 @@ event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保�
 - local-wins：结算并保存当前完整 payload，再 overwrite 当前模块；
 - cloud-wins：拉取最新完整模块，清空 pending/conflict，写入本地并 reload。
 
-`#recordConflict(remoteRevision)` 不能只写 conflict 标记。它必须读取 `history.current` 并计算 content hash，在**同一次 IndexedDB compare-and-swap** 中写入当前完整 payload、content hash、新 local revision 和 conflict；只有 CAS 成功后才能调用 `history.updateBaseline(payload)` 和 `onConflict`。这保证由 `pull`/`remote-change` settle event 产生的本地一侧跨刷新仍存在。该写入不得推进 `lastSyncedContentHash` 或 `lastSyncedRemoteRevision`：history dirty 可因成为本地已保存基线而变为 false，但 local-changed-since-sync 仍必须为 true。
+`#recordConflict(remoteVersion)` 不能只写 conflict 标记。它必须读取 `history.current` 并计算 content hash，在**同一次 IndexedDB compare-and-swap** 中写入当前完整 payload、content hash、新 local revision、`localSavedAt` 和含 revision/updatedAt 的 conflict；只有 CAS 成功后才能调用 `history.updateBaseline(payload)` 和 `onConflict`。这保证由 `pull`/`remote-change` settle event 产生的本地一侧跨刷新仍存在。该写入不得推进 `lastSyncedContentHash`、`lastSyncedRemoteRevision` 或 `lastSyncedRemoteUpdatedAt`：history dirty 可因成为本地已保存基线而变为 false，但 local-changed-since-sync 仍必须为 true。同一冲突 revision 后来取得非 null `updatedAt` 时，只补齐 conflict 时间并保留原 `detectedAt`。
 
 所有传给远端 port 的 payload 都必须 clone；所有传给模块 hooks 的 payload/conflict 也必须隔离。业务 event 不进入远端 port。
 
@@ -347,6 +364,8 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 - online 立即安排一次。
 
 普通网络失败静默等待下一轮。GitHub client 的 401 回调负责认证失效。
+
+poller 的一次观察必须完整传递 `RemoteRevisionSnapshot | null`，不能为了去重只传 revision 字符串；coordinator 同时需要 `revision` 与 `updatedAt` 来推进已知云端时间、补齐旧基线以及持久化冲突时间。同 revision 但时间从未知变为已知也属于有意义的观察。
 
 `stop()` 必须 abort 当前 signal、等待 in-flight 结束，并在停止后禁止调用 `onRevision` 或认证回调。`RemoteModuleRepository.readRevision(signal)` 和 GitHub branch/blob 读取必须贯通 AbortSignal，避免 runtime dispose 后继续写已关闭 store。
 
@@ -377,6 +396,7 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 - 初始化失败会释放锁并允许重试。
 - 401 会清凭据、等待命令结束、dispose 并返回登录边界。
 - `dispatch(event)` 受 ready/busy 边界保护；异步 undo/redo 经 settle 串行执行。
+- `onSnapshotChange` 在 ready、dispatch、历史/持久化命令和轮询处理后收到隔离快照；观察者抛错不改变命令结果，dispose 后不再通知。
 - 公共 spinner/overlay 由 runtime 自动使用。
 
 ### 15.2 event 历史和持久化
@@ -386,7 +406,7 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 - apply、invert、structuredClone、validate、contentKey 抛错均不推进任何历史状态。
 - JSON 和非 JSON structured-clone payload/event 都有测试。
 - 调用者、contentKey、codec、history 回调、hook 和 snapshot 都不能修改内部引用。
-- event 队列不进入 IndexedDB/GitHub；每模块数据库隔离，CAS 原子，失败不推进，pending/conflict 跨刷新。
+- event 队列不进入 IndexedDB/GitHub；每模块数据库隔离，CAS 原子，失败不推进，pending/conflict 跨刷新；数据库 v1 旧记录的三个时间字段读取为 `null`。
 - 远端冲突会把 settle 后的当前完整 payload、hash 和 conflict 同事务保存，成功后更新本地基线，但不推进同步基线。
 - 六种 settle reason 在相应协调器路径有测试，非 null event 经正常 dispatch 处理。
 
@@ -395,9 +415,10 @@ poller 使用上一次完成后再安排下一次的一次性 timer：
 - 测试全部注入 fake fetch，绝不访问真实 GitHub。
 - 单模块一个 commit、未知文件保留、受管差集删除。
 - 同模块冲突、跨模块三次重试、响应丢失幂等。
+- 保存、拉取、上传确认、冲突、同 revision 时间补齐和响应丢失恢复均按规则推进本地/云端时间。
 - decode 后 validate。
 - 同步四象限、两个显式覆盖方向、普通 pull 不制造假冲突。
-- 前后台轮询、不重叠、stop 等待与失败静默。
+- 前后台轮询、不重叠、完整 revision/updatedAt 传递、stop 等待与失败静默。
 
 ### 15.4 工程
 

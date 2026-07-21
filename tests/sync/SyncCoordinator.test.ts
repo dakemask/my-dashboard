@@ -10,10 +10,14 @@ import {
   type RemoteRevisionSnapshot,
 } from "../../src/shared/github";
 import { jsonContentKey } from "../../src/shared/history";
-import { ModuleLocalStore } from "../../src/shared/persistence";
+import {
+  ModuleLocalStore,
+  createModuleLocalEnvelope,
+} from "../../src/shared/persistence";
 import {
   SyncConflictPendingError,
   SyncCoordinator,
+  hashContentKey,
   type ModuleDefinition,
   type RemoteModulePort,
 } from "../../src/shared/sync";
@@ -32,8 +36,10 @@ const setValue = (value: string): TestEvent => ({ type: "set-value", value });
 class FakeRemote implements RemoteModulePort<TestData> {
   readonly moduleId: string;
   revision: string | null = null;
+  updatedAt = "2026-07-10T00:00:00.000Z";
   data: TestData | null = null;
   loseNextPushResponse = false;
+  raceOnNextPush: RemoteModuleSnapshot<TestData> | null = null;
 
   constructor(moduleId: string) {
     this.moduleId = moduleId;
@@ -51,13 +57,20 @@ class FakeRemote implements RemoteModulePort<TestData> {
   }
 
   async push(data: TestData, options: RemoteModulePushOptions): Promise<RemoteModulePushResult> {
+    if (this.raceOnNextPush) {
+      this.revision = this.raceOnNextPush.revision;
+      this.updatedAt = this.raceOnNextPush.updatedAt;
+      this.data = structuredClone(this.raceOnNextPush.data);
+      this.raceOnNextPush = null;
+    }
     if (this.revision === options.nextRevision) {
       return { ...this.revisionSnapshot(this.revision), status: "already-committed" };
     }
     if (this.revision !== options.expectedRevision) {
-      throw new RemoteModuleConflictError(options.expectedRevision, this.revision);
+      throw new RemoteModuleConflictError(options.expectedRevision, this.revision, this.updatedAt);
     }
     this.revision = options.nextRevision;
+    this.updatedAt = options.updatedAt ?? this.updatedAt;
     this.data = structuredClone(data);
     if (this.loseNextPushResponse) {
       this.loseNextPushResponse = false;
@@ -68,12 +81,18 @@ class FakeRemote implements RemoteModulePort<TestData> {
 
   async overwrite(data: TestData, options: RemoteModuleOverwriteOptions): Promise<RemoteModulePushResult> {
     this.revision = options.nextRevision;
+    this.updatedAt = options.updatedAt ?? this.updatedAt;
     this.data = structuredClone(data);
     return { ...this.revisionSnapshot(this.revision), status: "committed" };
   }
 
   private revisionSnapshot(revision: string): RemoteRevisionSnapshot {
-    return { revision, updatedAt: "2026-07-10T00:00:00.000Z", managedFiles: ["data.json"], commitSha: revision };
+    return {
+      revision,
+      updatedAt: this.updatedAt,
+      managedFiles: ["data.json"],
+      commitSha: revision,
+    };
   }
 }
 
@@ -102,6 +121,7 @@ function createHarness(
   moduleId: string,
   remote = new FakeRemote(moduleId),
   settle: () => TestEvent | null = () => null,
+  now: () => Date = () => new Date("2026-07-10T00:00:00.000Z"),
 ) {
   const indexedDB = new IDBFactory();
   const localStore = new ModuleLocalStore<TestData>(moduleId, { indexedDB });
@@ -114,7 +134,7 @@ function createHarness(
     remoteRepository: remote,
     operationGate: new OperationGate(),
     hooks: { settle, project, reload, onConflict: conflict },
-    now: () => new Date("2026-07-10T00:00:00.000Z"),
+    now,
     createUuid: (() => {
       let id = 0;
       return () => `remote-${++id}`;
@@ -145,20 +165,37 @@ describe("SyncCoordinator", () => {
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       sessionDirty: false,
       localChangedSinceSync: false,
+      localSavedAt: "2026-07-10T00:00:00.000Z",
+      knownRemoteRevision: "cloud-1",
+      knownRemoteUpdatedAt: "2026-07-10T00:00:00.000Z",
       lastSyncedRemoteRevision: "cloud-1",
+    });
+    await expect(harness.localStore.load()).resolves.toMatchObject({
+      localSavedAt: "2026-07-10T00:00:00.000Z",
+      lastSyncedRemoteUpdatedAt: "2026-07-10T00:00:00.000Z",
     });
   });
 
   it("automatically saves a dirty staging payload before upload", async () => {
-    const harness = createHarness("module-upload");
+    let now = "2026-07-10T00:00:00.000Z";
+    const harness = createHarness(
+      "module-upload",
+      undefined,
+      undefined,
+      () => new Date(now),
+    );
     await harness.coordinator.initialize();
     harness.coordinator.dispatch(setValue("local change"));
+    now = "2026-07-10T01:00:00.000Z";
 
     await expect(harness.coordinator.upload()).resolves.toBe("uploaded");
     expect(harness.remote.data).toEqual({ value: "local change" });
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       sessionDirty: false,
       localChangedSinceSync: false,
+      localSavedAt: "2026-07-10T01:00:00.000Z",
+      knownRemoteRevision: "remote-1",
+      knownRemoteUpdatedAt: "2026-07-10T01:00:00.000Z",
       pendingUpload: null,
     });
   });
@@ -201,14 +238,30 @@ describe("SyncCoordinator", () => {
   });
 
   it("persists a conflict when both local and remote changed", async () => {
-    const harness = createHarness("module-conflict");
+    let now = "2026-07-10T00:00:00.000Z";
+    const harness = createHarness(
+      "module-conflict",
+      undefined,
+      undefined,
+      () => new Date(now),
+    );
     await harness.coordinator.initialize();
     harness.coordinator.dispatch(setValue("unsaved local"));
     harness.remote.revision = "cloud-new";
+    harness.remote.updatedAt = "2026-07-10T00:30:00.000Z";
     harness.remote.data = { value: "remote" };
+    now = "2026-07-10T01:00:00.000Z";
 
     await expect(harness.coordinator.upload()).rejects.toBeInstanceOf(SyncConflictPendingError);
-    expect(harness.coordinator.getSnapshot().conflict?.observedRemoteRevision).toBe("cloud-new");
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      localSavedAt: "2026-07-10T01:00:00.000Z",
+      knownRemoteRevision: "cloud-new",
+      knownRemoteUpdatedAt: "2026-07-10T00:30:00.000Z",
+      conflict: {
+        observedRemoteRevision: "cloud-new",
+        observedRemoteUpdatedAt: "2026-07-10T00:30:00.000Z",
+      },
+    });
     expect((await harness.localStore.load())?.conflict?.observedRemoteRevision).toBe("cloud-new");
     expect(harness.conflict).toHaveBeenCalled();
 
@@ -217,6 +270,30 @@ describe("SyncCoordinator", () => {
     };
     exposed.observedRemoteRevision = "tampered";
     expect(harness.coordinator.getSnapshot().conflict?.observedRemoteRevision).toBe("cloud-new");
+  });
+
+  it("preserves the remote timestamp when a ref race creates an upload conflict", async () => {
+    const harness = createHarness("module-ref-race-time");
+    await harness.coordinator.initialize();
+    harness.coordinator.dispatch(setValue("local"));
+    harness.remote.raceOnNextPush = {
+      revision: "cloud-raced",
+      updatedAt: "2026-07-10T03:04:05.000Z",
+      managedFiles: ["data.json"],
+      commitSha: "cloud-raced",
+      data: { value: "remote" },
+      files: new Map(),
+    };
+
+    await expect(harness.coordinator.upload()).rejects.toBeInstanceOf(SyncConflictPendingError);
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      knownRemoteRevision: "cloud-raced",
+      knownRemoteUpdatedAt: "2026-07-10T03:04:05.000Z",
+      conflict: {
+        observedRemoteRevision: "cloud-raced",
+        observedRemoteUpdatedAt: "2026-07-10T03:04:05.000Z",
+      },
+    });
   });
 
   it("does not create a conflict when pull sees an unchanged cloud and local edits", async () => {
@@ -230,13 +307,32 @@ describe("SyncCoordinator", () => {
   });
 
   it("automatically pulls and reloads when only the cloud changed", async () => {
-    const harness = createHarness("module-pull");
+    let now = "2026-07-10T00:00:00.000Z";
+    const harness = createHarness(
+      "module-pull",
+      undefined,
+      undefined,
+      () => new Date(now),
+    );
     await harness.coordinator.initialize();
     harness.remote.revision = "cloud-new";
+    harness.remote.updatedAt = "2026-07-10T00:30:00.000Z";
     harness.remote.data = { value: "remote" };
+    now = "2026-07-10T01:00:00.000Z";
 
-    await expect(harness.coordinator.handleObservedRemoteRevision("cloud-new")).resolves.toBe("reloaded");
-    expect((await harness.localStore.load())?.payload).toEqual({ value: "remote" });
+    await expect(
+      harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision()),
+    ).resolves.toBe("reloaded");
+    await expect(harness.localStore.load()).resolves.toMatchObject({
+      payload: { value: "remote" },
+      localSavedAt: "2026-07-10T01:00:00.000Z",
+      lastSyncedRemoteRevision: "cloud-new",
+      lastSyncedRemoteUpdatedAt: "2026-07-10T00:30:00.000Z",
+    });
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      knownRemoteRevision: "cloud-new",
+      knownRemoteUpdatedAt: "2026-07-10T00:30:00.000Z",
+    });
     expect(harness.reload).toHaveBeenCalledOnce();
   });
 
@@ -252,7 +348,7 @@ describe("SyncCoordinator", () => {
     harness.remote.data = { value: "remote" };
 
     await expect(
-      harness.coordinator.handleObservedRemoteRevision("cloud-new"),
+      harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision()),
     ).resolves.toBe("conflict");
     expect(settle).toHaveBeenCalledWith("remote-change");
     expect(harness.coordinator.history.current).toEqual({ value: "live edit" });
@@ -265,6 +361,40 @@ describe("SyncCoordinator", () => {
       conflict: { observedRemoteRevision: "cloud-new" },
     });
     refreshedStore.close();
+  });
+
+  it("settles a live event when an existing conflict advances to another revision", async () => {
+    let pending: TestEvent | null = null;
+    const settle = vi.fn(() => pending);
+    const harness = createHarness(
+      "module-conflict-advances",
+      new FakeRemote("module-conflict-advances"),
+      settle,
+    );
+    await harness.coordinator.initialize();
+    harness.coordinator.dispatch(setValue("local"));
+    harness.remote.revision = "cloud-r1";
+    harness.remote.data = { value: "remote one" };
+    await harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision());
+
+    settle.mockClear();
+    pending = setValue("live during conflict");
+    harness.remote.revision = "cloud-r2";
+    harness.remote.updatedAt = "2026-07-10T05:00:00.000Z";
+    harness.remote.data = { value: "remote two" };
+
+    await expect(
+      harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision()),
+    ).resolves.toBe("conflict");
+    expect(settle).toHaveBeenCalledWith("remote-change");
+    expect(harness.coordinator.history.current).toEqual({ value: "live during conflict" });
+    await expect(harness.localStore.load()).resolves.toMatchObject({
+      payload: { value: "live during conflict" },
+      conflict: {
+        observedRemoteRevision: "cloud-r2",
+        observedRemoteUpdatedAt: "2026-07-10T05:00:00.000Z",
+      },
+    });
   });
 
   it("settles a live event before an explicit pull compares local state", async () => {
@@ -305,8 +435,84 @@ describe("SyncCoordinator", () => {
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       pendingUpload: null,
       localChangedSinceSync: false,
+      knownRemoteRevision: "remote-1",
+      knownRemoteUpdatedAt: "2026-07-10T00:00:00.000Z",
       lastSyncedRemoteRevision: "remote-1",
     });
+  });
+
+  it("backfills a remote timestamp when a legacy baseline has the same revision", async () => {
+    const harness = createHarness("module-time-backfill");
+    const payload = { value: "empty" };
+    const contentHash = await hashContentKey(jsonContentKey(payload));
+    await harness.localStore.initialize({
+      ...createModuleLocalEnvelope(
+        payload,
+        contentHash,
+        "00000000-0000-4000-8000-000000000030",
+      ),
+      lastSyncedContentHash: contentHash,
+      lastSyncedRemoteRevision: "cloud-legacy",
+    });
+    harness.remote.revision = "cloud-legacy";
+    harness.remote.updatedAt = "2026-07-09T12:00:00.000Z";
+    harness.remote.data = payload;
+
+    await harness.coordinator.initialize();
+    expect(harness.coordinator.getSnapshot().knownRemoteUpdatedAt).toBeNull();
+    await expect(
+      harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision()),
+    ).resolves.toBe("unchanged");
+
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      localSavedAt: null,
+      knownRemoteRevision: "cloud-legacy",
+      knownRemoteUpdatedAt: "2026-07-09T12:00:00.000Z",
+    });
+    await expect(harness.localStore.load()).resolves.toMatchObject({
+      localSavedAt: null,
+      lastSyncedRemoteUpdatedAt: "2026-07-09T12:00:00.000Z",
+    });
+    expect(harness.reload).not.toHaveBeenCalled();
+  });
+
+  it("backfills a remote timestamp for a persisted conflict without resaving payload data", async () => {
+    const harness = createHarness("module-conflict-time-backfill");
+    const payload = { value: "empty" };
+    const contentHash = await hashContentKey(jsonContentKey(payload));
+    await harness.localStore.initialize({
+      ...createModuleLocalEnvelope(
+        payload,
+        contentHash,
+        "00000000-0000-4000-8000-000000000031",
+      ),
+      lastSyncedContentHash: contentHash,
+      lastSyncedRemoteRevision: "cloud-base",
+      conflict: {
+        observedRemoteRevision: "cloud-conflict",
+        observedRemoteUpdatedAt: null,
+        detectedAt: "2026-07-09T10:00:00.000Z",
+      },
+    });
+    harness.remote.revision = "cloud-conflict";
+    harness.remote.updatedAt = "2026-07-09T12:00:00.000Z";
+    harness.remote.data = { value: "remote" };
+
+    await harness.coordinator.initialize();
+    await expect(
+      harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision()),
+    ).resolves.toBe("conflict");
+
+    expect(harness.coordinator.getSnapshot()).toMatchObject({
+      localSavedAt: null,
+      knownRemoteRevision: "cloud-conflict",
+      knownRemoteUpdatedAt: "2026-07-09T12:00:00.000Z",
+      conflict: {
+        observedRemoteUpdatedAt: "2026-07-09T12:00:00.000Z",
+        detectedAt: "2026-07-09T10:00:00.000Z",
+      },
+    });
+    expect(harness.conflict).toHaveBeenCalledTimes(2);
   });
 
   it("supports explicit cloud-wins conflict resolution", async () => {
@@ -315,7 +521,7 @@ describe("SyncCoordinator", () => {
     harness.coordinator.dispatch(setValue("local"));
     harness.remote.revision = "cloud-2";
     harness.remote.data = { value: "remote wins" };
-    await harness.coordinator.handleObservedRemoteRevision("cloud-2");
+    await harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision());
 
     await expect(harness.coordinator.resolveConflict("cloud-wins")).resolves.toBe("reloaded");
     expect((await harness.localStore.load())?.payload).toEqual({ value: "remote wins" });
@@ -336,7 +542,7 @@ describe("SyncCoordinator", () => {
     harness.coordinator.dispatch(setValue("local wins"));
     harness.remote.revision = "cloud-2";
     harness.remote.data = { value: "remote loses" };
-    await harness.coordinator.handleObservedRemoteRevision("cloud-2");
+    await harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision());
 
     await expect(harness.coordinator.resolveConflict("local-wins")).resolves.toBe("uploaded");
     expect(settle).toHaveBeenLastCalledWith("upload");
@@ -355,7 +561,7 @@ describe("SyncCoordinator", () => {
     harness.coordinator.dispatch(setValue("temporary"));
     harness.remote.revision = "cloud-3";
     harness.remote.data = { value: "remote" };
-    await harness.coordinator.handleObservedRemoteRevision("cloud-3");
+    await harness.coordinator.handleObservedRemoteRevision(await harness.remote.readRevision());
 
     expect(harness.coordinator.getSnapshot().sessionDirty).toBe(false);
 

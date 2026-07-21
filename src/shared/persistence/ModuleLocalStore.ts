@@ -93,7 +93,8 @@ export class ModuleLocalStore<T> {
       transaction.objectStore(OBJECT_STORE_NAME).get(RECORD_KEY),
     );
     await completion;
-    return (result as ModuleLocalEnvelope<T> | undefined) ?? null;
+    const stored = result as ModuleLocalEnvelope<T> | undefined;
+    return stored ? normalizeEnvelope(stored) : null;
   }
 
   /**
@@ -257,4 +258,23 @@ export class ModuleLocalStore<T> {
 
     return this.#databasePromise;
   }
+}
+
+/**
+ * Version-one databases predate the display timestamps. Keep the database and
+ * record shape backward compatible by filling only absent optional metadata at
+ * the read boundary.
+ */
+function normalizeEnvelope<T>(stored: ModuleLocalEnvelope<T>): ModuleLocalEnvelope<T> {
+  return {
+    ...stored,
+    localSavedAt: stored.localSavedAt ?? null,
+    lastSyncedRemoteUpdatedAt: stored.lastSyncedRemoteUpdatedAt ?? null,
+    conflict: stored.conflict
+      ? {
+          ...stored.conflict,
+          observedRemoteUpdatedAt: stored.conflict.observedRemoteUpdatedAt ?? null,
+        }
+      : null,
+  };
 }

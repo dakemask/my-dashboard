@@ -95,6 +95,7 @@ export class RemoteModuleConflictError extends Error {
   constructor(
     readonly expectedRevision: string | null,
     readonly actualRevision: string | null,
+    readonly actualUpdatedAt: string | null = null,
   ) {
     super("The remote module changed since the expected revision.");
     this.name = "RemoteModuleConflictError";

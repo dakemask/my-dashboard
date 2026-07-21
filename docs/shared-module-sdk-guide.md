@@ -25,6 +25,7 @@ import {
   defineJsonModule,
   startModuleRuntime,
   type ModuleRuntime,
+  type ModuleRuntimeSnapshot,
   type SettleReason,
 } from "../shared";
 ```
@@ -180,8 +181,16 @@ const hooks = {
     renderCompleteModule(payload);
   },
 
-  onConflict(conflict: { observedRemoteRevision: string | null }) {
+  onConflict(conflict: {
+    observedRemoteRevision: string | null;
+    observedRemoteUpdatedAt: string | null;
+    detectedAt: string;
+  }) {
     showConflictNotice(conflict);
+  },
+
+  onSnapshotChange(snapshot: ModuleRuntimeSnapshot) {
+    renderSaveAndSyncStatus(snapshot);
   },
 };
 ```
@@ -276,6 +285,24 @@ SDK 会对 payload、forward event、inverse event 和回调边界使用 `struct
 - `capacity: 200` 表示最多保留 200 个 forward/inverse event 对；
 - `capacity: "unlimited"` 表示当前页面会话内不设 event 数量上限；
 - 刷新始终清空 event 队列，只保留已存入 IndexedDB 的完整 payload。
+
+### 6.1 保存与同步状态快照
+
+`runtime.getSnapshot()` 和可选 hook `onSnapshotChange(snapshot)` 使用同一份只读状态：
+
+| 字段 | 含义 |
+| --- | --- |
+| `initialized` | coordinator 已从本机或云端建立会话 |
+| `sessionDirty` | 当前页面 payload 相对最近本地保存基线有变化；等价于 runtime 的 `dirty` 语义 |
+| `localChangedSinceSync` | 已保存的本地完整 payload 相对最近同步基线有变化；不包含尚未本地保存的页面变化 |
+| `localSavedAt` | 当前完整 payload 最近一次成功写入本机的 ISO 8601 时间；未知为 `null` |
+| `knownRemoteRevision` | 当前已知云端 revision；冲突时为冲突观察到的版本，未知为 `null` |
+| `knownRemoteUpdatedAt` | 上述已知云端版本在 `revision.json` 中的 `updatedAt`；旧记录或未知值为 `null` |
+| `lastSyncedRemoteRevision` | 最近完成同步的云端 revision；冲突不会推进它 |
+| `pendingUpload` | 尚待确认的上传意图，或 `null` |
+| `conflict` | 已持久化冲突，或 `null`；其中包含 `observedRemoteRevision`、`observedRemoteUpdatedAt` 和 `detectedAt` |
+
+runtime ready 后会先通知一次；此后的 dispatch、撤销/重做、保存/同步命令以及轮询处理完成后会提供最新快照。观察者只用于刷新 UI：Shared 会隔离其中的 pending/conflict 对象，并吞掉观察者异常，因此回调不得被当作命令成功条件，也不得尝试在回调里回滚业务状态。需要即时读取时仍可调用 `getSnapshot()`。
 
 ## 7. 撤销、重做和保存入口
 
