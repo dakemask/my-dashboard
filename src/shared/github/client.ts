@@ -169,6 +169,7 @@ export class GitHubGitDataClient {
     signal?: AbortSignal,
   ): Promise<T> {
     const url = `${GITHUB_API_BASE_URL}${this.#repositoryPath()}${endpoint}`;
+    const readsMutableBranchReference = method === "GET" && endpoint.startsWith("/git/ref/");
     const headers: Record<string, string> = {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${this.#token}`,
@@ -183,6 +184,7 @@ export class GitHubGitDataClient {
       method,
       headers,
       signal,
+      ...(readsMutableBranchReference ? { cache: "no-store" as const } : {}),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
 

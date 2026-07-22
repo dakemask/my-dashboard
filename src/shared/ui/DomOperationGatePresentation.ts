@@ -2,7 +2,6 @@ import type {
   OperationGatePresentation,
   PersistenceOperationKind,
 } from "../concurrency/OperationGate";
-import "./operationGate.css";
 
 const ROOT_BUSY_ATTRIBUTE = "data-persistence-operation";
 const CLOUD_ROOT_CLASS = "shared-cloud-operation-active";

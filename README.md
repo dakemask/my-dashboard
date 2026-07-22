@@ -9,15 +9,9 @@ npm install
 npm run dev
 ```
 
-## 模块开发文档
+## Agent 开发文档
 
-业务模块开发 agent 按顺序阅读：
-
-1. [通用模块约束](./docs/general-module-constraints.md)
-2. [Shared 模块 SDK 使用指南](./docs/shared-module-sdk-guide.md)
-3. 当前模块设计，例如 [Mind Map 专用设计](./docs/mindmap-greenfield-architecture.md)
-
-只有维护 Shared、认证或同步基础设施时才阅读 [Shared 与平台内部规范](./docs/shared-platform-internals.md)。业务模块只从 `src/shared` 根入口使用模块 SDK，不直接依赖内部目录。
+[AGENTS.md](./AGENTS.md) 是唯一入口。它会根据任务把 agent 引导到 `.agents/` 中的持久化公共契约、首次 SDK 接入指南、Shared 维护规范或具体模块契约。
 
 ## 测试
 

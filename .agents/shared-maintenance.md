@@ -1,16 +1,12 @@
-# Shared 与平台内部规范
+# Shared 与平台维护规范
 
 ## 1. 读者和边界
 
-本文只给维护 Shared、首页认证、持久化和同步基础设施的 agent 阅读。业务模块开发 agent 不需要阅读本文，也不得复制本文中的内部算法；业务模块只读：
-
-1. [通用模块约束](./general-module-constraints.md)；
-2. [Shared 模块 SDK 使用指南](./shared-module-sdk-guide.md)；
-3. 当前模块设计文档。
+本文只供已经获得用户允许、需要修改 Shared、首页认证、持久化或同步基础设施的 agent 阅读。普通业务模块开发不得顺手修改这些边界，也不得复制本文中的内部算法；其阅读路径由仓库根目录 [AGENTS.md](../AGENTS.md) 指定。
 
 本文记录当前平台的固定实现、内部数据结构、安全不变量和 Shared 验收要求。这里的类和字段可以由 Shared 维护任务演进，但 `src/shared/index.ts` 暴露的模块 SDK 契约必须保持稳定或显式升级。
 
-本轮不包含业务 `schemaVersion`、旧格式迁移、自动冲突合并、退出登录或真实 GitHub 数据迁移。
+平台公共能力不提供业务 `schemaVersion`、旧格式迁移、自动冲突合并、退出登录或真实 GitHub 数据迁移；改变这些边界必须作为单独的用户决策处理。公共接口要求见 [持久化模块公共契约](./persistent-module-contract.md)，首次接入示例见 [新持久化模块接入指南](./new-persistent-module-guide.md)。
 
 ## 2. 代码边界和公共入口
 
@@ -273,7 +269,7 @@ event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保�
 - cloud：root inert、模糊，并在 body 添加公共全页 spinner/overlay；
 - 成功、失败或 presentation 初始化中途抛错都在 finally 清理。
 
-`DomOperationGatePresentation` 静态导入唯一的 `operationGate.css`。所有模块维护同一份源代码和样式，但每个 runtime 创建独立实例；不得使用跨模块全局 spinner 单例。
+严格 CSP 页面必须在 HTML 中外链唯一的 `operationGate.css`。不得从 TypeScript 动态导入该文件：开发服务器会把它转换为 CSP 拒绝的内联样式。`DomOperationGatePresentation` 只负责创建 DOM、切换公共 class 和清理；所有模块引用同一份 Shared 样式，但每个 runtime 创建独立实例，不使用跨模块全局 spinner 单例。
 
 编辑锁使用 `navigator.locks.request(name, { mode: "exclusive", ifAvailable: true })` 并让 callback 在整个会话期间 pending。第二标签只显示公共 blocker。不支持 Web Locks 时禁止编辑；不得使用 localStorage、BroadcastChannel 或心跳降级锁。
 
@@ -308,6 +304,8 @@ event 历史不跨刷新保存；pending upload 和 conflict 必须跨刷新保�
 7. 确认 revision 后，在一个本地事务中更新同步 baseline 并清空 pending。
 
 一次模块上传只有一个可见 commit。不得逐文件使用 Contents API，不得 force push。上传输入来自 IndexedDB 中已经保存的完整 payload，与页面 event 队列无关。
+
+`main` ref 是会变化的资源，其 GET 必须使用 `cache: "no-store"` 绕过浏览器 HTTP 缓存。否则上传前缓存的旧 ref 可能在 PATCH 成功后继续被主动拉取或轮询读到，并被误判为新的云端变化。按 SHA 寻址的 commit、tree 和 blob 是不可变资源，不需要禁用缓存。
 
 ### 11.3 ref 竞态和幂等
 
@@ -425,4 +423,4 @@ poller 的一次观察必须完整传递 `RemoteRevisionSnapshot | null`，不�
 - `npm test` 独立通过；部署工作流在 build 前测试。
 - `npm run build` 通过。
 - 生产产物只包含已注册入口，不恢复旧模块资源。
-- 不新增 `AGENTS.md`，不访问或修改真实 GitHub 数据。
+- 测试、夹具和开发工具不访问或修改真实 GitHub 数据。

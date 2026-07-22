@@ -1,8 +1,8 @@
-# Shared 模块 SDK 使用指南
+# 新持久化模块接入指南
 
 ## 1. 目标
 
-这是一份给业务模块开发 agent 的操作说明书。开始前先读 [通用模块约束](./general-module-constraints.md)，然后只使用 Shared 根入口提供的 API。
+本文只供新持久化模块首次接入 Shared，或已有模块重做 SDK 接线时使用。开始前先读 [持久化模块公共契约](./persistent-module-contract.md)，然后只使用 Shared 根入口提供的 API。接入完成后的日常维护不必重复阅读本文。
 
 模块 SDK 会自动完成：
 
@@ -11,10 +11,18 @@
 - 创建当前 payload、event 历史、本地 IndexedDB、GitHub 仓库和同步协调器；
 - 串行执行持久化命令并运行前台/后台轮询；
 - 本地保存时设置 `inert`；
-- 云端操作时使用公共 spinner、模糊遮罩和公共 CSS；
+- 云端操作时控制公共 spinner 和模糊遮罩；
 - 页面关闭、初始化失败或登录失效时释放 Shared 资源。
 
 SDK **不会注册任何键盘快捷键**。模块需要哪些按钮、菜单或键位，由模块自己绑定到 runtime 提供的方法。
+
+严格 CSP 不允许开发服务器通过 JavaScript 注入内联 CSS。每个持久化模块页面必须直接外链 Shared 的唯一公共样式，模块不得复制其中规则：
+
+```html
+<link rel="stylesheet" href="/src/shared/ui/operationGate.css" />
+```
+
+Vite 会在生产构建中把该地址转换为带部署 base 的静态资源。运行时负责创建、显示和清理遮罩 DOM；模块只需加载一次上述样式。
 
 ## 2. 唯一导入入口
 
@@ -467,7 +475,23 @@ await runtime.dispose();
 
 销毁会停止轮询、等待正在进行的操作、关闭 IndexedDB，并释放编辑锁。销毁后的 runtime 不得再次使用；重新进入模块应重新调用 `startModuleRuntime`。
 
-## 12. 模块测试重点
+## 12. 接入完成后留下的模块契约
+
+每个模块只维护一份长期模块契约：`.agents/<module-id>.md`。不要再为每个新模块创建单独的“从零开发指南”或一次性实施计划。
+
+模块契约使用固定顺序：
+
+1. 范围、页面入口和 `moduleId`；
+2. 持久化定义，包括 payload、codec、history capacity、`settle` 和 `project`；不持久化则明确说明；
+3. 模块领域模型和业务规则；
+4. 实时状态、页面结构和 UI 交互；
+5. 用户命令、按钮和快捷键；
+6. 明确不支持的行为与兼容性边界；
+7. 模块验收要求。
+
+模块契约只记录相对于公共契约的模块特有决定，不重复登录、IndexedDB、GitHub、锁、轮询、遮罩或同步状态机。首次接入结束后，后续 agent 通常只需阅读 [持久化模块公共契约](./persistent-module-contract.md) 和该模块契约。
+
+## 13. 模块测试重点
 
 模块自己的测试至少覆盖：
 
@@ -487,7 +511,7 @@ await runtime.dispose();
 
 模块不需要重复测试 GitHub 原子 commit、IndexedDB CAS、轮询间隔、Web Locks 或 spinner；这些由 Shared 自己的测试负责。
 
-## 13. 禁止事项速查
+## 14. 禁止事项速查
 
 业务模块不得：
 
@@ -501,4 +525,4 @@ await runtime.dispose();
 - 在 `apply`、`invert`、`validate` 或 codec 中修改参数、操作 DOM 或产生其他副作用；
 - 在错误文本或日志中输出 token、请求头或原始 GitHub 响应体。
 
-平台维护者需要了解第二个 `ModuleRuntimeEnvironment` 参数时，阅读 [Shared 与平台内部规范](./shared-platform-internals.md)。业务模块不要传这个参数。
+平台维护者需要了解第二个 `ModuleRuntimeEnvironment` 参数时，阅读 [Shared 与平台维护规范](./shared-maintenance.md)。业务模块不要传这个参数。

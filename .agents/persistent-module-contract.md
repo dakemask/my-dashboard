@@ -1,16 +1,12 @@
-# 通用模块约束
+# 持久化模块公共契约
 
 ## 1. 这份文档给谁看
 
-本文是所有业务模块开发 agent 的第一份必读文档。它只规定模块必须遵守的结果、Shared 公共接口和推荐的设计方式，不解释登录、IndexedDB、GitHub commit、轮询等内部实现。
+本文是所有需要保存业务数据的模块必须遵守的长期公共契约。它规定状态模型、Shared 公共接口、硬约束和推荐设计，不展开登录、IndexedDB、GitHub commit、轮询等内部实现。不保存业务数据的模块不需要使用这套 SDK，也不受本文的 SDK 接入要求约束。
 
-模块开发的阅读顺序固定为：
+维护已有持久化模块时，阅读本文和该模块自己的契约即可。只有首次接入 SDK 或重做接入边界时，才额外阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。维护 Shared 内部实现必须先获得用户允许，并阅读 [Shared 与平台维护规范](./shared-maintenance.md)。完整阅读入口见仓库根目录 [AGENTS.md](../AGENTS.md)。
 
-1. 本文；
-2. [Shared 模块 SDK 使用指南](./shared-module-sdk-guide.md)；
-3. 当前模块自己的设计文档，例如 [Mind Map 专用设计](./mindmap-greenfield-architecture.md)。
-
-文中的“必须”是硬约束，“不得”是禁止事项，“应该”是通常应遵守的软约束。Shared 的维护者另读 [Shared 与平台内部规范](./shared-platform-internals.md)。
+文中的“必须”是硬约束，“不得”是禁止事项，“应该”是通常应遵守的软约束。
 
 ## 2. 五层状态模型
 
@@ -70,7 +66,7 @@ payload 表示模块的一份完整业务数据，不是 JSON 的同义词。它
 
 `Map`、`Set`、`Date`、`ArrayBuffer`、类型化数组和循环引用等非 JSON 值都可以成为 payload，只要模块能稳定校验、比较和编码。函数、DOM 引用、`WeakMap` 等不能可靠持久化的值不得进入 payload。
 
-新版 Mind Map 选择 JSON payload；这是模块选择，不是 Shared 的通用限制。
+Mind Map 选择 JSON payload；这是模块选择，不是 Shared 的通用限制。
 
 ### 3.3 内容标识和远端编码
 
@@ -166,6 +162,7 @@ Shared 不注册任何键盘快捷键。按钮、菜单和键盘只是模块把�
 - 不支持安全编辑锁的浏览器不得编辑。
 - 本地保存时页面暂时不可交互，但不显示遮罩。
 - 上传、拉取和覆盖时由 SDK 自动显示同一份全页 spinner 与模糊遮罩。
+- 使用严格 CSP 的模块页面必须以外链 `<link>` 加载 Shared 提供的 `src/shared/ui/operationGate.css`；不得把它复制进模块样式或改成运行时内联样式。
 - 模块不得自行复制 spinner、编辑锁、轮询或同步实现。
 - 模块不得读取、保存、显示或记录 GitHub token。
 - 模块不得把捕获异常任意序列化到 DOM 或日志；用户可见错误应使用模块定义的安全文案。
@@ -248,7 +245,7 @@ interface PersistedConflict {
 
 `capacity` 的 `number` 在运行时必须是正整数。模块不得直接依赖 `StagingHistory`、`ModuleLocalStore`、`GitHubGitDataClient`、`RemoteModuleRepository`、`SyncCoordinator`、`OperationGate` 或 `ModuleEditorLease`。这些是 Shared 内部零件，不是模块 API。
 
-具体接入方法见 [Shared 模块 SDK 使用指南](./shared-module-sdk-guide.md)。
+首次接入方法见 [新持久化模块接入指南](./new-persistent-module-guide.md)。
 
 ## 8. 软约束
 

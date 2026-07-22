@@ -1,16 +1,12 @@
-# Mind Map 新版模块契约
+# Mind Map 模块契约
 
 ## 1. 范围与优先级
 
-开发或维护 Mind Map 时依次阅读：
+开发或维护 Mind Map 时阅读 [持久化模块公共契约](./persistent-module-contract.md) 和本文。只有首次接入或重做 SDK 接线时，才额外阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。
 
-1. [通用模块约束](./general-module-constraints.md)；
-2. [Shared 模块 SDK 使用指南](./shared-module-sdk-guide.md)；
-3. 本文。
+本文是 Mind Map 的业务与交互权威契约。登录、IndexedDB、编辑锁、GitHub 原子提交、轮询、公共 spinner 和同步四象限由 Shared 负责；本文只说明 Mind Map 如何定义完整资料库、如何把用户动作提交为 event，以及 UI 如何调用 runtime。
 
-本文是新版 Mind Map 的业务与交互权威契约。登录、IndexedDB、编辑锁、GitHub 原子提交、轮询、公共 spinner 和同步四象限由 Shared 负责；本文只说明 Mind Map 如何定义完整资料库、如何把用户动作提交为 event，以及 UI 如何调用 runtime。
-
-新版必须从零实现：不得复制、导入或包装旧 Mind Map 源码，不读取旧本地/云端格式，也不保留旧状态结构或迁移分支。允许保持已确认的节点默认尺寸和文字布局行为一致，但算法必须在新分层内重新实现。
+Mind Map 只支持本文定义的当前 payload 与远端文件格式，不读取旧本地或云端格式，也不提供旧状态迁移。兼容性边界发生变化时必须显式更新本文。
 
 固定入口与边界：
 
@@ -314,18 +310,18 @@ Shared 不注册键盘。Mind Map 在模块层绑定并在 dispose 前移除：
 
 Backspace、Enter 编辑入口、`Ctrl+A` 和 Escape 都不是模块命令：Backspace/`Ctrl+A` 在输入控件中保留浏览器文字行为，在画布上不承担删除/全选；Enter 只服务当前名称编辑或 textarea 换行；Escape 不作为取消或退出模式的隐藏快捷键。
 
-## 10. 明确不实现
+## 10. 明确不支持
 
-本轮不实现：
+Mind Map 不提供：
 
-- 旧源码复用、旧 payload/文件读取、schemaVersion 或自动迁移；
+- 旧 payload/文件读取、schemaVersion 或自动迁移；
 - 复制粘贴画布对象、搜索、节点样式、自动布局、富文本；
 - 箭头文字、曲线、样式或端点编辑；
 - 触控专用编辑；
-- 当前脑图刷新按钮、退出登录或“碎片想法”模块；
+- 当前脑图刷新按钮或退出登录；
 - 冲突自动合并，或程序自动删除真实 `data/mind-maps/` 旧数据。
 
-旧目录没有合法新版 `revision.json` 时，Shared 不得猜测接管。启用新版前如需清理真实旧云端数据，由用户在应用外明确处理。
+旧目录没有合法当前格式 `revision.json` 时，Shared 不得猜测接管。如需清理真实旧云端数据，由用户在应用外明确处理。
 
 ## 11. 验收
 
@@ -350,6 +346,5 @@ Backspace、Enter 编辑入口、`Ctrl+A` 和 Escape 都不是模块命令：Bac
 
 - 首页和 `modules/mind-map/index.html` 均由 Vite 多页面构建；
 - `npm test`、普通 `npm run build` 和 GitHub Pages base 构建通过；
-- 生产产物只包含已注册的首页与 Mind Map 页面；
+- 生产产物包含已注册的首页与 Mind Map 页面，不包含测试夹具；
 - 测试全部使用 fake/in-memory 边界，绝不访问或修改真实 GitHub 数据；
-- 不新增 `AGENTS.md`。
