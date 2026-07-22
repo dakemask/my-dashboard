@@ -38,32 +38,13 @@ Shared 不定义模块业务 payload、event、快捷键、页面布局或冲突
 
 改变这些边界不是内部重构，必须先形成新的用户决策和公共契约。
 
-## 2. 对业务模块提供的公共接口
+## 2. 源码结构、依赖与资源寿命
 
-`src/shared/index.ts` 是业务模块唯一 TypeScript 入口，实际转出 `src/shared/module/index.ts`。根入口分为四组：
+`src/shared/index.ts` 是业务模块唯一的 TypeScript 入口；其可观察语义由 [持久化模块公共契约](./persistent-module-contract.md) 说明。本文件不再把公共方法重新写成一份使用教程，只把根出口视为 Shared 修改时必须保持兼容的边界。
 
-| 分组 | 公共内容 |
-| --- | --- |
-| 模块定义 | `defineModule`、`defineJsonModule`、`jsonContentKey`、definition/history 相关类型 |
-| runtime | `startModuleRuntime`、`ModuleRuntime`、启动 options/result/state、busy/unavailable 错误 |
-| 生命周期 hooks | `settle`、`project`、`onConflict`、`onSnapshotChange` 相关类型 |
-| 保存同步状态 | snapshot、reason、result、conflict resolution 和 persisted conflict 类型 |
+`ModuleRuntimeEnvironment` 不从根入口导出。它是平台组合和测试注入点，可替换 auth、fetch、IndexedDB、LockManager、Document、Window、随机数、时钟、UUID、reload 和认证返回回调；生产业务模块不得依赖它。
 
-公共 runtime 必须保持以下能力：
-
-- 读取 `state/current/canUndo/canRedo/dirty`；
-- 调用 `dispatch/undo/redo/save/upload/pull/resolveConflict/pollNow/dispose`；
-- 通过 `getSnapshot()` 读取保存与同步状态。
-
-`pollNow()` 当前是公共能力，只执行一次与轮询相同的远端版本检查；业务模块没有合同依据时不应把它当作“刷新当前模块内容”的按钮。
-
-`ModuleRuntimeEnvironment` 是平台组合和测试注入点，不从根入口导出。它可以在内部注入 auth、fetch、IndexedDB、LockManager、Document、Window、随机数、时钟、UUID、reload 和认证返回回调。生产业务模块不得传入它；`autoStartPolling: false` 也只用于测试。
-
-Shared 的公共 UI 样式不是 TypeScript 出口。严格 CSP 模块页面需由首次接入流程外链 `src/shared/ui/operationGate.css`；runtime 只创建和清理使用该样式的 DOM。
-
-## 3. 内部组件及依赖方向
-
-### 3.1 组件职责
+### 2.1 组件职责
 
 ```text
 src/shared/index.ts          业务模块唯一入口
@@ -83,7 +64,7 @@ src/shared/ui/               公共遮罩、spinner 和阻止页面
 - history、persistence、github、concurrency 和 sync 不得依赖任何具体业务模块。
 - UI presentation 不决定同步状态；只根据 gate/lease 命令呈现公共状态。
 
-### 3.2 runtime 装配顺序
+### 2.2 runtime 装配顺序
 
 `startModuleRuntime` 固定按以下顺序取得资源：
 
@@ -101,7 +82,7 @@ src/shared/ui/               公共遮罩、spinner 和阻止页面
 
 每取得一个资源就登记逆序清理。任一步失败都继续尝试全部已登记清理，并保留原始启动错误。
 
-### 3.3 runtime 命令与资源所有权
+### 2.3 runtime 命令与资源所有权
 
 同步 `dispatch(event)` 只在 runtime ready、没有排队命令且 gate 空闲时执行，否则抛出 `ModuleRuntimeBusyError`。undo、redo、保存、同步、冲突解决和轮询观察进入同一命令尾队列。
 
@@ -109,9 +90,9 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 
 `dispose()` 幂等且 one-shot：进入 disposing，禁止新命令，停止并等待 poller，等待命令尾和 gate，关闭 coordinator/store，释放 lease，清空内部引用，最后进入 disposed。
 
-## 4. 内部状态模型与数据格式
+## 3. 内部状态与持久化格式
 
-### 4.1 StagingHistory
+### 3.1 StagingHistory
 
 历史内部持有：
 
@@ -123,7 +104,7 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 
 它不长期保存每一步完整 payload。before/after payload 只在一次 dispatch、undo 或 redo 的计算期间作为 clone 存在。正整数 capacity 只淘汰最旧 event 对；`"unlimited"` 不按数量淘汰。event 历史从不进入 IndexedDB 或 GitHub。
 
-### 4.2 IndexedDB envelope
+### 3.2 IndexedDB envelope
 
 每模块数据库 `my-dashboard.module.<moduleId>` 只有一个对象仓库和一条完整记录：
 
@@ -141,7 +122,7 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 
 数据库版本保持 v1。旧记录缺少 `localSavedAt`、`lastSyncedRemoteUpdatedAt` 或 conflict 的远端时间时，读取为 null，不升级数据库版本。业务 payload 没有 Shared 注入的 schemaVersion，也没有通用迁移分支。
 
-### 4.3 远端模块格式
+### 3.3 远端模块格式
 
 每个模块根目录必须有：
 
@@ -161,16 +142,16 @@ managedFiles: 按路径排序的相对路径数组
 
 未知文件永远保留；只有旧清单中存在、而新清单中消失的受管文件才能删除。清单缺失不授权接管目录内未知文件。清单损坏、受管文件缺失或 decode/validate 失败必须停止。
 
-### 4.4 gate、lease、poller 与 runtime 状态
+### 3.4 gate、lease、poller 与 runtime 状态
 
 - `OperationGate` 同一时间只执行一个 local/cloud 操作。local 设置根节点 inert；cloud 额外模糊根节点并向 body 添加全页 overlay/spinner。
 - `ModuleEditorLease` 使用 `navigator.locks` 的 exclusive + ifAvailable，并让回调在整个编辑会话 pending。第二标签为 blocked；不支持 Web Locks 为 unsupported，没有竞态降级锁。
 - poller 只有 stopped、waiting 和 in-flight 三类有效状态；同一 poller 不重叠请求。
 - runtime 状态只允许 starting → ready → disposing → disposed。
 
-## 5. 关键算法与原子性
+## 4. 核心流程与原子性
 
-### 5.1 history dispatch、undo 与 redo
+### 4.1 history dispatch、undo 与 redo
 
 dispatch 的原子流程：
 
@@ -185,7 +166,7 @@ dispatch 的原子流程：
 
 undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo 应用 forward，并要求结果 key 等于 afterKey。任意 clone、回调、校验或 key 比较失败都不提交临时状态。
 
-### 5.2 本机保存与 CAS
+### 4.2 本机保存与 CAS
 
 `ModuleLocalStore.compareAndSwap(expectedLocalRevision, nextEnvelope)` 在一个 readwrite 事务中读取唯一记录、比较令牌并写入完整新 envelope。失败或事务 abort 不更新内存状态。
 
@@ -193,7 +174,7 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 双方变化形成冲突时，settle 后的当前完整 payload、content hash、localSavedAt 与 conflict 必须在同一次 CAS 中保存；成功后才把该 payload 标记为本地保存基线。这样刷新不会丢失冲突的本地一侧，但不会推进同步基线。
 
-### 5.3 GitHub 单 commit 上传
+### 4.3 GitHub 单 commit 上传
 
 上传只用 Git Data API：
 
@@ -217,7 +198,7 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 网络结果不确定时保留 pending。后续 readRevision 观察到 pending revision 时确认成功；看到同步基线以外的第三个 revision 时建立冲突。
 
-### 5.4 SyncCoordinator
+### 4.4 SyncCoordinator
 
 初始化优先读取本机 envelope；本机不存在时在 cloud gate 中拉取远端，远端也不存在时使用 `createEmpty()`，随后初始化本机记录和空历史。
 
@@ -234,7 +215,7 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 所有完成路径必须一致推进 revision 与 updatedAt：上传确认、响应丢失恢复、拉取、冲突观察和同 revision 时间补齐都不能让版本号与时间来自不同远端观察。
 
-### 5.5 revision poller
+### 4.5 revision poller
 
 - 页面可见：约 60 秒加 0–15 秒随机量；
 - 页面隐藏：约 5 分钟加 0–60 秒随机量；
@@ -243,15 +224,15 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 - 同一 poller 不重叠；gate busy 时协调器返回 busy；
 - stop 必须 abort 当前 signal、等待 in-flight 结束，并阻止停止后的回调。
 
-### 5.6 dispose 与认证失效
+### 4.6 dispose 与认证失效
 
 正常 pagehide 异步触发 dispose。SPA 宿主显式等待 dispose。HTTP 401 回调可能发生在当前 gate 命令内部，因此只能异步启动清理，不能在请求栈中等待自身命令。
 
 认证变为 anonymous 时停止轮询、等待当前命令和 gate、移除 Shared listener、关闭 store、释放 lease、清除 coordinator/client/token 可达引用，再返回首页登录边界。
 
-## 6. 安全与失败不变量
+## 5. 安全与失败不变量
 
-### 6.1 登录与凭据
+### 5.1 登录与凭据
 
 用户只输入 GitHub 用户名和 token；以下验证全部成功后才保存凭据：
 
@@ -266,13 +247,13 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 token 只能存在于认证存储和发往 `https://api.github.com` 的 Authorization 请求头。它不得进入 DOM、URL、异常、日志、业务 payload/event、本机模块记录、Git commit、测试快照或模拟错误。
 
-### 6.2 CSP 与公共 UI
+### 5.2 CSP 与公共 UI
 
 首页和模块保持严格 CSP：脚本/样式只允许 self，连接只允许 self 与 GitHub API，不允许 unsafe-eval、任意 token 发送目标、object 或第三方 form action。
 
 严格 CSP 页面必须在 HTML 中外链唯一的 `operationGate.css`。不得从 TypeScript 动态导入：Vite 开发服务器会把它转换为 CSP 拒绝的内联 style。`DomOperationGatePresentation` 只创建 DOM、切换公共 class 和 finally 清理；每个 runtime 独立实例，不使用跨模块全局 spinner 单例。
 
-### 6.3 不变量
+### 5.3 不变量
 
 1. payload、event、codec、history 回调、hooks 和 snapshot 之间不共享可被调用者修改的内部引用；
 2. content key 与编码必须覆盖同一业务语义；
@@ -287,7 +268,9 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 11. dispose 后没有 poller、Shared listener、lease、store 或 token 可达链继续存活；
 12. 测试、夹具和开发工具不访问或修改真实 GitHub 数据。
 
-## 7. 公共接口兼容性
+## 6. 修改要求与验证
+
+### 6.1 公共接口兼容性
 
 - `src/shared/index.ts` 根出口的删除、改名、签名变化或可观察语义变化都属于破坏性修改。
 - runtime 属性/方法、启动四状态、SettleReason、ProjectionReason、SyncActionResult、snapshot 字段和 conflict 形态同样属于公共契约。
@@ -297,45 +280,44 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 - 修改公共边界时，源码、[持久化模块公共契约](./persistent-module-contract.md)、[接入指南](./new-persistent-module-guide.md)、受影响模块文档和测试必须在同一次任务更新。
 - 任何 Shared 修改仍受根目录 `AGENTS.md` 的用户授权要求约束。
 
-## 8. Shared 测试矩阵
+### 6.2 验证范围
 
-### 8.1 runtime 与生命周期
+#### runtime 与生命周期
 
 - ready/authentication-required/blocked/unsupported；启动失败逆序清理；401 异步失效；dispose 幂等。
 - dispatch busy 边界、命令尾串行、snapshot 通知时机、观察者异常隔离和 dispose 后停止通知。
 - Shared 不注册 keydown，业务调用历史和保存方法仍工作。
 
-### 8.2 history 与 clone
+#### history 与 clone
 
 - 多种正整数容量、unlimited、no-op 保留 redo、撤销后分支、基线 clean 和刷新清空。
 - forward/inverse 可逆与 key 校验；apply/invert/clone/validate/contentKey 失败原子性。
 - JSON 与非 JSON payload/event；所有公共边界引用隔离。
 
-### 8.3 IndexedDB
+#### IndexedDB
 
 - 每模块隔离、单记录 CAS、事务失败不推进、pending/conflict 跨刷新。
 - v1 旧记录缺失三个时间字段时读取为 null。
 - 冲突时 payload/hash/conflict 同事务保存并正确更新本地基线。
 
-### 8.4 GitHub
+#### GitHub
 
 - 全部注入 fake fetch，绝不连接真实仓库。
 - 单模块单 commit、未知文件保留、受管差集删除、非法路径拒绝和 decode 后 validate。
 - 同模块冲突、跨模块最多三次重试、响应丢失幂等、main ref no-store。
 
-### 8.5 同步与轮询
+#### 同步与轮询
 
 - 四象限、两个覆盖方向、pending 恢复、普通 pull 不制造假冲突。
 - 保存/上传/拉取/冲突/时间补齐正确推进 revision 与 updatedAt。
 - 前后台间隔、visibility 重排、不重叠、AbortSignal、stop 等待和网络失败静默。
 
-### 8.6 认证、安全、锁和公共 UI
+#### 认证、安全、锁和公共 UI
 
 - 登录全部成功条件与各失败条件；长期恢复；401 与 403 区分；token 不出现在 DOM、日志或错误。
 - 第二标签阻止、锁释放、不支持浏览器阻止编辑。
 - local 仅 inert，cloud 全页遮罩；presentation 异常和命令异常后完整恢复；严格 CSP 外链样式生效。
 
-### 8.7 工程
+#### 工程
 
-- `npm test` 独立通过，部署流程在 build 前运行测试。
-- 普通构建和 GitHub Pages base 构建通过；产物只含注册入口，不包含测试夹具或旧模块资源。
+修改 Shared 后按 [README](../README.md) 运行项目规定的测试与构建。生产模块和测试夹具必须继续保持隔离。
