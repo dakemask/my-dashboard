@@ -1,528 +1,515 @@
 # 新持久化模块接入指南
 
-## 1. 目标
+## 使用范围
 
-本文只供新持久化模块首次接入 Shared，或已有模块重做 SDK 接线时使用。开始前先读 [持久化模块公共契约](./persistent-module-contract.md)，然后只使用 Shared 根入口提供的 API。接入完成后的日常维护不必重复阅读本文。
+本文只在首次创建持久化模块，或已有模块需要重做 SDK 接线时使用。开始前阅读 [持久化模块公共契约](./persistent-module-contract.md)。模块进入日常维护后，只读公共契约和该模块自己的长期文档。
 
-模块 SDK 会自动完成：
+下面以 `notes` 为最小示例。实际目录可以按模块复杂度拆分，但业务模块始终只从 `src/shared` 根入口导入。
 
-- 恢复统一登录；凭据缺失或失效时返回首页登录边界；
-- 获取单模块编辑锁并渲染阻止页面；
-- 创建当前 payload、event 历史、本地 IndexedDB、GitHub 仓库和同步协调器；
-- 串行执行持久化命令并运行前台/后台轮询；
-- 本地保存时设置 `inert`；
-- 云端操作时控制公共 spinner 和模糊遮罩；
-- 页面关闭、初始化失败或登录失效时释放 Shared 资源。
-
-SDK **不会注册任何键盘快捷键**。模块需要哪些按钮、菜单或键位，由模块自己绑定到 runtime 提供的方法。
-
-严格 CSP 不允许开发服务器通过 JavaScript 注入内联 CSS。每个持久化模块页面必须直接外链 Shared 的唯一公共样式，模块不得复制其中规则：
-
-```html
-<link rel="stylesheet" href="/src/shared/ui/operationGate.css" />
+```text
+modules/notes/index.html
+src/notes/main.ts
+src/notes/definition.ts
+src/notes/domain/types.ts
+src/notes/domain/events.ts
+src/notes/domain/codec.ts
+src/notes/app/controller.ts
+src/notes/ui/shell.ts
 ```
 
-Vite 会在生产构建中把该地址转换为带部署 base 的静态资源。运行时负责创建、显示和清理遮罩 DOM；模块只需加载一次上述样式。
+每一步都必须达到自己的完成标准后再继续；测试要求属于接入验收，不表示每次阅读本文都要重新编写同一套测试。
 
-## 2. 唯一导入入口
+## 第一步：定义 moduleId、完整 payload 和实时状态
 
-业务模块只从 `src/shared` 根入口导入。相对路径根据模块所在目录调整，但不能深入导入 `shared/auth`、`shared/github` 等内部目录。
+### 本步目标
+
+确定模块的一份“完整业务数据”是什么，并把页面实时状态与系统状态排除在外。
+
+### 创建或修改的文件
+
+- `src/notes/domain/types.ts`
+- 模块长期文档的“业务模型”草稿（如果该模块需要长期文档）
+
+### 使用或实现的公共接口
+
+- 选择稳定且唯一的 `moduleId`，格式为小写字母/数字和单连字符。
+- 设计可被 `structuredClone` 的 `TPayload`。
+
+### 最小代码示例
 
 ```ts
-import {
-  defineJsonModule,
-  startModuleRuntime,
-  type ModuleRuntime,
-  type ModuleRuntimeSnapshot,
-  type SettleReason,
-} from "../shared";
+export interface Note {
+  readonly id: string;
+  readonly text: string;
+}
+
+export interface NotesPayload {
+  readonly notes: readonly Note[];
+}
+
+export interface NotesLiveState {
+  editingId: string | null;
+  draftText: string;
+}
 ```
 
-## 3. 第一步：定义 payload、event 和历史策略
+`NotesPayload` 是完整业务数据。焦点、草稿、DOM 引用、保存时间、冲突和 token 都不是 payload。
 
-下面是一个最小 JSON 模块。payload 是当前全部笔记；event 是一个可撤销的业务动作。
+### 必须编写的测试
+
+- 合法 payload 可以 `structuredClone`，并保持业务含义。
+- 业务字段齐全；实时状态和系统元数据没有混入 payload。
+- 模块 ID 合法且与其他模块不重复。
+
+### 完成标准
+
+任意时刻只看一份 payload 就能完整描述模块业务数据；不需要读取 DOM、历史或同步状态来补全它。
+
+## 第二步：定义业务 event 和提交点
+
+### 本步目标
+
+把用户完成的语义动作表示为可克隆 event，并明确什么时刻才进入历史。
+
+### 创建或修改的文件
+
+- `src/notes/domain/types.ts`
+- 模块长期文档的“用户界面与操作流程”和“Event 定义”草稿
+
+### 使用或实现的公共接口
+
+- 定义 `TEvent`。
+- 每个 event 必须能被 `structuredClone`，且不包含 DOM event、函数或系统元数据。
+
+### 最小代码示例
 
 ```ts
-interface Note {
-  id: string;
-  text: string;
-}
+export type NotesEvent =
+  | { readonly type: "insert-note"; readonly index: number; readonly note: Note }
+  | { readonly type: "remove-note"; readonly index: number }
+  | { readonly type: "set-note-text"; readonly id: string; readonly text: string };
+```
 
-interface NotesPayload {
-  notes: Note[];
-}
+对应提交点：创建完成时提交 `insert-note`；确认删除时提交 `remove-note`；文字 blur/确认且内容有效时提交 `set-note-text`。输入过程本身不连续产生 event。
 
-type NotesEvent =
-  | { type: "insert-note"; index: number; note: Note }
-  | { type: "remove-note"; index: number }
-  | { type: "set-note-text"; id: string; text: string };
+### 必须编写的测试
 
-function applyNotesEvent(payload: NotesPayload, event: NotesEvent): NotesPayload {
-  const notes = payload.notes.map((note) => ({ ...note }));
+- 每种核心用户动作恰好映射到一个 event。
+- 一次复合动作不会拆成多次历史提交。
+- 取消、无效输入和纯选择变化不产生 event。
 
+### 完成标准
+
+event 表可以回答“用户做了什么、何时算完成”，而不是记录 pointermove、keydown 等机械 DOM 过程。
+
+## 第三步：实现 apply、invert 并选择历史容量
+
+### 本步目标
+
+让每个 event 能纯函数地计算新 payload，并能生成恢复变化前内容的 inverse。
+
+### 创建或修改的文件
+
+- `src/notes/domain/events.ts`
+- `src/notes/definition.ts`
+
+### 使用或实现的公共接口
+
+- `ModuleHistoryPolicy.apply(payload, event)`
+- `ModuleHistoryPolicy.invert(event, before, after)`
+- `HistoryCapacity`：正整数或 `"unlimited"`
+
+### 最小代码示例
+
+```ts
+export function applyNotesEvent(
+  payload: NotesPayload,
+  event: NotesEvent,
+): NotesPayload {
   switch (event.type) {
-    case "insert-note":
-      if (event.index < 0 || event.index > notes.length) throw new RangeError("Invalid note index.");
+    case "insert-note": {
+      const notes = [...payload.notes];
       notes.splice(event.index, 0, { ...event.note });
       return { notes };
-
+    }
     case "remove-note":
-      if (event.index < 0 || event.index >= notes.length) throw new RangeError("Invalid note index.");
-      notes.splice(event.index, 1);
-      return { notes };
-
+      return { notes: payload.notes.filter((_, index) => index !== event.index) };
     case "set-note-text":
-      if (!notes.some((note) => note.id === event.id)) throw new Error("Unknown note.");
       return {
-        notes: notes.map((note) => note.id === event.id
-          ? { ...note, text: event.text }
-          : note),
+        notes: payload.notes.map((note) =>
+          note.id === event.id ? { ...note, text: event.text } : note
+        ),
       };
   }
 }
 
-function invertNotesEvent(
+export function invertNotesEvent(
   event: NotesEvent,
   before: NotesPayload,
-  _after: NotesPayload,
 ): NotesEvent {
   switch (event.type) {
     case "insert-note":
       return { type: "remove-note", index: event.index };
-
-    case "remove-note": {
-      const removed = before.notes[event.index];
-      if (!removed) throw new RangeError("Invalid note index.");
-      return { type: "insert-note", index: event.index, note: { ...removed } };
-    }
-
-    case "set-note-text": {
-      const oldNote = before.notes.find((note) => note.id === event.id);
-      if (!oldNote) throw new Error("Unknown note.");
-      return { type: "set-note-text", id: event.id, text: oldNote.text };
-    }
+    case "remove-note":
+      return { type: "insert-note", index: event.index, note: before.notes[event.index]! };
+    case "set-note-text":
+      return {
+        type: "set-note-text",
+        id: event.id,
+        text: before.notes.find((note) => note.id === event.id)!.text,
+      };
   }
 }
+```
+
+### 必须编写的测试
+
+- 每种 event 的 apply 不修改输入。
+- `apply(forward)` 后再 `apply(inverse)` 恢复原 content key。
+- 非法索引、重复 ID 或缺失目标失败时不产生部分 payload。
+- no-op、撤销后新分支和所选容量边界符合公共契约。
+
+### 完成标准
+
+所有业务 event 均可逆；模块已记录具体容量和理由，而不是沿用一个无依据的通用数字。
+
+## 第四步：实现空数据、校验、content key 和远端 codec
+
+### 本步目标
+
+建立 payload 的所有持久化边界，并保证本机与云端往返后业务内容不变。
+
+### 创建或修改的文件
+
+- `src/notes/domain/model.ts`
+- `src/notes/domain/codec.ts`
+- `src/notes/definition.ts`
+
+### 使用或实现的公共接口
+
+- JSON payload：`defineJsonModule`
+- 非 JSON payload：`defineModule`、稳定的 `contentKey`
+- `createEmpty`、`validate`、`encode`、`decode`
+
+### 最小代码示例
+
+```ts
+import { defineJsonModule } from "../shared";
 
 export const notesDefinition = defineJsonModule<NotesPayload, NotesEvent>({
   moduleId: "notes",
-
   createEmpty: () => ({ notes: [] }),
-
-  validate(value: unknown): NotesPayload {
-    if (!value || typeof value !== "object") {
-      throw new TypeError("Invalid notes payload.");
-    }
-
-    const notes = (value as { notes?: unknown }).notes;
-    if (!Array.isArray(notes) || !notes.every((note) =>
-      note !== null &&
-      typeof note === "object" &&
-      typeof (note as { id?: unknown }).id === "string" &&
-      typeof (note as { text?: unknown }).text === "string"
-    ) || new Set(notes.map((note) => (note as { id: string }).id)).size !== notes.length) {
-      throw new TypeError("Invalid notes payload.");
-    }
-
-    return {
-      notes: notes.map((note) => ({
-        id: (note as { id: string }).id,
-        text: (note as { text: string }).text,
-      })),
-    };
-  },
-
+  validate: validateNotesPayload,
   history: {
     capacity: 200,
     apply: applyNotesEvent,
     invert: invertNotesEvent,
   },
-
   encode: (payload) => new Map([
     ["notes.json", `${JSON.stringify(payload, null, 2)}\n`],
   ]),
-
-  decode: (files) =>
-    JSON.parse(files.get("notes.json") ?? "null") as NotesPayload,
+  decode: (files) => JSON.parse(files.get("notes.json") ?? "null") as NotesPayload,
 });
 ```
 
-要求：
+`validate` 必须检查完整结构、ID 和不变量，并返回规范化副本。非 JSON payload 改用 `defineModule`，自行提供跨刷新稳定、覆盖全部业务差异的 content key；远端文件仍由 codec 编码为 UTF-8 文本。
 
-- `createEmpty` 返回完整空模块，不返回部分对象；
-- `validate` 校验从 IndexedDB 和云端得到的数据；
-- `history.capacity` 必须显式设为正整数或 `"unlimited"`，按 event 数而不是 payload 数计；
-- `history.apply` 和 `history.invert` 必须确定、无副作用，不修改传入参数；
-- event 和 payload 都必须能被 `structuredClone`；
-- `encode` 和 `decode` 必须让完整 payload 无损往返；
-- 文件路径相对于模块根目录，不得写 `revision.json` 或其他模块路径。
+### 必须编写的测试
 
-`defineJsonModule` 只替模块提供规范 JSON content key，不替模块设计 event。一个正向 event 必须能通过 `invert` 得到反向 event；例如删除 event 的 inverse 通常需要从 `before` 中取得被删除内容。
+- `createEmpty()` 产生合法完整 payload。
+- validate 接受合法值、拒绝缺字段、多余字段和破坏不变量的值。
+- `encode → decode → validate` 后 content key 不变。
+- 相同业务 payload 的 content key 与受管文件稳定；所有业务差异都会改变 key。
+- codec 不写 `revision.json`、绝对路径、父目录逃逸或其他模块目录。
 
-## 4. 第二步：提供 settle 和 project
+### 完成标准
 
-模块必须实现 `settle` 和 `project`。
+definition 能独立描述模块的空数据、校验、历史和远端表示；JSON 与非 JSON 的选择是模块明确决定，而不是 SDK 假设。
+
+## 第五步：实现 settle 和 project
+
+### 本步目标
+
+规定公共命令到来时如何结束实时交互，以及完整 payload 如何重新投影到页面。
+
+### 创建或修改的文件
+
+- `src/notes/app/controller.ts`
+- 负责草稿、拖动或投影的 UI 文件
+
+### 使用或实现的公共接口
+
+- `ModuleRuntimeHooks.settle(reason)`
+- `ModuleRuntimeHooks.project(payload, reason)`
+- 可选 `onConflict`、`onSnapshotChange` 留到第八步接入
+
+### 最小代码示例
 
 ```ts
-const hooks = {
+const hooks: ModuleRuntimeHooks<NotesPayload, NotesEvent> = {
   settle(reason: SettleReason): NotesEvent | null {
-    if (正在编辑文本) {
-      const edit = finishTextEditing();
-      return {
-        type: "set-note-text",
-        id: edit.noteId,
-        text: edit.text,
-      };
-    }
-
-    if (正在拖拽但该拖拽尚未到提交点) {
-      cancelLiveDrag();
-    }
-
-    // reason 可用于区分模块对不同命令的结算规则。
     void reason;
-    return null;
+    const edit = finishValidTextDraftOrCancelInvalidDraft();
+    cancelUncommittedPointerWork();
+    return edit
+      ? { type: "set-note-text", id: edit.id, text: edit.text }
+      : null;
   },
 
-  project(payload: NotesPayload) {
-    resetAllLiveInteractionState();
-    renderCompleteModule(payload);
-  },
-
-  onConflict(conflict: {
-    observedRemoteRevision: string | null;
-    observedRemoteUpdatedAt: string | null;
-    detectedAt: string;
-  }) {
-    showConflictNotice(conflict);
-  },
-
-  onSnapshotChange(snapshot: ModuleRuntimeSnapshot) {
-    renderSaveAndSyncStatus(snapshot);
+  project(payload: NotesPayload, reason: ProjectionReason): void {
+    cancelAllLiveInteraction();
+    renderCompletePayload(payload, reason);
   },
 };
 ```
 
-`settle` 可能收到六种 reason：
+settle 必须逐一考虑 `local-save`、`upload`、`pull`、`remote-change`、`undo`、`redo`；一次调用返回至多一个 event。project 只接收 `initialize`、`undo`、`redo`。
 
-| reason | 何时发生 |
-| --- | --- |
-| `local-save` | 本地保存读取当前 payload 前 |
-| `upload` | 上传或本地覆盖云端前 |
-| `pull` | 主动拉取发现云端确有变化后 |
-| `remote-change` | 轮询发现云端 revision 变化后 |
-| `undo` | 撤销前 |
-| `redo` | 重做前 |
+### 必须编写的测试
 
-返回规则：
+- 六种 settle reason 下，所有可能的草稿和 pointer 状态都被提交或取消。
+- 无变化返回 null；有效变化返回一个 event。
+- project 从 payload 重建页面，并清除不再可靠的实时状态。
+- project initialize 不依赖尚未赋值的 runtime。
 
-- 返回一个 event：SDK 先调用与 `runtime.dispatch(event)` 相同的流程，再继续原命令；
-- 返回 `null`：没有新的业务变化，SDK 直接继续。
+### 完成标准
 
-`settle` 不返回完整 payload。保存和同步最终仍读取 runtime 通过 event 计算得到的当前完整 payload。
+任何公共命令都不会在未定义的半编辑状态读取 payload；撤销、重做和初始化后页面只反映传入的完整 payload。
 
-`project` 会在初始化、撤销和重做时调用。初始化时 runtime 尚未返回，因此 `project` 不得依赖 runtime 变量；它只应依赖传入的 payload。
+## 第六步：建立页面并启动 runtime
 
-## 5. 第三步：启动模块运行时
+### 本步目标
 
-```ts
-async function main(): Promise<void> {
-  const appRoot = document.querySelector<HTMLElement>("#app");
-  if (!appRoot) throw new Error("Missing #app root.");
+建立严格 CSP 页面，加载 Shared 公共操作样式，并处理 runtime 的四种启动结果。
 
-  const result = await startModuleRuntime({
-    definition: notesDefinition,
-    appRoot,
-    hooks,
-    cloudStatusLabel: "正在同步笔记",
-  });
+### 创建或修改的文件
 
-  if (result.status !== "ready") {
-    // SDK 已处理：跳转登录页，或渲染重复标签/不支持浏览器页面。
-    return;
-  }
+- `modules/notes/index.html`
+- `src/notes/main.ts`
+- 模块页面 CSS
 
-  runtime = result.runtime;
-}
+### 使用或实现的公共接口
 
-let runtime: ModuleRuntime<NotesPayload, NotesEvent> | null = null;
-void main();
+- `startModuleRuntime`
+- `StartModuleRuntimeOptions`
+- `ModuleRuntimeStartResult`
+
+### 最小代码示例
+
+```html
+<link rel="stylesheet" href="/src/shared/ui/operationGate.css" />
+<link rel="stylesheet" href="/src/notes/style.css" />
 ```
 
-启动结果只有四种：
-
-| `status` | 含义 | 模块要做什么 |
-| --- | --- | --- |
-| `ready` | 可以编辑 | 保存返回的 `runtime` |
-| `authentication-required` | 没有有效登录 | 不处理，SDK 返回首页登录边界 |
-| `blocked` | 同模块已在其他标签编辑 | 不处理，SDK 已渲染阻止页面 |
-| `unsupported` | 浏览器没有安全 Web Locks | 不处理，SDK 已渲染阻止页面 |
-
-启动异常表示真正的初始化失败。模块入口可以显示一条安全的“初始化失败，请刷新重试”，但不得显示 token、请求头或任意序列化的原始异常。
-
-## 6. 日常编辑和 event 历史
-
-一个业务动作到达提交点时 dispatch 一个 event：
-
 ```ts
-runtime?.dispatch({
-  type: "set-note-text",
-  id: noteId,
-  text: nextText,
+const appRoot = document.querySelector<HTMLElement>("#app");
+if (!appRoot) throw new Error("Missing #app root.");
+
+const result = await startModuleRuntime({
+  definition: notesDefinition,
+  appRoot,
+  hooks,
+  cloudStatusLabel: "正在同步笔记",
 });
-```
 
-可读取的状态：
-
-```ts
-runtime.current;
-runtime.canUndo;
-runtime.canRedo;
-runtime.dirty;
-runtime.getSnapshot();
-```
-
-`runtime.current` 是当前完整 payload 的隔离副本。不得直接修改它来更新模块；业务更新必须通过 `dispatch(event)`。
-
-SDK 会对 payload、forward event、inverse event 和回调边界使用 `structuredClone`。dispatch 的原子规则是：只有 apply、结果校验、content key、invert 和所需 clone 全部成功后，current 和 event 队列才一起推进；任一步抛错都保持原状。
-
-如果 event 计算出的 content key 没有变化，它是 no-op，不进入历史，也不会删除已有 redo。撤销后 dispatch 真实变化才会删除旧 redo 分支。
-
-模块自己选择历史容量：
-
-- `capacity: 200` 表示最多保留 200 个 forward/inverse event 对；
-- `capacity: "unlimited"` 表示当前页面会话内不设 event 数量上限；
-- 刷新始终清空 event 队列，只保留已存入 IndexedDB 的完整 payload。
-
-### 6.1 保存与同步状态快照
-
-`runtime.getSnapshot()` 和可选 hook `onSnapshotChange(snapshot)` 使用同一份只读状态：
-
-| 字段 | 含义 |
-| --- | --- |
-| `initialized` | coordinator 已从本机或云端建立会话 |
-| `sessionDirty` | 当前页面 payload 相对最近本地保存基线有变化；等价于 runtime 的 `dirty` 语义 |
-| `localChangedSinceSync` | 已保存的本地完整 payload 相对最近同步基线有变化；不包含尚未本地保存的页面变化 |
-| `localSavedAt` | 当前完整 payload 最近一次成功写入本机的 ISO 8601 时间；未知为 `null` |
-| `knownRemoteRevision` | 当前已知云端 revision；冲突时为冲突观察到的版本，未知为 `null` |
-| `knownRemoteUpdatedAt` | 上述已知云端版本在 `revision.json` 中的 `updatedAt`；旧记录或未知值为 `null` |
-| `lastSyncedRemoteRevision` | 最近完成同步的云端 revision；冲突不会推进它 |
-| `pendingUpload` | 尚待确认的上传意图，或 `null` |
-| `conflict` | 已持久化冲突，或 `null`；其中包含 `observedRemoteRevision`、`observedRemoteUpdatedAt` 和 `detectedAt` |
-
-runtime ready 后会先通知一次；此后的 dispatch、撤销/重做、保存/同步命令以及轮询处理完成后会提供最新快照。观察者只用于刷新 UI：Shared 会隔离其中的 pending/conflict 对象，并吞掉观察者异常，因此回调不得被当作命令成功条件，也不得尝试在回调里回滚业务状态。需要即时读取时仍可调用 `getSnapshot()`。
-
-## 7. 撤销、重做和保存入口
-
-SDK 只提供功能方法，不注册键盘：
-
-```ts
-await runtime.undo();
-await runtime.redo();
-await runtime.save();
-```
-
-模块可以把按钮、菜单或自己选择的键位绑定到这些方法。下面只是一个同时选择 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 的模块示例，不是所有模块的通用键位要求：
-
-```ts
-function runSafely(action: () => Promise<unknown>, message: string): void {
-  void action().catch(() => showSafeMessage(message));
+if (result.status === "ready") {
+  controller.attachRuntime(result.runtime);
 }
+```
 
+严格 CSP 页面必须用外部 link 加载唯一的 `operationGate.css`。不要从 TypeScript 动态导入或复制它，否则开发服务器可能把 CSS 变成 CSP 拒绝的内联 style。`blocked`、`unsupported` 和 `authentication-required` 已由 SDK 处理，模块不要再建立第二套页面。
+
+### 必须编写的测试
+
+- ready 时只保存一个 runtime，并能使用 initial payload。
+- 其余三种结果不会进入业务编辑状态。
+- 初始化异常只显示安全文案。
+- 页面卸载时模块监听被清理；SPA 卸载会等待 dispose。
+
+### 完成标准
+
+模块页面在严格 CSP 下启动；Shared 的登录、单标签锁和公共阻塞 UI 没有被模块重复实现。
+
+## 第七步：把业务动作连接到 dispatch
+
+### 本步目标
+
+让控制器把已完成用户动作转换成 event，并用 runtime 返回的新 payload 更新页面。
+
+### 创建或修改的文件
+
+- `src/notes/app/controller.ts`
+- 产生业务命令的视图组件
+
+### 使用或实现的公共接口
+
+- `runtime.dispatch(event)`
+- 只读 `runtime.current`、`canUndo`、`canRedo`、`dirty`
+
+### 最小代码示例
+
+```ts
+function commitText(id: string, text: string): void {
+  const next = runtime.dispatch({ type: "set-note-text", id, text });
+  renderCompletePayload(next);
+}
+```
+
+视图发出“文字已经提交”之类的命令；控制器构造 event。不得直接修改 `runtime.current`，也不得让 DOM 成为业务数据真源。
+
+### 必须编写的测试
+
+- 每个提交点只调用一次 dispatch，event 内容完整。
+- 取消、无效输入和纯实时变化不 dispatch。
+- 复合动作只产生一个 event。
+- dispatch 抛错时 UI 不假装成功，当前投影仍对应原 payload。
+
+### 完成标准
+
+所有业务写入只有一条路径：视图命令 → 控制器构造 event → runtime.dispatch → 完整 payload 投影。
+
+## 第八步：接入保存、同步、冲突和状态 UI
+
+### 本步目标
+
+把模块自己的按钮和提示连接到 SDK 的持久化命令，而不复制同步实现。
+
+### 创建或修改的文件
+
+- `src/notes/app/controller.ts`
+- `src/notes/ui/shell.ts`
+
+### 使用或实现的公共接口
+
+- `save`、`upload`、`pull`、`resolveConflict`
+- `getSnapshot`
+- `onConflict`、`onSnapshotChange`
+
+### 最小代码示例
+
+```ts
+hooks.onSnapshotChange = (snapshot) => shell.renderSyncState(snapshot);
+hooks.onConflict = () => shell.showConflictChoices();
+
+saveButton.addEventListener("click", () => runSafely(() => runtime.save()));
+uploadButton.addEventListener("click", () => runSafely(() => runtime.upload()));
+pullButton.addEventListener("click", () => runSafely(() => runtime.pull()));
+
+localWinsButton.addEventListener("click", () =>
+  runSafely(() => runtime.resolveConflict("local-wins"))
+);
+cloudWinsButton.addEventListener("click", () =>
+  runSafely(() => runtime.resolveConflict("cloud-wins"))
+);
+```
+
+模块决定冲突提示外观和确认流程；只有两个覆盖方向。捕获错误时显示固定安全文案，不输出 token、请求头或原始 GitHub 响应。
+
+### 必须编写的测试
+
+- 各按钮调用正确 runtime 方法，不直接访问存储或 GitHub。
+- snapshot 时间、dirty、本地领先、pending 和 conflict 显示互不混淆。
+- 用户取消覆盖时不调用 resolveConflict。
+- onSnapshotChange 抛错不被当作命令失败。
+- 所有 GitHub 边界使用 fake fetch。
+
+### 完成标准
+
+模块只负责用户可见的命令和选择；保存、遮罩、轮询、上传、拉取及冲突持久化全部由 SDK 完成。
+
+## 第九步：连接按钮、菜单和模块快捷键
+
+### 本步目标
+
+按照模块自身交互规则暴露 runtime 功能，并明确清理所有模块监听。
+
+### 创建或修改的文件
+
+- 模块控制器或快捷键文件
+- 模块长期文档的“命令与快捷键”部分
+
+### 使用或实现的公共接口
+
+- 按需使用 `undo`、`redo`、`save` 及其他 runtime 命令。
+- Shared 不注册、选择或清理模块键位。
+
+### 最小代码示例
+
+```ts
 function onKeyDown(event: KeyboardEvent): void {
-  if (!runtime || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-
-  switch (event.key.toLowerCase()) {
-    case "z":
-      event.preventDefault();
-      runSafely(() => runtime!.undo(), "撤销失败，请重试。");
-      break;
-    case "y":
-      event.preventDefault();
-      runSafely(() => runtime!.redo(), "重做失败，请重试。");
-      break;
-    case "s":
-      event.preventDefault();
-      runSafely(() => runtime!.save(), "保存失败，请重试。");
-      break;
+  if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+  if (event.key.toLowerCase() === "z") {
+    event.preventDefault();
+    void runtime.undo().catch(showSafeUndoError);
   }
 }
 
 document.addEventListener("keydown", onKeyDown);
+// 模块卸载时：document.removeEventListener("keydown", onKeyDown)
 ```
 
-模块卸载时必须移除自己注册的监听。Shared 不知道模块选了哪些键位，也不会替模块移除这些监听。
+示例键位不是通用要求。是否在输入控件中接管、是否支持 Ctrl/Meta、命令优先级和 IME 行为都由模块文档决定。
 
-## 8. 保存、上传和拉取
+### 必须编写的测试
 
-### 8.1 保存按钮
+- 按钮、菜单和已声明键位调用正确命令。
+- 输入控件、组合输入和修饰键优先级符合模块规则。
+- 重复挂载不会重复注册；卸载后监听消失。
 
-```ts
-saveButton.addEventListener("click", () => {
-  if (!runtime) return;
-  void runtime.save().catch(() => {
-    showSafeMessage("保存失败，请重试。");
-  });
-});
-```
+### 完成标准
 
-保存期间 SDK 会让 `appRoot` 不可交互，但不会显示遮罩。保存把当前完整 payload 写入 IndexedDB；event 队列仍只留在页面内，并且不会因保存而清空。
+模块的所有命令入口都有明确用户语义和清理责任；不存在 SDK 暗中绑定的快捷键假设。
 
-### 8.2 上传按钮
+## 第十步：注册模块、完成长期文档和验收
 
-```ts
-uploadButton.addEventListener("click", () => {
-  if (!runtime) return;
-  void runtime.upload()
-    .then((result) => {
-      if (result === "conflict") {
-        // onConflict 已负责显示冲突提示。
-      }
-    })
-    .catch(() => {
-      showSafeMessage("上传失败，请重试。");
-    });
-});
-```
+### 本步目标
 
-`upload()` 会先结算实时交互；如果当前 payload 尚未本地保存，会先原子保存。上传、拉取和覆盖期间的 spinner 与遮罩由 SDK 自动显示，模块不得自己切换它们。
+让首页与构建系统能够访问模块，并留下足以维护业务逻辑的长期说明。
 
-### 8.3 主动拉取
+### 创建或修改的文件
+
+- `src/home/modules.ts`
+- `vite.config.ts` 或当前多页面构建配置
+- `.agents/<module-id>.md`（模块确实需要长期文档时）
+- 模块测试与必要的安全视觉夹具
+
+### 使用或实现的公共接口
+
+- 不新增 SDK 接口。
+- 复核业务代码只从 `src/shared` 根入口导入。
+
+### 最小代码示例
 
 ```ts
-await runtime.pull();
-```
-
-如果两端都改变，runtime 会持久化冲突，不会覆盖数据。upload、pull 或冲突解决返回 `"conflict"` 时，表示冲突已安全持久化；这不是普通网络失败，UI 应交给 `onConflict` 和冲突按钮处理。
-
-## 9. 冲突 UI
-
-模块可以自行决定冲突提示的外观，但只能调用两个方向：
-
-```ts
-await runtime.resolveConflict("local-wins");
-await runtime.resolveConflict("cloud-wins");
-```
-
-不要提供“自动合并”或绕过 runtime 的覆盖按钮。冲突存在时仍可继续 dispatch event 和本地保存，但再次上传或主动拉取前必须选择方向。
-
-远端变化与本地 event 形成冲突时，SDK 会在一个原子本地事务中保存当前完整 payload、content hash 和 conflict，再更新本地保存基线。因此刷新不会丢失本地一侧；此时 `runtime.dirty === false` 只说明内容已落到本机，`getSnapshot().localChangedSinceSync` 仍可为 true。
-
-## 10. 非 JSON payload
-
-非 JSON 模块使用 `defineModule`，并同样提供 event 历史策略：
-
-```ts
-type CounterEvent = {
-  type: "set-count";
-  name: string;
-  value: number | null;
-};
-
-const sortedEntries = (payload: Map<string, number>): Array<[string, number]> =>
-  [...payload].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-
-const definition = defineModule<Map<string, number>, CounterEvent>({
-  moduleId: "counters",
-  createEmpty: () => new Map(),
-  validate(value) {
-    if (
-      !(value instanceof Map) ||
-      ![...value].every(([name, count]) =>
-        typeof name === "string" && typeof count === "number" && Number.isFinite(count)
-      )
-    ) {
-      throw new TypeError("Invalid counters.");
-    }
-    return new Map(value as Map<string, number>);
+export const dashboardModules = [
+  {
+    id: "notes",
+    title: "笔记",
+    description: "记录和整理笔记",
+    href: "modules/notes/",
   },
-  contentKey: (payload) => JSON.stringify(sortedEntries(payload)),
-  history: {
-    capacity: "unlimited",
-    apply(payload, event) {
-      const next = new Map(payload);
-      if (event.value === null) next.delete(event.name);
-      else next.set(event.name, event.value);
-      return next;
-    },
-    invert(event, before) {
-      return {
-        type: "set-count",
-        name: event.name,
-        value: before.get(event.name) ?? null,
-      };
-    },
-  },
-  encode: (payload) => new Map([
-    ["counters.json", JSON.stringify(sortedEntries(payload))],
-  ]),
-  decode: (files) => new Map(
-    JSON.parse(files.get("counters.json") ?? "[]") as Array<[string, number]>,
-  ),
-});
+];
 ```
 
-payload 类型、event 类型和远端文件格式是三个不同选择：payload 可以是 `Map`，event 是小型业务动作，而完整 payload 仍可编码为 JSON 或其他 UTF-8 文本。
+需要长期文档的模块使用固定结构：
 
-## 11. 生命周期
+1. 模块目标：用户问题、核心场景、明确不做；
+2. 业务模型：实体、关系、身份/顺序/归属和业务不变量；
+3. 用户界面与操作流程：页面、核心流程、实时状态、提交点和快捷键；
+4. 模块内部架构：组件、状态所有者、数据流、源码入口和依赖边界；
+5. 持久化 SDK 定义：moduleId、Payload、Event 表、容量、settle、project、codec 和冲突 UI；
+6. 异常与边界情况；
+7. 验收标准。
 
-普通页面关闭时 SDK 自动监听 `pagehide` 并释放 Shared 资源。如果模块在单页应用中被卸载但页面没有关闭，必须先移除模块自己的事件监听，再显式调用：
+简单模块不被强制创建专用文档；但一旦存在模块文档，就只维护这一份长期真相。文档包含准确 Payload/Event 类型时，源码变化必须在同一任务更新文档。
 
-```ts
-document.removeEventListener("keydown", onKeyDown);
-await runtime.dispose();
-```
+### 必须编写的测试
 
-销毁会停止轮询、等待正在进行的操作、关闭 IndexedDB，并释放编辑锁。销毁后的 runtime 不得再次使用；重新进入模块应重新调用 `startModuleRuntime`。
+- 汇总前九步的领域、event、codec、hooks、控制器和 UI 接线测试。
+- 首页入口、模块 HTML 和生产构建入口一致。
+- 测试不访问真实 GitHub；严格 CSP 夹具不放宽生产规则。
+- 模块测试不重复验证 Shared 的 CAS、Git commit、轮询或锁算法。
 
-## 12. 接入完成后留下的模块契约
+### 完成标准
 
-每个模块只维护一份长期模块契约：`.agents/<module-id>.md`。不要再为每个新模块创建单独的“从零开发指南”或一次性实施计划。
-
-模块契约使用固定顺序：
-
-1. 范围、页面入口和 `moduleId`；
-2. 持久化定义，包括 payload、codec、history capacity、`settle` 和 `project`；不持久化则明确说明；
-3. 模块领域模型和业务规则；
-4. 实时状态、页面结构和 UI 交互；
-5. 用户命令、按钮和快捷键；
-6. 明确不支持的行为与兼容性边界；
-7. 模块验收要求。
-
-模块契约只记录相对于公共契约的模块特有决定，不重复登录、IndexedDB、GitHub、锁、轮询、遮罩或同步状态机。首次接入结束后，后续 agent 通常只需阅读 [持久化模块公共契约](./persistent-module-contract.md) 和该模块契约。
-
-## 13. 模块测试重点
-
-模块自己的测试至少覆盖：
-
-- `validate` 接受合法值、拒绝损坏值；
-- content key 对字段顺序稳定，并覆盖所有业务差异；
-- `encode → decode → validate` 后 content key 不变；
-- 每种 event 的 `apply` 不修改输入，`apply + invert + apply` 恢复原 content key；
-- 复合动作只 dispatch 一次，no-op 不入队且保留 redo；
-- 撤销后 dispatch 新 event 会删除旧 redo 分支；
-- 所选正整数容量的边界，或 `"unlimited"` 行为；
-- apply、invert、校验或 clone 失败时 current、队列位置和 dirty 均不推进；
-- 刷新只从完整本地 payload 开始，不恢复 event 队列；
-- `settle` 对模块在六种 reason 下可能存在的交互作出正确处理；
-- `project` 会清除实时交互状态；
-- 模块按钮、菜单或快捷键正确调用 runtime，并在卸载时清理；
-- 保存、冲突提示和两个解决按钮正确调用 runtime。
-
-模块不需要重复测试 GitHub 原子 commit、IndexedDB CAS、轮询间隔、Web Locks 或 spinner；这些由 Shared 自己的测试负责。
-
-## 14. 禁止事项速查
-
-业务模块不得：
-
-- 深入导入 `shared/auth`、`shared/github`、`shared/persistence`、`shared/sync` 等内部目录；
-- 自己读取 localStorage 凭据；
-- 自己创建 IndexedDB、GitHub client、轮询器、编辑锁或云端遮罩；
-- 直接修改远端 `revision.json`；
-- 直接修改 `runtime.current`，或绕过 `runtime.dispatch(event)` 推进业务数据；
-- 把 event 历史写入 IndexedDB、业务 payload 或远端文件；
-- 假定 SDK 已经安装或会清理任何业务快捷键；
-- 在 `apply`、`invert`、`validate` 或 codec 中修改参数、操作 DOM 或产生其他副作用；
-- 在错误文本或日志中输出 token、请求头或原始 GitHub 响应体。
-
-平台维护者需要了解第二个 `ModuleRuntimeEnvironment` 参数时，阅读 [Shared 与平台维护规范](./shared-maintenance.md)。业务模块不要传这个参数。
+首页可进入模块，构建包含正确入口，长期文档首先说明模块业务而非复述 SDK；后续维护不再依赖本文。

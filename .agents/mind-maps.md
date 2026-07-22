@@ -1,350 +1,426 @@
-# Mind Map 模块契约
+# Mind Map
 
-## 1. 范围与优先级
+维护本模块时同时阅读 [持久化模块公共契约](./persistent-module-contract.md)。只有首次接入或重做 SDK 接线时才阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。
 
-开发或维护 Mind Map 时阅读 [持久化模块公共契约](./persistent-module-contract.md) 和本文。只有首次接入或重做 SDK 接线时，才额外阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。
+## 1. 模块目标
 
-本文是 Mind Map 的业务与交互权威契约。登录、IndexedDB、编辑锁、GitHub 原子提交、轮询、公共 spinner 和同步四象限由 Shared 负责；本文只说明 Mind Map 如何定义完整资料库、如何把用户动作提交为 event，以及 UI 如何调用 runtime。
+### 1.1 用户要解决的问题
 
-Mind Map 只支持本文定义的当前 payload 与远端文件格式，不读取旧本地或云端格式，也不提供旧状态迁移。兼容性边界发生变化时必须显式更新本文。
+Mind Map 让用户在一个资料库中管理多张脑图，并在自由画布上用文本节点和有向箭头组织想法。资料库、全部脑图和它们的历史、保存与同步共同构成一个模块，而不是彼此独立的小文件编辑器。
 
-固定入口与边界：
+### 1.2 核心使用场景
 
-- `moduleId` 为 `mind-maps`，远端根由 Shared 派生为 `data/mind-maps/`；
-- 页面入口为 `modules/mind-map/index.html`，首页入口名称为“思维导图”；
-- 使用 `defineJsonModule<MindMapPayload, MindMapEvent>`；
-- 整个资料库是一个 payload、一个本地保存边界、一个同步/冲突边界和一条全局历史；
-- 只有应用控制器持有 `ModuleRuntime`。资料库视图和画布只发出命令/回调，不导入 Shared、不直接修改 payload。
+- 用无限层级文件夹创建、重命名、移动和删除脑图；
+- 在 SVG 自由画布中创建、编辑、移动和 resize 文本节点；
+- 在节点四边中点之间建立简单有向箭头；
+- 跨文件夹和脑图撤销、重做同一条资料库历史；
+- 保存到本机、上传、拉取，并在冲突时明确选择本地或云端完整资料库；
+- 在当前设备恢复侧栏开关、最近脑图和文件夹展开偏好。
 
-推荐代码分层为领域模型、event 与 codec、几何与 viewport、应用控制器、SVG 画布、资料库树和页面 shell。领域与几何层保持纯函数，DOM 层不得成为业务数据真源。
+### 1.3 明确不做
 
-## 2. 完整 payload
+本模块不提供：
 
-### 2.1 固定 JSON 形态
+- 旧 payload/文件读取、schemaVersion 或自动迁移；
+- 复制粘贴画布对象、搜索、节点样式、富文本或自动布局；
+- 箭头文字、曲线、样式或创建后的端点修改；
+- 触控专用编辑；
+- 当前脑图刷新按钮或退出登录；
+- 冲突自动合并、逐图/逐节点合并，或自动删除真实旧云端数据。
 
-```ts
-type ConnectorSide = "top" | "right" | "bottom" | "left";
+## 2. 业务模型
 
-interface MindMapEndpoint {
-  nodeId: string;
-  side: ConnectorSide;
-}
+### 2.1 核心实体与关系
 
-interface MindMapNode {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  autoWidth: boolean;
-}
+- **资料库**：模块的完整业务边界，包含所有文件夹和脑图。
+- **文件夹**：没有单独对象或 ID，以规范化逻辑路径表示；根目录不是 `folders` 中的空字符串。
+- **脑图**：`MindMapDocument`，属于根目录或一个现存文件夹，具有全资料库稳定 ID、逻辑路径、节点和箭头。
+- **节点**：`MindMapNode`，属于一张脑图，包含稳定 ID、多行纯文本、frame 和自动宽度状态。
+- **箭头**：`MindMapArrow`，属于一张脑图，以稳定 ID 和两个 endpoint 引用节点四边中点。
 
-interface MindMapArrow {
-  id: string;
-  from: MindMapEndpoint;
-  to: MindMapEndpoint;
-}
+文件夹和脑图是不同类型，因此可以在同一父目录使用相同显示名称。判断脑图是否属于文件夹必须比较 `parentPath(map.path)`；脑图路径与文件夹路径相同表示二者是同级项目，不表示脑图位于该文件夹内。
 
-interface MindMapDocument {
-  id: string;
-  path: string;
-  nodes: MindMapNode[];
-  arrows: MindMapArrow[];
-}
+### 2.2 身份、名称、路径与顺序
 
-interface MindMapPayload {
-  folders: string[];
-  maps: MindMapDocument[];
-}
-```
-
-`folders` 保存逻辑文件夹路径，例如 `工作/项目 A`；根目录不作为空字符串写入数组。`MindMapDocument.path` 保存包含显示名称、但不带 `.json` 后缀的逻辑路径。map、node 和 arrow 的 ID 一经创建必须稳定；重命名和移动只改变逻辑路径，不改变 ID。
-
-校验和规范化必须保证：
-
-- 对象只包含上述固定字段；数值有限，width/height 为正数；
-- 所有父文件夹都显式存在于 `folders`；
-- folder path、map path 和各图内部的 node/arrow ID 唯一；
-- 同一脑图中的箭头端点引用现存节点，禁止自连；
-- 完全相同的有向端点组合 `from.nodeId/from.side/to.nodeId/to.side` 只能存在一次；
-- folders 按逻辑中文路径稳定排序，maps 按路径再按 ID 排序，nodes/arrows 按 ID 排序；
+- map ID 在整个资料库唯一；node/arrow ID 在各自脑图中唯一。重命名和移动只改变路径，不改变 ID。
+- `folders` 显式包含全部祖先文件夹。脑图 path 包含显示名称，但不含 `.json`。
+- 名称提交前 trim 并做 Unicode NFC。空字符串、`.`、`..`、斜杠、反斜杠和控制字符无效。
+- 文件夹名称不得以 `.json` 结尾。脑图名称末尾一个或多个 `.json` 后缀会被移除，UI 始终显示无后缀名称。
+- 同一父目录、同一类型按 Unicode 不区分大小写判重；不同类型可以同名。
 - 根目录脑图不能显示为 `revision`，避免与 Shared 的 `revision.json` 冲突。
+- 每层先显示文件夹，再显示脑图；同类型使用 `zh-CN`、数字感知、不区分大小写的顺序，collator 相等时再以码点顺序确定结果。
+- 重命名或移动先验证完整目标子树；任一名称或路径冲突都使整个动作失败。
 
-### 2.2 不进入 payload 的状态
+### 2.3 必须始终成立的业务不变量
 
-以下内容只属于当前页面会话，不得保存到 IndexedDB 或 GitHub：
+- payload 对象只有定义字段；所有几何数值有限，width/height 为正数。
+- 每个箭头的两端节点必须存在于同一脑图，且不能自连。
+- `from.nodeId/from.side/to.nodeId/to.side` 完全相同的有向连接只能存在一次。
+- 删除节点时，同一业务动作同时删除全部相连箭头；一次撤销完整恢复。
+- 文件夹不能移动到自身或任何后代。
+- 删除或移动文件夹只影响真正位于其子树中的脑图，不影响与文件夹同路径的同级脑图。
+- folders、maps、nodes 和 arrows 始终使用领域层定义的规范稳定顺序。
 
-- 当前脑图、资料库选择、节点/箭头选择、焦点和悬停；
-- 正在输入的文字或资料库名称草稿；
-- pointer ID/capture，以及移动、resize、框选、连线、平移和拖放的中间状态；
-- 每张脑图的 viewport、资料库展开集合和侧栏开关；
-- DOM/SVG 引用、动画帧、自动平移状态；
-- event 队列、保存/同步/冲突、revision 和版本时间。
+### 2.4 非业务状态
 
-侧栏开关、最近打开的 map ID 和展开文件夹集合可以作为尽力而为的本机 UI 偏好写入 `localStorage`，但它们不属于业务 payload，也不得影响 content key。
+- 当前脑图、资料库选择、画布选择、焦点、悬停、草稿、pointer、拖放、移动、resize、框选、连线和平移属于页面实时状态。
+- 每张脑图 viewport 只在当前页面会话中按 map ID 记忆。
+- 侧栏开关、最近脑图和展开文件夹是尽力而为的本机 UI 偏好。
+- event 历史、revision、版本时间、pending 和 conflict 是 SDK/系统状态，不是 Mind Map 业务实体。
 
-## 3. 名称、路径与远端文件
+## 3. 用户界面与操作流程
 
-### 3.1 名称规则
+### 3.1 页面和主要区域
 
-提交名称前必须 trim 并做 Unicode NFC 规范化。空名称、`.`、`..`、包含 `/`、`\` 或控制字符的名称无效。
+页面使用浅色主题，由顶栏、左侧固定宽度浮动资料库、SVG 自由画布、版本区域、toast 和确认对话框组成。资料库浮在画布上方，不改变画布业务坐标。
 
-- 文件夹名称不得以 `.json` 结尾；
-- 脑图名称输入末尾可带 `.json`，提交时移除该后缀，UI 始终显示无后缀名称；
-- 同一父目录、同一类型按 Unicode 不区分大小写判重；文件夹与脑图属于不同类型，因此可以同名；
-- 文件夹优先显示；同类型按中文、数字感知且有确定 tie-breaker 的顺序排列；
-- 任何重命名或移动都必须先验证完整目标子树/路径，失败时 payload 和历史保持原子不变。
+顶栏只读显示当前脑图名称，并提供：首页、资料库开关、保存、上传、拉取、添加文本、添加箭头和复位。没有当前脑图时禁用添加文本、添加箭头和复位。
 
-### 3.2 codec
+资料库首次默认打开，之后按本机偏好恢复；打开脑图不关闭资料库。
 
-每张脑图编码为一个受管文件：
+### 3.2 资料库流程
 
-```text
-<逻辑文件夹>/<脑图显示名称>.json
-```
+- 文件夹可无限嵌套并直接包含文件夹和脑图。
+- 单击文件夹同时选中并切换折叠；单击脑图同时选中并打开。资料库选择与画布选择互相清除。
+- 新建以当前选中文件夹为父目录；选中脑图时使用其父目录；没有适用选择时使用根目录。
+- 新建、移动或历史定位会展开显示目标所需的祖先；恢复最近脑图严格保留原展开集合，不额外展开。
+- 顶部操作只有新建文件夹、新建脑图、重命名和删除。
+- 名称使用行内编辑。Enter 或 blur 在校验成功时提交；明确的取消按钮丢弃草稿。普通无效提交保留编辑器并显示错误；SDK settle 到来时无效草稿被取消。
+- 项目只通过 HTML 拖放移动到现存文件夹或根目录；悬停折叠文件夹约 650 ms 自动展开。文件夹不能放入自身或后代。
+- 删除脑图必须确认；删除文件夹必须明确提示递归删除所有后代后再确认。
+- Delete 在资料库上下文打开同一删除确认，不直接删除。
+- 相对本地保存基线有变化时，受影响脑图和现存祖先文件夹显示 `*`；成功本地保存后消失。
 
-文件 JSON 只保存：
+资料库名称只在有效 Enter/blur 时完成；拖放只在合法 drop 时完成；删除只在用户确认后完成。折叠、展开、选择、悬停和拖放中间过程不属于业务动作。
 
-```ts
-interface StoredMapDocument {
-  id: string;
-  nodes: MindMapNode[];
-  arrows: MindMapArrow[];
-}
-```
+### 3.3 画布、viewport 与选择
 
-`path` 由文件相对路径推导，不在文件内容中重复。JSON 使用稳定顺序、两个空格缩进并以换行结尾。
+- 画布用 SVG 属性更新几何和 transform，不生成动态内联 style；页面保持严格 CSP。
+- 滚轮以鼠标为中心缩放，范围固定为 0.25–2.5。
+- 空白处右键拖动平移；画布禁用原生右键菜单，编辑 textarea 保留原生菜单。
+- 第一次打开脑图和“复位”适配全部节点，并避开打开的资料库；空脑图使用默认 viewport。
+- 空白左拖框选；只有节点 frame 或整条箭头线段被矩形完整包含才命中。普通框选替换选择，Ctrl+框选切换框内对象。
+- 普通单击替换选择；Ctrl+单击切换对象。
+- 拖动未选中节点先替换原选择；Ctrl+拖动未选中节点把它加入选择并移动整组；拖动已选节点移动整组。
+- 选中节点临时提高绘制层级；编辑、实际移动或 resize 的节点位于最高层。
+- moving、resizing、marquee 和 connecting 接近可见区边缘时自动平移；viewport 改变后仍以世界坐标继续交互。结束、取消或 settle 停止动画。
 
-没有直接子脑图或子文件夹的空叶文件夹编码为空的 `<folder>/.gitkeep`；父目录由其受管后代路径隐含，decode 时必须补齐全部祖先。codec 只接收 Shared 清单列出的受管文件；仓库中的未知文件仍由 Shared 保留，Mind Map 不得接管或删除。
+viewport、平移、缩放、框选过程和纯选择变化不进入业务历史。
 
-decode 只接受合法 `.json` 和空 `.gitkeep`，重建 path 后再走完整 payload 校验。encode/decode 必须确定、无损，并使规范 content key 往返不变。
+### 3.4 节点与文字
 
-## 4. event 与全资料库历史
+节点只有多行纯文本与 frame。初始 frame 为 260×92，`autoWidth` 为 false；最小宽高为 32×35。
 
-### 4.1 固定事件集合
+首次把默认空节点编辑为非空文本时，宽度采用文字自然宽度并限制在最小宽度至 260 之间，保持固定宽度模式。`autoWidth` 已为 true 时，后续文字编辑跟随自然宽度。文字高度始终至少满足内容和最小高度。
 
-`history.capacity` 固定为 `100`，按已提交 event 数计。整个资料库共享同一条队列；切换脑图或文件夹不会切换、清空或拆分历史。
+手工 resize 完成时：请求宽度大于文字自然宽度则收紧到自然宽度并设 `autoWidth: true`；否则保存请求宽度、允许换行并设为固定宽度。文字和 resize 的最终布局值都必须由实时层在 event 中给出，领域 apply 不读取 DOM 测量。
 
-事件 discriminant 与职责固定为：
-
-| event | 固定业务含义 |
-| --- | --- |
-| `create-folder { path }` | 新建一个文件夹 |
-| `delete-folder { path }` | 递归删除文件夹、后代文件夹和脑图 |
-| `restore-folder { rootPath, folders, maps }` | inverse 专用，完整恢复已删子树 |
-| `relocate-folder { fromPath, toPath }` | 原子重命名或移动文件夹及全部后代 |
-| `create-map { map }` | 新建带稳定 ID 的空脑图 |
-| `delete-map { mapId }` | 删除一张脑图 |
-| `restore-map { map }` | inverse 专用，完整恢复脑图 |
-| `relocate-map { mapId, path }` | 原子重命名或移动脑图 |
-| `add-node { mapId, node }` | 新增一个节点 |
-| `set-node-text { mapId, nodeId, text, frame, autoWidth }` | 一次文字提交及其最终布局结果 |
-| `set-node-frame { mapId, nodeId, frame, autoWidth }` | 一次 resize/最终 frame 提交 |
-| `move-nodes { mapId, positions }` | 一次单节点或多节点移动的最终位置 |
-| `add-arrow { mapId, arrow }` | 新增一条有向直线箭头 |
-| `delete-objects { mapId, nodeIds, arrowIds }` | 一次混合节点/箭头批量删除 |
-| `restore-objects { mapId, nodes, arrows }` | inverse 专用，恢复删除内容及连接关系 |
-
-重命名和移动共用 relocate event，因为两者都是路径的原子替换。删除任一节点时，同一个 `delete-objects` event 必须同时移除全部相连箭头；inverse 从 before/after 差异取得实际被删节点和箭头，使一次 undo 完整恢复。
-
-folder 与 map 可以同名，因此判断脑图是否位于文件夹子树时必须比较 `parentPath(map.path)`，不能把 `map.path === folder.path` 当成从属关系。同路径脑图是该文件夹的同级项目；删除或移动文件夹不得误操作它。
-
-### 4.2 提交与历史规则
-
-一次语义动作只 dispatch 一次：一次资料库操作、一次文字提交、一次拖动、多选移动、resize、连线或批量删除各自只产生一个 event。pointermove、框选本身、viewport、平移、侧栏、展开/折叠和纯选择变化不进入历史。
-
-领域层的 apply/invert 必须：
-
-- 校验输入和目标存在性，返回新的规范化完整 payload，不修改参数；
-- 对同一输入确定，不访问 DOM、时钟、随机数、网络、存储或可变全局状态；
-- forward 后应用 inverse 恢复原 content key；
-- 在冲突名称、非法路径、缺失目标、重复连接等失败时不产生部分修改。
-
-no-op、redo 分支、容量淘汰、保存基线和异常原子性遵循 Shared 通用规则。
-
-### 4.3 跨图 undo/redo 焦点
-
-undo/redo 前后比较完整 payload，而不是假定变化发生在当前图：
-
-- 画布 event：自动打开受影响脑图，并在资料库中选中它；
-- 资料库 event：选中新建/恢复/移动后的目标文件夹或脑图；脑图目标存在时打开它；
-- 撤销删除后打开恢复的脑图或选中恢复的文件夹；
-- 目标在 after payload 已不存在时，选择最近仍存在的父文件夹；没有父文件夹时清空项目选择，并把后续新建/拖放上下文视为资料库根；
-- 投影后不恢复旧画布选择、编辑或 pointer 状态。
-
-## 5. 实时状态结算与投影
-
-### 5.1 `settle(reason)`
-
-六种 reason 共用同一个互斥结算过程。设计上文字草稿、资料库名称草稿和 pointer/拖放动作不能同时成为两个待提交业务变化，因此一次 settle 最多返回一个 event。
-
-固定顺序：
-
-1. 有效的节点文字或资料库名称草稿先退出编辑并转换为一个最终 event；内容无变化则为 no-op/`null`；
-2. 无效资料库名称草稿自动取消，不阻塞原命令；
-3. 取消未到提交点的节点移动、resize、框选、拖线、右键平移和资料库拖放，丢弃临时几何；
-4. 停止自动平移、清除悬停展开 timer，并释放已有 pointer capture；
-5. 退出单次箭头模式，清空画布与资料库两侧的操作选择；
-6. 返回步骤 1 的 event 或 `null`，由 Shared 先走正常 dispatch，再继续 save/upload/pull/remote-change/undo/redo。
-
-文本编辑中执行 undo 时，Shared 会先记录结算 event 再撤销一次，因此结果回到该文字修改前。redo 前提交真实新草稿会按 Shared 规则剪掉旧 redo；no-op 不剪分支。保存失败时已提交的 event、当前 payload 和历史仍保留。
-
-### 5.2 `project(payload, reason)`
-
-`project` 只依据传入的完整 payload 重建资料库和当前脑图，清除已失效的 DOM 引用、草稿、选择、pointer、自动平移和临时 frame。初始化恢复上次仍存在的脑图；不存在时不猜测旧 ID。undo/redo 再按上一节的 payload 差异选择业务目标。
-
-`onSnapshotChange` 可能只更新版本时间、pending 或其他系统状态。payload 与本地保存基线均未变化时，只更新顶栏状态，不得重建资料库或画布 DOM，以免中断 IME、丢失尚未 settle 的文字/名称草稿或破坏实时 pointer 状态。
-
-每张脑图的 viewport 只在当前页面内按 map ID 记忆。第一次打开及“复位”适配全部节点，并按侧栏实际可见区域避让打开的资料库面板；没有节点时使用默认 viewport。云端拉取由 Shared 原子替换本地完整 payload 并 reload，不在旧历史上直接 project 云端数据。
-
-## 6. 资料库交互
-
-资料库是左侧固定宽度的浮动面板，不挤压业务画布坐标。首次使用默认打开；之后按本机偏好恢复。打开脑图不关闭面板。
-
-- 文件夹无限嵌套，可同时直接包含文件夹和脑图；每层文件夹在前、脑图在后；
-- 单击文件夹同时选中它并切换折叠；单击脑图同时选中并打开它；资料库选择会清空画布选择；
-- 新建文件夹/脑图以当前所选文件夹为父目录，否则使用相应项目的父目录或根目录；成功后展开显示目标所需的祖先；
-- 恢复上次脑图时严格保留已记录的展开集合，不为“打开”动作额外展开祖先；
-- 顶部只提供新建文件夹、新建脑图、重命名和删除；名称使用行内编辑，Enter 或 blur 提交，并始终提供明确的“取消”按钮；
-- 新建、重命名、移动成功后使用规范名称和完整路径判重；folder 与 map 可以同名；
-- 项目移动只通过 HTML 拖放，目标只能是已存在文件夹或资料库根。悬停折叠文件夹约 650 ms 后自动展开；禁止把文件夹移入自身/后代；
-- 删除脑图必须确认；删除文件夹必须明确警告会递归删除所有后代，再确认；
-- Delete 在资料库焦点/选择上下文中打开同一删除确认，不直接删除；
-- 当前页面相对本地保存基线有变化时，受影响脑图及其所有现存祖先文件夹显示 `*`。文件夹增删/移动也使对应现存路径链显示 `*`；成功本地保存后星号消失。
-
-资料库拖放、展开、草稿和选中状态都只是实时状态。拖放释放到合法目标时才 dispatch 一个 relocate event。
-
-## 7. SVG 自由画布
-
-### 7.1 呈现与 viewport
-
-页面使用浅色主题和 SVG 自由画布。位置及 viewport transform 通过 SVG 属性更新；不得为交互生成动态内联 `style`，不得放宽页面严格 CSP。画布有浅色网格。
-
-- 滚轮以鼠标所在点为锚缩放；
-- 空白处右键拖动平移；画布禁用原生右键菜单，但文字编辑 textarea 保留原生菜单；
-- 复位和首次打开适配全部节点，并避开打开的资料库面板；
-- viewport、滚轮、平移和网格不改变 payload，也不进入历史。
-
-### 7.2 选择、移动与自动平移
-
-空白处左键拖动框选节点和箭头，只有 frame 或整条线段被矩形完整包含才命中。普通框选替换选择；`Ctrl+框选` 以框选结果切换基线中的对象。
-
-- 普通单击对象替换选择；`Ctrl+单击` 切换该对象；
-- 拖动未选中节点先用该节点替换原选择，再移动；
-- `Ctrl+拖动` 未选中节点时把它加入已有多选并立即移动整组；已选节点拖动整组；
-- 一次拖动只在 pointerup 提交所有节点最终位置；pointercancel/settle 恢复 payload 投影；
-- 画布选择变化会清空资料库选择，资料库选择变化也会清空画布选择；
-- 被选节点临时提高绘制层级；正在编辑、resize 或实际移动的节点最高；
-- 移动、resize、框选和拖箭头接近当前可见区域边缘时启动自动平移。平移改变 viewport，同时继续以世界坐标更新当前交互；结束、取消或 settle 必须停止动画。
-
-### 7.3 节点
-
-节点只包含多行纯文本和 frame，不提供富文本、颜色或其他样式。默认尺寸与自动文字布局保持已确认的旧版视觉行为，但实现和数据格式完全重写：文字提交把最终 `text + frame + autoWidth` 放进一个 event；手工 resize 若把宽度限制在文字自然宽度以内，则保存固定宽度并允许换行；若把宽度拖到自然宽度以外，则收紧到自然宽度并恢复自动宽度。resize 的最终 `frame + autoWidth` 只提交一个 event。任何布局结果都必须在 event 中显式给出，apply 不得读取 DOM 测量。
-
-节点视觉状态只有四种：
+节点只有四种视觉状态：
 
 | 状态 | 含义 |
 | --- | --- |
-| idle | 未选中、未操作 |
-| moving | 已选中待移动或正在移动 |
-| resizing | 正在通过右下手柄 resize |
-| editing | textarea 正在编辑 |
+| `idle` | 未选中、未操作 |
+| `moving` | 已选中待移动或正在移动 |
+| `resizing` | 正在拖动右下 resize 手柄 |
+| `editing` | textarea 正在编辑 |
 
-只提供右下 resize 手柄。单选节点时显示；多选（包括混合选择）不显示；编辑态仍显示。点击文字区域进入编辑，点击别处/blur 提交；Enter 只插入换行。编辑时按下节点边框或 resize 手柄，必须先提交文字 event，再开始移动或 resize。
+只提供右下手柄。单选或编辑时显示；多选或混合选择不显示。点击文字进入编辑，blur/点击别处提交，Enter 只换行。编辑中按下边框或手柄时先提交文字，再开始移动或 resize。
 
-删除混合选择只 dispatch 一个 `delete-objects`。删除节点自动包含所有相连箭头，撤销一次完整恢复。
+节点移动和 resize 只在 pointerup 提交最终 event；pointercancel 或 settle 取消中间几何并恢复已提交 payload 的投影。
 
-### 7.4 箭头
+### 3.5 箭头
 
-箭头是四边中点之间的简单有向直线，只保存稳定 ID 与 from/to endpoint。没有文字、曲线、样式、端点后改或自连接；完全重复的有向端点组合无效。
+箭头是节点四边中点之间的简单有向直线，没有文字、曲线、样式或端点后改。
 
-“添加箭头”是单次模式：
+添加箭头是单次模式：
 
-1. 进入时先提交文字、取消其他实时交互并清空选择，显示所有节点的四个连接点；
-2. 从一个连接点拖到另一个节点的连接点；接近边缘时允许自动平移；
-3. 合法释放只 dispatch 一个 `add-arrow`，随后退出模式且不选择新箭头；
-4. 自连、重复、未命中目标等无效释放直接退出且不 dispatch；
-5. 点击空白或再次点击“箭头”按钮也退出。
+1. 进入时提交输入、取消其他实时交互、清空选择并显示全部连接点；
+2. 从一个连接点拖到另一个节点的连接点；
+3. 合法释放提交一个箭头 event，随后退出且不选择新箭头；
+4. 自连、重复或未命中目标的释放不提交 event，但仍退出；
+5. 点击空白或再次点击箭头按钮也退出。
 
-## 8. 顶栏、保存同步与返回首页
+### 3.6 保存、同步、版本和返回首页
 
-顶栏只读显示当前脑图名称，并提供：首页、资料库开关、保存、上传、拉取、添加文本、添加箭头、复位。没有当前脑图时禁用三项画布命令。
+- 保存只写本机；上传由 SDK 在必要时先保存。
+- 已有冲突时，点击上传确认 `local-wins`，点击拉取确认 `cloud-wins`；取消则保留冲突。
+- 本地存在未保存或未上传变化时，拉取先确认“云端覆盖本地”，确认后直接执行 cloud-wins。
+- 冲突只通过版本区域变色和说明呈现，不显示阻塞横幅。
+- 本地版本始终显示 `localSavedAt` 或“时间未知”；页面有未保存修改时在版本旁追加状态。
+- 云端显示 `knownRemoteUpdatedAt`；只有 revision 时显示“时间未知”，二者均无时显示“尚无版本”。pending、本地领先、同步一致和冲突使用不同非阻塞状态。
+- `localChangedSinceSync` 表示已保存但未上传，不能误标为页面未保存。
+- 网络或保存失败只显示安全、可重试中文文案，不展示原始异常、token 或 GitHub 响应。
 
-- 保存只调用 `runtime.save()`，只写本机；
-- 上传调用 `runtime.upload()`，由 Shared 先结算并在必要时本地保存；
-- 主动拉取没有本地变化时调用 `runtime.pull()`；存在未保存或未上传的本地变化时，先确认“用云端覆盖”。确认表示本次操作最终选择 `cloud-wins`（必要时先由 pull 持久化冲突，再 resolve），取消则不调用覆盖；
-- 已持久化冲突时不显示阻塞横幅。用户点上传时确认 `local-wins`，点拉取时确认 `cloud-wins`；不选择方向则保留冲突；
-- 冲突覆盖整个资料库，不逐节点、逐图合并，也不允许绕过 runtime；
-- 网络/保存失败显示安全、可重试的中文文案，不输出捕获异常、token 或 GitHub 响应体。
+返回首页前先结算有效文字/名称草稿。`sessionDirty` 为 true 时提供“保存并返回 / 不保存返回 / 取消”；保存成功后再导航。已保存但未上传时直接返回。`beforeunload` 只在尚未保存到本机时提示：runtime dirty，或仍存在有效未提交文字/名称变化；同步领先和冲突本身不触发提示。
 
-顶栏版本区域由初始 `runtime.getSnapshot()` 和 `onSnapshotChange` 驱动：
-
-- 本地始终显示 `localSavedAt` 或“时间未知”；`sessionDirty` 时在该时间旁追加“有未保存修改”，不能用提示文字取代版本时间；
-- 云端显示 `knownRemoteUpdatedAt`；仅 revision 已知时显示“时间未知”，两者未知时显示“尚无版本”；
-- conflict 只通过版本区域的冲突颜色/说明提示；pending upload、本地领先和同步一致使用各自非阻塞状态；
-- “已保存到本机但未上传”由 `localChangedSinceSync` 表示，不应重新标成页面未保存。
-
-返回首页前先结算正在编辑的文字/有效名称草稿，再读取最新 snapshot：
-
-- `sessionDirty` 为 true 时显示“保存并返回 / 不保存返回 / 取消”；
-- “保存并返回”等待本地保存成功后导航；“不保存返回”丢弃本页尚未保存内容；“取消”留在页面；
-- 已本地保存但尚未上传时直接返回，不额外警告；
-- 刷新/关闭页面只对“尚未保存到本机”的内容注册浏览器 `beforeunload` 提醒：`sessionDirty` 为 true，或仍有尚未 dispatch 的有效文字/名称变化。同步领先或冲突本身不触发该提醒。
-
-## 9. 模块快捷键
-
-Shared 不注册键盘。Mind Map 在模块层绑定并在 dispose 前移除：
+### 3.7 模块快捷键
 
 | 键位 | 行为 |
 | --- | --- |
 | 精确 `Ctrl+Z` | `runtime.undo()` |
 | 精确 `Ctrl+Y` | `runtime.redo()` |
 | 精确 `Ctrl+S` | `runtime.save()` |
-| `Ctrl+Shift+Z` | `preventDefault()`，完全无动作 |
-| `Alt+1` | 先结算输入，再在可见画布中心新增文本节点 |
-| `Alt+2` | 先结算输入，再进入单次添加箭头模式 |
-| `Delete` | 文字输入中由输入框删除文字；画布上下文删除选择；资料库上下文打开删除确认 |
+| `Ctrl+Shift+Z` | preventDefault，完全无动作 |
+| `Alt+1` | 先结算输入，在可见画布中心新增文本节点 |
+| `Alt+2` | 先结算输入，进入单次添加箭头模式 |
+| `Delete` | 文字输入中删除文字；画布上下文删除选择；资料库上下文打开删除确认 |
 
-“精确 Ctrl”表示 Ctrl 按下且 Shift/Alt/Meta 均未按下。Ctrl 历史/保存命令即使焦点在模块输入控件中也走模块 runtime，并阻止浏览器原生命令；`Alt+1/2` 同样始终生效。输入法 composition 期间不得误提交 Enter。
+“精确 Ctrl”表示 Ctrl 按下且 Shift/Alt/Meta 均未按下。Ctrl 历史/保存命令和 Alt+1/2 即使焦点在输入控件也执行模块命令。输入法 composition 期间不得误提交 Enter。
 
-Backspace、Enter 编辑入口、`Ctrl+A` 和 Escape 都不是模块命令：Backspace/`Ctrl+A` 在输入控件中保留浏览器文字行为，在画布上不承担删除/全选；Enter 只服务当前名称编辑或 textarea 换行；Escape 不作为取消或退出模式的隐藏快捷键。
+Backspace、Ctrl+A 和 Escape 不是模块命令；在输入控件中保留文字行为，在画布不承担删除、全选或隐藏取消。Enter 只服务名称提交或 textarea 换行。
 
-## 10. 明确不支持
+## 4. 模块内部架构
 
-Mind Map 不提供：
+### 4.1 主要组件和源码入口
 
-- 旧 payload/文件读取、schemaVersion 或自动迁移；
-- 复制粘贴画布对象、搜索、节点样式、自动布局、富文本；
-- 箭头文字、曲线、样式或端点编辑；
-- 触控专用编辑；
-- 当前脑图刷新按钮或退出登录；
-- 冲突自动合并，或程序自动删除真实 `data/mind-maps/` 旧数据。
+| 文件 | 职责 |
+| --- | --- |
+| `modules/mind-map/index.html` | 页面入口、严格 CSP 和 Shared 公共遮罩样式链接 |
+| `src/mind-map/main.ts` | 创建页面控制器并启动 runtime；处理启动边界 |
+| `src/mind-map/definition.ts` | 唯一 `ModuleDefinition` |
+| `src/mind-map/domain/types.ts` | payload、entity 和 event 类型 |
+| `src/mind-map/domain/model.ts` | 完整校验与规范排序 |
+| `src/mind-map/domain/names.ts` | 名称、路径、归属辅助和显示排序 |
+| `src/mind-map/domain/events.ts` | event apply/invert |
+| `src/mind-map/domain/codec.ts` | payload 与远端受管文件映射 |
+| `src/mind-map/app/controller.ts` | 唯一 runtime 持有者；协调业务命令、投影和保存同步 UI |
+| `src/mind-map/app/payloadDiff.ts` | dirty 资料库标记和跨图历史焦点 |
+| `src/mind-map/app/preferences.ts` | 侧栏、最近 map 和展开文件夹偏好 |
+| `src/mind-map/canvas/MindMapCanvas.ts` | SVG 投影与画布实时状态机 |
+| `src/mind-map/canvas/geometry.ts` | 纯几何与命中计算 |
+| `src/mind-map/canvas/viewport.ts` | viewport 转换、缩放和适配 |
+| `src/mind-map/canvas/autoPan.ts` | 四类交互共用的自动平移 |
+| `src/mind-map/library/treeView.ts` | 资料库 DOM、名称草稿、折叠和拖放 |
+| `src/mind-map/ui/shell.ts` | 页面壳、顶栏、版本、toast 和确认对话框 |
 
-旧目录没有合法当前格式 `revision.json` 时，Shared 不得猜测接管。如需清理真实旧云端数据，由用户在应用外明确处理。
+### 4.2 状态所有者
 
-## 11. 验收
+- Shared runtime 持有当前 payload、event 历史和保存同步系统状态。
+- controller 持有页面使用的 payload 投影、本地保存基线、当前 map、资料库选择和 snapshot；它是唯一持有 runtime 的业务对象。
+- canvas 持有画布选择、编辑、pointer、viewport、自动平移和临时 frame override。
+- tree 持有名称草稿、折叠交互和 HTML 拖放状态。
+- preferences 持有三类本机 UI 偏好。
+- DOM/SVG 只是投影，不能成为业务数据真源。
 
-### 11.1 纯领域与几何
+### 4.3 数据流和依赖边界
 
-- payload 严格校验、规范排序、名称规则、同类型判重和失败原子性；
-- 每图一个 JSON、空叶文件夹 `.gitkeep`、codec 稳定往返；
-- 全部 event apply/invert、复合删除恢复、跨图历史、分支/no-op 和 100 步边界；
-- 坐标转换、鼠标中心缩放、侧栏避让适配、完整包含框选、连接点与四类自动平移；
-- idle/moving/resizing/editing 四状态和 settle/project 的全部提交/取消转换。
+```text
+Canvas / Tree 用户命令
+→ Controller 构造 MindMapEvent
+→ runtime.dispatch(event)
+→ 返回新的完整 MindMapPayload
+→ Controller 投影到 Tree / Canvas / Shell
+```
 
-### 11.2 DOM 与浏览器
+- `main.ts` 和 `definition.ts` 负责 Shared 接线；controller 只通过公开 `ModuleRuntime` 使用 Shared。
+- canvas、tree 和纯领域文件不得导入 Shared、访问存储或网络、直接修改 payload。
+- apply/invert、名称、校验、codec 和几何函数不得读取 DOM、时间、随机数或可变全局状态。
+- snapshot 只变化版本时间或 pending/conflict 时，只更新 shell 状态，不重建资料库或画布，以免中断 IME 和实时 pointer。
+- 云端拉取由 SDK 替换本机完整 payload 并 reload，不在旧历史上直接 project 云端数据。
 
-- 行内创建/重命名、取消、blur/Enter、中文输入法和拖放悬停展开；
-- 资料库/画布选择互斥、Ctrl 选择与移动、混合删除、pointer capture/cancel；
-- 右键平移、文字原生右键菜单、单次连线和 viewport 会话记忆；
-- 顶栏按钮、快捷键优先级、确认流程、版本时间、冲突颜色、dirty 星号和 UI 偏好恢复；
-- 首页返回与 `beforeunload` 只按未保存到本机的内容判断；
-- 严格 CSP 下无动态内联样式，测试夹具不连接 GitHub。
+## 5. 持久化 SDK 定义
 
-### 11.3 工程
+本章中的 Payload/Event 定义必须与源码同次更新；源码类型是可执行真相。
 
-- 首页和 `modules/mind-map/index.html` 均由 Vite 多页面构建；
-- `npm test`、普通 `npm run build` 和 GitHub Pages base 构建通过；
-- 生产产物包含已注册的首页与 Mind Map 页面，不包含测试夹具；
-- 测试全部使用 fake/in-memory 边界，绝不访问或修改真实 GitHub 数据；
+### 5.1 moduleId 和定义
+
+```ts
+defineJsonModule<MindMapPayload, MindMapEvent>({
+  moduleId: "mind-maps",
+  createEmpty: createEmptyMindMapPayload,
+  validate: validateMindMapPayload,
+  history: {
+    capacity: 100,
+    apply: applyMindMapEvent,
+    invert: invertMindMapEvent,
+  },
+  encode: encodeMindMapPayload,
+  decode: decodeMindMapPayload,
+});
+```
+
+整个资料库是一个 payload、一个本机保存边界、一个同步/冲突边界和一条历史。远端根由 Shared 派生为 `data/mind-maps/`。
+
+### 5.2 Payload 定义
+
+```ts
+type ConnectorSide = "top" | "right" | "bottom" | "left";
+
+interface MindMapEndpoint {
+  readonly nodeId: string;
+  readonly side: ConnectorSide;
+}
+
+interface NodeFrame {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+interface MindMapNode extends NodeFrame {
+  readonly id: string;
+  readonly text: string;
+  readonly autoWidth: boolean;
+}
+
+interface MindMapArrow {
+  readonly id: string;
+  readonly from: MindMapEndpoint;
+  readonly to: MindMapEndpoint;
+}
+
+interface MindMapDocument {
+  readonly id: string;
+  readonly path: string;
+  readonly nodes: readonly MindMapNode[];
+  readonly arrows: readonly MindMapArrow[];
+}
+
+interface MindMapPayload {
+  readonly folders: readonly string[];
+  readonly maps: readonly MindMapDocument[];
+}
+```
+
+### 5.3 Event 定义
+
+| Event | 用户动作 | 提交时机 | 对 payload 的影响 | inverse 所需信息 |
+| --- | --- | --- | --- | --- |
+| `create-folder { path }` | 新建文件夹 | 有效名称提交 | 添加一个路径 | path，用 delete-folder 反向 |
+| `delete-folder { path }` | 递归删除文件夹 | 用户确认 | 删除文件夹、后代文件夹及真正位于子树的脑图 | before 中完整 folders/maps 子树 |
+| `restore-folder { rootPath, folders, maps }` | inverse 专用 | 撤销删除 | 完整恢复子树 | rootPath，用 delete-folder 反向 |
+| `relocate-folder { fromPath, toPath }` | 重命名或拖放文件夹 | 有效名称提交或合法 drop | 原子替换文件夹及后代路径 | 原 from/to |
+| `create-map { map }` | 新建脑图 | 有效名称提交 | 添加带稳定 ID 的空脑图 | map ID，用 delete-map 反向 |
+| `delete-map { mapId }` | 删除脑图 | 用户确认 | 删除一张脑图 | before 中完整 map |
+| `restore-map { map }` | inverse 专用 | 撤销删除 | 完整恢复脑图 | map ID，用 delete-map 反向 |
+| `relocate-map { mapId, path }` | 重命名或拖放脑图 | 有效名称提交或合法 drop | 替换逻辑路径，ID 不变 | before 中旧 path |
+| `add-node { mapId, node }` | 添加文本节点 | 按钮/Alt+1 命令完成 | 添加节点 | node ID，用 delete-objects 反向 |
+| `set-node-text { mapId, nodeId, text, frame, autoWidth }` | 提交文字 | blur、点击别处或 settle | 同时保存文字和最终布局 | before 中 text/frame/autoWidth |
+| `set-node-frame { mapId, nodeId, frame, autoWidth }` | resize 节点 | pointerup | 保存最终 frame/autoWidth | before 中 frame/autoWidth |
+| `move-nodes { mapId, positions }` | 移动单个或多个节点 | pointerup | 批量替换最终位置 | before 中各节点旧位置 |
+| `add-arrow { mapId, arrow }` | 添加箭头 | 合法 endpoint 释放 | 添加一条有向连接 | arrow ID，用 delete-objects 反向 |
+| `delete-objects { mapId, nodeIds, arrowIds }` | 删除画布混合选择 | Delete 命令完成 | 删除对象，并自动删除被删节点相连箭头 | before/after 差异中的完整 nodes/arrows |
+| `restore-objects { mapId, nodes, arrows }` | inverse 专用 | 撤销删除 | 完整恢复节点、箭头及连接 | 对象 ID，用 delete-objects 反向 |
+
+### 5.4 历史容量与跨图历史
+
+- `history.capacity` 固定为 100，理由是资料库动作可能携带完整删除子树，需要限制页面会话内历史内存。
+- 整个资料库共享一条队列；切换脑图/文件夹不切换或清空历史。
+- 一次资料库动作、文字提交、拖动、resize、连线或批量删除各占一步。
+- pointermove、选择、框选过程、viewport、平移、侧栏和展开不进入历史。
+
+undo/redo 完成后，controller 比较 before/after 完整 payload：画布 event 打开受影响脑图；资料库 event 选择受影响项目；恢复删除时打开恢复脑图或选择文件夹；目标消失时选择最近仍存在的父文件夹，否则清空资料库选择。投影不恢复旧画布选择、编辑或 pointer 状态。
+
+### 5.5 settle 行为
+
+六种 reason 使用同一结算规则：
+
+| reason | 结束或取消的内容 | 返回 |
+| --- | --- | --- |
+| `local-save` | 名称/文字草稿、资料库拖放、画布 pointer、连线、自动平移和选择 | 至多一个 event |
+| `upload` | 同上 | 至多一个 event |
+| `pull` | 同上 | 至多一个 event |
+| `remote-change` | 同上 | 至多一个 event |
+| `undo` | 同上 | 至多一个 event |
+| `redo` | 同上 | 至多一个 event |
+
+精确顺序：
+
+1. 取消资料库拖放和悬停展开 timer；
+2. 有效资料库名称草稿转换为 event，无效草稿取消；
+3. 没有资料库 event 时，提取有效节点文字 event；
+4. 取消移动、resize、框选、连线和平移，停止自动平移并释放 pointer capture；
+5. 退出箭头模式，清空资料库和画布选择；
+6. 返回步骤 2 或 3 的 event，否则返回 null。
+
+文字编辑中 undo 会先提交文字 event 再撤销一次，结果回到修改前。redo 前提交真实新草稿会删除旧 redo；no-op 不删除。
+
+### 5.6 project 行为
+
+- 通用投影取消资料库和画布实时状态，替换完整 payload，清理失效偏好与选择。
+- initialize 只恢复仍存在的最近 map；不存在时清除偏好，不猜测替代 map，也不为恢复动作展开祖先。
+- undo/redo 的业务焦点由 runtime 命令返回后 controller 的 payload diff 逻辑决定；project 本身只负责清理和投影。
+- canvas project 清除选择、编辑、pointer、箭头模式和临时 frame，但保留本页按 map ID 记录的 viewport。
+- 纯 snapshot 时间/pending 变化不触发完整 project。
+
+### 5.7 远端编码
+
+- 每张脑图编码为 `<逻辑路径>.json`；文件内容只有 `id`、`nodes`、`arrows`，使用稳定顺序、两个空格缩进和结尾换行。
+- map path 从文件相对路径恢复，不在文件内容重复。
+- 没有直接子文件夹或脑图的空叶文件夹编码为空的 `<folder>/.gitkeep`。
+- decode 接受合法 `.json` 和空 `.gitkeep`，从路径补齐全部祖先，再执行完整 payload 校验。
+- `revision.json` 由 Shared 管理；未知文件由 Shared 保留，Mind Map 不接管或删除。
+
+### 5.8 冲突界面
+
+- 冲突通过版本区域颜色与文字呈现，不使用阻塞横幅。
+- 上传动作确认 local-wins；拉取动作确认 cloud-wins；取消不改变冲突。
+- UI 不访问 GitHub、IndexedDB 或 conflict 内部记录，也不提供自动或局部合并。
+
+## 6. 异常与边界情况
+
+### 6.1 损坏或旧数据
+
+payload 多余/缺失字段、非法路径、重复 ID、无效几何、缺失箭头节点、非法受管文件或损坏 JSON 均被拒绝。模块只支持当前格式，不猜测旧数据、不迁移。旧目录没有合法当前 `revision.json` 时不接管；真实旧数据只能由用户在应用外明确清理。
+
+### 6.2 不完整操作
+
+- pointercancel 或 settle 取消中间交互并恢复已提交 payload 投影。
+- 普通名称提交无效时保留编辑器并提示；SDK settle 时取消无效草稿，不阻塞公共命令。
+- 无效箭头释放退出单次模式但不 dispatch。
+- dispatch 失败保留原投影并显示通用修改失败文案。
+
+### 6.3 空状态
+
+- 空资料库显示创建提示。
+- 没有当前脑图时隐藏业务画布、显示空状态并禁用画布命令。
+- 空脑图复位使用默认 viewport。
+- 最近 map 已不存在时清除偏好，不自动挑选另一张图。
+
+### 6.4 数据规模
+
+模块当前没有分页、虚拟化或业务数据量上限，不声明额外大规模性能保证。唯一固定数量上限是当前页面 100 步历史；这不是 payload 大小限制。
+
+### 6.5 模块特有失败行为
+
+- 领域校验和 event 失败不产生部分 payload。
+- 本地保存失败保留内容、历史和未保存状态。
+- 上传/拉取失败保留本机内容、解除遮罩并允许重试。
+- 启动失败和操作失败只显示固定中文提示，不输出捕获异常、token 或 GitHub 响应。
+
+## 7. 验收标准
+
+### 7.1 业务逻辑
+
+- 名称规范化、同类型判重、异类型同名、路径归属和稳定排序正确。
+- 文件夹递归删除/恢复/移动不误操作同路径脑图；节点删除同时处理连接箭头。
+- map/node/arrow 身份稳定，箭头端点、自连和重复连接不变量成立。
+
+### 7.2 用户交互
+
+- 资料库创建/重命名/取消/确认/拖放/650 ms 展开与 dirty 星号符合提交点。
+- 资料库和画布选择互斥；普通/Ctrl 选择、整组移动和完整包含框选正确。
+- idle/moving/resizing/editing 四状态、手柄、文字布局和 pointercancel 正确。
+- viewport 缩放范围、鼠标中心缩放、右键平移、侧栏避让和四类自动平移正确。
+- 单次箭头模式的成功、失败和退出路径正确。
+- 保存同步确认、版本状态、返回首页和 beforeunload 只按规定状态触发。
+- 快捷键优先级、输入控件行为和中文 IME 不冲突。
+
+### 7.3 Payload、Event 与 codec
+
+- payload 严格校验、规范排序和 content key 稳定。
+- 15 种 event 的 apply/invert 可逆；复合删除、跨图历史、no-op/分支和 100 步容量正确。
+- 每图 JSON、空叶 `.gitkeep`、祖先补齐和 encode/decode 往返无损。
+
+### 7.4 SDK 接入
+
+- 六种 settle reason 与 initialize/undo/redo project 行为符合第五章。
+- 保存、上传、拉取、两个冲突方向、snapshot 版本时间和 reload 接线正确。
+- 只有 controller 持有 runtime；canvas/tree 不导入 Shared 或持久化内部实现。
+
+### 7.5 工程与安全
+
+- 首页入口和 `modules/mind-map/index.html` 构建入口一致；测试夹具不进入生产产物。
+- 严格 CSP 下无动态内联样式，Shared 公共 operation gate 样式正常加载。
+- 模块测试使用 fake runtime/fetch，不访问或修改真实 GitHub 数据。

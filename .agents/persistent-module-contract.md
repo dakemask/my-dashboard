@@ -1,12 +1,12 @@
 # 持久化模块公共契约
 
-## 1. 这份文档给谁看
+## 1. 文档边界
 
-本文是所有需要保存业务数据的模块必须遵守的长期公共契约。它规定状态模型、Shared 公共接口、硬约束和推荐设计，不展开登录、IndexedDB、GitHub commit、轮询等内部实现。不保存业务数据的模块不需要使用这套 SDK，也不受本文的 SDK 接入要求约束。
+本文是所有持久化模块长期遵守的公共契约，只说明五层状态、模块如何使用 SDK，以及各类命令成功或失败后的可观察结果。它不解释 IndexedDB 记录、Git Data API、CAS、轮询器或 Shared 内部类。
 
-维护已有持久化模块时，阅读本文和该模块自己的契约即可。只有首次接入 SDK 或重做接入边界时，才额外阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。维护 Shared 内部实现必须先获得用户允许，并阅读 [Shared 与平台维护规范](./shared-maintenance.md)。完整阅读入口见仓库根目录 [AGENTS.md](../AGENTS.md)。
+维护已有模块时阅读本文和该模块文档。首次接入才阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)；获准维护 Shared 时阅读 [Shared 与平台维护规范](./shared-maintenance.md)。不持久化的模块不需要本文。
 
-文中的“必须”是硬约束，“不得”是禁止事项，“应该”是通常应遵守的软约束。
+“必须”和“不得”是硬约束；“应该”是通常遵守的设计约束。
 
 ## 2. 五层状态模型
 
@@ -43,7 +43,7 @@ flowchart LR
 
 实时状态不得绕过暂存层直接保存，暂存状态也不得绕过本地层直接上传。event 只属于当前页面会话；IndexedDB 和 GitHub 都保存完整 payload，不保存撤销 event 队列。
 
-## 3. 模块和 payload 边界
+## 3. 生命周期开始前的模块定义
 
 ### 3.1 模块身份
 
@@ -66,8 +66,6 @@ payload 表示模块的一份完整业务数据，不是 JSON 的同义词。它
 
 `Map`、`Set`、`Date`、`ArrayBuffer`、类型化数组和循环引用等非 JSON 值都可以成为 payload，只要模块能稳定校验、比较和编码。函数、DOM 引用、`WeakMap` 等不能可靠持久化的值不得进入 payload。
 
-Mind Map 选择 JSON payload；这是模块选择，不是 Shared 的通用限制。
-
 ### 3.3 内容标识和远端编码
 
 模块必须提供同步、确定的 `contentKey(payload)`：
@@ -81,197 +79,254 @@ JSON 模块应该使用 SDK 的 `defineJsonModule`，由 SDK 提供规范 JSON c
 
 当前远端受管文件是 UTF-8 文本，但不要求是 JSON，也可以是 Markdown、YAML、CSV 或模块自定义文本格式。`encode` 与 `decode` 必须确定、无损、可往返。
 
-## 4. event 历史与交互结算
+## 4. 完整生命周期
 
-### 4.1 event 是什么
+### 4.1 初始化
 
-一个 `TEvent` 表示一次已经达到提交点的业务变化，例如“新增节点”“把标题从旧值改为新值”或“一次完成的复合移动”。它不是 DOM event，也不是系统保存或同步命令。
+**触发条件**
 
-event 必须能被 `structuredClone`。它可以携带执行或反向执行所需的业务数据，但不得包含 DOM、函数、token、保存状态、同步状态或其他系统元数据。event 只在当前页面的历史队列中存活，不写入 IndexedDB 或 GitHub。
+模块页面加载，并调用 `startModuleRuntime(...)`。
 
-每个模块必须在 `ModuleDefinition<TPayload, TEvent>.history` 中明确选择历史策略：
+**模块需要做什么**
 
-```ts
-history: {
-  capacity: 正整数或 "unlimited",
-  apply(payload, event): TPayload,
-  invert(event, before, after): TEvent,
-}
-```
+- 提供完整的 `ModuleDefinition`、应用根节点和 hooks。
+- `project(payload, "initialize")` 只能依据传入 payload 建立界面；此时不能依赖尚未返回的 runtime。
+- 对真正的启动异常只显示安全、可重试的提示，不展示原始请求或凭据。
 
-- `capacity` 由模块按业务需要选择，没有通用默认值；正整数按已记录的 event 数量计数，`"unlimited"` 表示页面会话内不设数量上限。
-- `apply` 根据完整 payload 和一个 event 计算新的完整 payload。
-- `invert` 根据正向 event、变化前 payload 和变化后 payload，生成能恢复变化前内容的反向 event。
-- `apply` 和 `invert` 必须是确定、无副作用的纯函数，不得修改传入的 payload/event，不得读取或写入 DOM、网络、存储或可变全局状态。
+**SDK 会做什么**
 
-Shared 会用 `structuredClone` 隔离传入值、回调参数、回调结果和历史中的正反 event。模块仍应把不修改参数视为接口契约，而不是依赖这层隔离掩盖副作用。
+- 恢复统一登录并取得该 `moduleId` 的单标签编辑权。
+- 从本机完整 payload 建立会话；本机尚无记录时，使用云端完整 payload或模块的空数据。
+- 以该完整 payload 作为暂存层 current，建立一条空 event 历史，然后调用 `project`。
 
-### 4.2 记录、撤销和重做规则
+**成功后状态**
 
-- 模块通过 `runtime.dispatch(event)` 提交业务变化；不得直接替换 runtime 的当前 payload。
-- 一次语义完整的复合动作只 dispatch 一个 event。
-- 如果 `apply` 后的 content key 与当前值相同，该 event 是 no-op：不记录、不调用 `invert`，也不删除现有 redo 分支。
-- 撤销到较早位置后 dispatch 一个真实变化，会删除旧 redo 分支，再记录新 event。
-- 撤销使用已保存的 inverse event；重做重新使用原 forward event。
-- 保存不清空、重建或截断 event 队列。
-- 刷新后 event 队列清空，以 IndexedDB 当前完整 payload 建立新会话。
-- `apply`、`invert`、`contentKey`、校验或 `structuredClone` 任一步失败，都不得改变 current、队列、撤销/重做位置或保存基线；失败 event 可由模块修正后重试。
+- `ready` 返回可用 runtime；`runtime.current` 是初始化后的完整 payload。
+- event 历史从零开始，`canUndo` 和 `canRedo` 均为 false。
+- `blocked`、`unsupported` 和 `authentication-required` 由 SDK 呈现相应边界，模块不进入编辑状态。
 
-### 4.3 settle 与 project
+**失败时保持什么不变**
 
-模块必须提供两个回调：
+- 不产生半初始化的可编辑页面，不覆盖已经存在的本机或云端数据。
+- SDK 释放已经取得的公共资源；重新加载后仍可重试。
 
-- `settle(reason)`：在 `local-save`、`upload`、`pull`、`remote-change`、`undo` 或 `redo` 前，提交或取消正在进行的实时交互；如结算产生一个业务变化，返回一个 `TEvent`，否则返回 `null`。SDK 会在继续原命令前 dispatch 返回的 event。
-- `project(payload, reason)`：初始化、撤销或重做后，用给定完整 payload 重建页面，并把纯实时状态恢复到模块定义的默认状态。
+### 4.2 编辑、event 历史、撤销和重做
 
-Shared 不注册任何键盘快捷键。按钮、菜单和键盘只是模块把用户命令连接到 `runtime.undo()`、`runtime.redo()`、`runtime.save()` 等方法的方式；通用约束不指定模块必须采用哪些键位。
+**触发条件**
 
-## 5. 保存、同步和冲突
+- 一个业务动作到达模块定义的提交点，模块调用 `runtime.dispatch(event)`。
+- 用户执行模块提供的撤销或重做入口，模块调用 `runtime.undo()` 或 `runtime.redo()`。
 
-### 5.1 本地保存
+**模块需要做什么**
 
-模块只能调用 `runtime.save()`，不得直接访问 IndexedDB。保存成功后，当前 content key 成为新的本地基线；当前内容再次等于该基线时，`dirty` 自动变为 false。
+- 一个 event 表示一次完整业务变化，不是 DOM event；一次复合动作只 dispatch 一次。
+- 明确选择正整数 `history.capacity` 或 `"unlimited"`。容量按 event 数计算，由模块根据业务决定。
+- `apply`、`invert`、`validate` 和 `contentKey` 必须确定、无副作用且不修改输入。
+- undo/redo 前在 `settle("undo" | "redo")` 中提交或取消实时交互；如产生业务变化，返回一个 event，否则返回 `null`。
+- 在 undo/redo 后的 `project(payload, reason)` 中重建界面并重置失效的实时状态。
 
-保存失败时必须保留当前 payload、event 历史和 `dirty`，解除页面阻塞，并允许用户重试。
+**SDK 会做什么**
 
-### 5.2 云端同步
+- 暂存层始终持有一个当前完整 payload；历史只长期记录可逆的 forward/inverse event，不保存每一步完整 payload 快照。
+- dispatch 时原子完成 apply、结果校验、content key 和 inverse 生成，再推进 current 与历史位置。
+- 语义 no-op 不入队，也不删除 redo；撤销后 dispatch 的真实变化删除旧 redo 分支。
+- 在各公共边界使用 `structuredClone` 隔离 payload 和 event。
 
-模块只能通过 runtime 上传或拉取，不得直接调用 GitHub API。上传内容必须先成为已保存的本地完整 payload；`runtime.upload()` 会在需要时先完成本地保存。
+**成功后状态**
 
-同步只允许四种结果：
+- current 变为 event 计算出的完整 payload，撤销/重做能力随队列位置变化。
+- `dirty` 只比较 current 与最近本地保存基线；内容回到该基线时自动变为 false。
+- event 历史只存在于当前页面；刷新后从已保存完整 payload 重新建立空队列。
 
-| 云端变化 | 本地变化 | 结果                   |
-| -------- | -------- | ---------------------- |
-| 否       | 否       | 不处理                 |
-| 否       | 是       | 等待用户上传           |
-| 是       | 否       | 自动拉取并建立新会话   |
-| 是       | 是       | 持久化冲突，不自动覆盖 |
+**失败时保持什么不变**
 
-如果云端变化与当前本地内容（包括刚由 `settle` 返回并 dispatch 的 event）同时存在，Shared 必须把**当前完整 payload、它的 content hash 和 conflict 信息放在同一个 IndexedDB CAS 事务中持久化**，事务成功后再把该 payload 标记为本地已保存基线。这样刷新后不会丢失冲突的本地一侧。此时 `dirty` 可以变为 false，但它只表示“已经保存到本机”，不表示“已经同步到云端”。
+- apply、invert、validate、content key 或 clone 任一步失败时，current、队列、位置、redo 分支和保存基线全部不变。
+- 失败 event 可以在模块修正后重试。
 
-冲突不自动合并，只能由用户明确选择：
+Shared 不注册键盘快捷键。模块自行决定按钮、菜单和键位，并负责在卸载时清理监听。
 
-- `local-wins`：以本地完整模块覆盖云端受管内容；
-- `cloud-wins`：以云端完整模块覆盖本地并刷新页面。
+### 4.3 本地保存
 
-冲突可以暂时不处理并跨刷新保留，但再次上传或主动拉取前必须选择方向。
+**触发条件**
 
-## 6. 并发、阻塞和安全边界
+模块调用 `runtime.save()`。
 
-- 同一个 `moduleId` 同时只允许一个可编辑标签页。
-- 不支持安全编辑锁的浏览器不得编辑。
-- 本地保存时页面暂时不可交互，但不显示遮罩。
-- 上传、拉取和覆盖时由 SDK 自动显示同一份全页 spinner 与模糊遮罩。
-- 使用严格 CSP 的模块页面必须以外链 `<link>` 加载 Shared 提供的 `src/shared/ui/operationGate.css`；不得把它复制进模块样式或改成运行时内联样式。
-- 模块不得自行复制 spinner、编辑锁、轮询或同步实现。
-- 模块不得读取、保存、显示或记录 GitHub token。
-- 模块不得把捕获异常任意序列化到 DOM 或日志；用户可见错误应使用模块定义的安全文案。
+**模块需要做什么**
 
-登录、凭据失效、遮罩清理、轮询和页面关闭时的 Shared 资源释放都由 SDK 负责。模块自己安装的 UI 或键盘监听仍由模块自己释放。
+- 在 `settle("local-save")` 中结束或取消实时交互；需要提交业务变化时返回一个 event。
+- 只调用 runtime，不直接访问本地数据库。
 
-## 7. 模块可使用的公共接口
+**SDK 会做什么**
 
-业务模块只能从 `src/shared/index.ts` 对应的 Shared 根入口导入。主要接口是：
+- 先按正常 dispatch 规则处理 settle 返回的 event。
+- 保存期间暂时阻止应用根节点交互，但不显示云端遮罩。
+- 把暂存层当前完整 payload 写入本机；event 队列仍只留在页面中且不被清空。
 
-```ts
-interface ModuleDefinition<TPayload, TEvent> {
-  readonly moduleId: string;
-  createEmpty(): TPayload;
-  validate(value: unknown): TPayload;
-  contentKey(payload: TPayload): string;
-  encode(
-    payload: TPayload,
-  ): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
-  decode(files: ReadonlyMap<string, string>): TPayload | Promise<TPayload>;
-  readonly history: {
-    readonly capacity: number | "unlimited";
-    apply(payload: TPayload, event: TEvent): TPayload;
-    invert(event: TEvent, before: TPayload, after: TPayload): TEvent;
-  };
-}
+**成功后状态**
 
-interface ModuleRuntime<TPayload, TEvent> {
-  readonly state: "starting" | "ready" | "disposing" | "disposed";
-  readonly current: TPayload;
-  readonly canUndo: boolean;
-  readonly canRedo: boolean;
-  readonly dirty: boolean;
-  dispatch(event: TEvent): TPayload;
-  undo(): Promise<TPayload>;
-  redo(): Promise<TPayload>;
-  save(): Promise<SyncActionResult>;
-  upload(): Promise<SyncActionResult>;
-  pull(): Promise<SyncActionResult>;
-  resolveConflict(
-    direction: "local-wins" | "cloud-wins",
-  ): Promise<SyncActionResult>;
-  pollNow(): Promise<void>;
-  getSnapshot(): ModuleRuntimeSnapshot;
-  dispose(): Promise<void>;
-}
+- 当前 payload 成为新的本地保存基线，`dirty`/`sessionDirty` 为 false。
+- `localSavedAt` 更新；撤销和重做仍可继续。
+- 本地内容可以已经保存但尚未上传，此时 `localChangedSinceSync` 仍为 true。
 
-interface ModuleRuntimeSnapshot {
-  initialized: boolean;
-  sessionDirty: boolean;
-  localChangedSinceSync: boolean;
-  localSavedAt: string | null;
-  knownRemoteRevision: string | null;
-  knownRemoteUpdatedAt: string | null;
-  lastSyncedRemoteRevision: string | null;
-  pendingUpload: {
-    localRevision: string;
-    contentHash: string;
-    nextRemoteRevision: string;
-    updatedAt: string;
-  } | null;
-  conflict: PersistedConflict | null;
-}
+**失败时保持什么不变**
 
-interface ModuleRuntimeHooks<TPayload, TEvent> {
-  settle(reason: SettleReason): TEvent | null | Promise<TEvent | null>;
-  project(payload: TPayload, reason: ProjectionReason): void;
-  onConflict?(conflict: PersistedConflict): void;
-  onSnapshotChange?(snapshot: ModuleRuntimeSnapshot): void;
-}
+- 当前 payload、event 队列、队列位置和原本地保存基线不变，`dirty` 仍正确反映未保存状态。
+- 页面恢复交互，模块可以显示安全提示并允许手动重试。
 
-interface PersistedConflict {
-  observedRemoteRevision: string | null;
-  observedRemoteUpdatedAt: string | null;
-  detectedAt: string;
-}
-```
+### 4.4 云端同步与冲突
 
-`localSavedAt` 是当前完整 payload 最近一次成功落到本机的 ISO 时间；`knownRemoteRevision` 与 `knownRemoteUpdatedAt` 是 runtime 当前所知的云端版本及其 ISO 时间。未知值为 `null`。模块可用 `getSnapshot()` 主动读取，也可用可选的 `onSnapshotChange` 更新状态 UI；该观察回调不属于命令事务，回调抛错不得回滚或使已经完成的 runtime 操作失败。
+**触发条件**
 
-`capacity` 的 `number` 在运行时必须是正整数。模块不得直接依赖 `StagingHistory`、`ModuleLocalStore`、`GitHubGitDataClient`、`RemoteModuleRepository`、`SyncCoordinator`、`OperationGate` 或 `ModuleEditorLease`。这些是 Shared 内部零件，不是模块 API。
+- 模块调用 `runtime.upload()`、`runtime.pull()` 或 `runtime.resolveConflict(direction)`。
+- SDK 的轮询发现已知云端版本发生变化。
 
-首次接入方法见 [新持久化模块接入指南](./new-persistent-module-guide.md)。
+**模块需要做什么**
 
-## 8. 软约束
+- 只调用 runtime，不直接访问 GitHub、revision 文件或 token。
+- 在 `settle("upload" | "pull" | "remote-change")` 中结束实时交互并按需返回 event。
+- 用模块自己的 UI 告知用户冲突，并且只提供 `local-wins` 与 `cloud-wins` 两个明确方向；不得暗中自动合并或覆盖。
 
-模块应该：
+**SDK 会做什么**
 
-- 按用户能理解的语义动作设计 event，而不是机械记录每次 DOM event；
-- 让 event 只携带正向/反向业务变化真正需要的数据，避免无意义地复制整个 payload；
-- 根据典型 event 大小和期望的撤销深度选择 `capacity`，并用测试固定该选择；
-- 让 `validate`、`contentKey`、`encode`、`decode`、`apply` 和 `invert` 保持确定、无副作用；
-- 在 `project` 后清空不再可靠的实时引用和选择状态；
-- 把保存、上传和冲突操作设计成显式、可重试的用户动作；
-- 让模块测试关注业务 event、结算和投影，不重复测试 Shared 内部算法。
+- 上传前先保证当前完整 payload 已成功保存到本机。
+- 上传、拉取和覆盖期间显示统一的全页 spinner 与模糊遮罩；模块不自行实现或切换它们。
+- 按以下状态决定行为：
 
-## 9. 模块验收清单
+| 云端变化 | 本地变化 | SDK 行为 |
+| --- | --- | --- |
+| 否 | 否 | 保持一致，不覆盖 |
+| 否 | 是 | 保留本地，等待上传 |
+| 是 | 否 | 拉取完整云端 payload，写入本机并建立新会话 |
+| 是 | 是 | 保存冲突与本地一侧，不自动覆盖 |
 
-- 只从 Shared 根入口导入。
-- payload、event 和纯实时状态的边界清楚。
-- `validate`、content key、encode/decode 往返有模块测试。
-- `history.capacity` 已显式选择为正整数或 `"unlimited"`。
-- 每种业务 event 的 `apply` 与 `invert` 可逆、纯净且不修改输入。
-- 复合动作只 dispatch 一个 event；no-op、撤销后新分支和容量边界有测试。
-- event 队列只活在页面内，刷新后只从完整本地 payload 开始。
-- `settle` 覆盖模块在六种 reason 下可能存在的实时交互，并返回 event 或 `null`。
-- `project` 会重置模块实时交互状态。
-- 保存、上传、拉取和两个冲突方向均通过 runtime 调用。
-- 需要版本/状态 UI 时只读取 runtime snapshot；`onSnapshotChange` 只观察，不参与命令成败。
-- 模块需要的按钮、菜单或快捷键由模块绑定到 runtime 方法，并在卸载时清理。
-- 模块没有自己的 token、IndexedDB、GitHub、轮询、锁或 spinner 实现。
-- 页面销毁时调用 `runtime.dispose()`；正常页面关闭由 SDK 自动处理。
+**成功后状态**
+
+- 上传成功后，本地同步基线和已知云端版本推进到本次上传内容。
+- 拉取或 `cloud-wins` 成功后，以云端完整 payload 替换本机内容并建立一条新的空 event 历史。
+- `local-wins` 成功后，以本机完整 payload 覆盖该模块的云端受管内容。
+- 冲突可以跨刷新保留；`dirty === false` 只表示已保存到本机，不等于已经同步。
+
+**失败时保持什么不变**
+
+- 普通网络失败不选择冲突方向，也不丢失当前 payload、本机内容或 event 历史。
+- 未完成的上传意图和已确认的冲突仍可在刷新后恢复。
+- 遮罩和页面阻塞必须解除，用户可以手动重试。
+
+### 4.5 页面结束
+
+**触发条件**
+
+页面发生 `pagehide`、模块在单页应用中被卸载，或凭据被 GitHub 明确判定失效。
+
+**模块需要做什么**
+
+- 移除模块自己注册的 DOM、键盘和其他 UI 监听。
+- 页面未关闭但模块被卸载时，显式等待 `runtime.dispose()`。
+- dispose 后不再读取或调用该 runtime。
+
+**SDK 会做什么**
+
+- 停止轮询，等待正在执行的公共命令结束，关闭本地资源并释放编辑锁。
+- 普通页面关闭自动开始清理；凭据失效时清除凭据并返回认证边界。
+
+**成功后状态**
+
+- runtime 进入 `disposed`，不再通知 snapshot，也不再持有可继续编辑该模块的资源。
+
+**失败时保持什么不变**
+
+- 单项清理失败不能阻止其他资源继续释放。
+- 已经成功保存的数据不因页面销毁或清理异常而改变。
+
+### 4.6 失败和安全保证
+
+**触发条件**
+
+启动、编辑、保存、同步、投影或销毁过程抛出异常，或者浏览器缺少安全编辑所需的能力。
+
+**模块需要做什么**
+
+- 只显示预先定义的安全错误文案；不得把捕获异常、请求头、GitHub 响应或 token 任意序列化到 DOM 或日志。
+- 不得为绕过失败而自行实现凭据、本地存储、GitHub、轮询、编辑锁或遮罩的替代版本。
+
+**SDK 会做什么**
+
+- 同一 `moduleId` 只允许一个可编辑标签页；不支持安全锁时阻止编辑。
+- 串行执行持久化命令，并在成功或失败后恢复 inert、spinner 和遮罩。
+- 在命令确认完成前不推进对应的保存或同步基线。
+
+**成功后状态**
+
+- 完成的命令只推进其承诺的那一层状态；例如保存不等于上传，上传也不修改页面 event 历史。
+
+**失败时保持什么不变**
+
+- 失败不泄漏 token，不制造部分业务 payload，也不把未确认的操作标记为成功。
+- 页面解除阻塞；仍然安全的数据和历史保留，允许用户重试。
+
+## 5. 公共接口语义索引
+
+业务模块只从 `src/shared` 根入口导入。这里列语义，不复制完整 TypeScript 定义；准确签名以根入口导出的源码类型为准。
+
+### 5.1 定义与启动
+
+| 接口 | 模块如何使用 |
+| --- | --- |
+| `defineModule` | 定义任意 structured-clone payload，并显式提供稳定 content key |
+| `defineJsonModule` | 定义确实采用 JSON 兼容 payload 的模块，由 SDK 提供规范 JSON content key |
+| `jsonContentKey` | 需要单独计算规范 JSON content key 时使用 |
+| `startModuleRuntime` | 交出 definition、根节点和 hooks；处理 `ready`、`blocked`、`unsupported`、`authentication-required` 四种结果 |
+
+### 5.2 runtime 状态与命令
+
+| 成员 | 语义 |
+| --- | --- |
+| `state` | runtime 的 starting/ready/disposing/disposed 生命周期 |
+| `current` | 当前完整 payload 的隔离副本；不能靠修改它推进业务状态 |
+| `canUndo` / `canRedo` | 当前 event 历史位置是否允许撤销或重做 |
+| `dirty` | 当前 payload 是否偏离最近本地保存基线 |
+| `dispatch(event)` | 提交一个已经完成的业务动作 |
+| `undo()` / `redo()` | 先 settle，再移动 event 历史并 project 完整 payload |
+| `save()` | 把当前完整 payload 保存到本机 |
+| `upload()` | 必要时先保存，再同步本机完整 payload 到云端 |
+| `pull()` | 检查云端变化；本地干净时拉取，双方变化时建立冲突 |
+| `resolveConflict("local-wins")` | 以本机完整 payload 覆盖本模块云端受管内容 |
+| `resolveConflict("cloud-wins")` | 以云端完整 payload 覆盖本机并建立新会话 |
+| `pollNow()` | 立即执行一次与后台轮询相同的远端版本检查；除非模块契约明确需要，不把它做成业务“刷新”按钮 |
+| `getSnapshot()` | 读取保存、同步、版本、pending 和 conflict 的隔离状态 |
+| `dispose()` | 结束 runtime 并释放 Shared 资源；完成后不可复用 |
+
+### 5.3 hooks
+
+| hook | 语义 |
+| --- | --- |
+| `settle(reason)` | 在六种公共命令前结束或取消实时交互，返回至多一个 event |
+| `project(payload, reason)` | 在 initialize/undo/redo 后把完整 payload 投影为页面状态 |
+| `onConflict(conflict)` | 告知模块冲突已经安全记录；只用于更新 UI |
+| `onSnapshotChange(snapshot)` | 观察 runtime 状态变化；观察者异常不得改变命令结果 |
+
+### 5.4 snapshot 与结果
+
+| 字段或结果 | 语义 |
+| --- | --- |
+| `sessionDirty` | 页面 current 相对本地保存基线有变化 |
+| `localChangedSinceSync` | 已保存本机 payload 相对最近同步基线有变化 |
+| `localSavedAt` | 当前本机版本的保存时间；未知为 null |
+| `knownRemoteRevision` / `knownRemoteUpdatedAt` | runtime 当前知道的云端版本和时间；冲突时指观察到的冲突版本 |
+| `pendingUpload` | 存在尚未确认结果的上传；模块只把它作为状态提示，不解释或修改内部字段 |
+| `conflict` | 存在跨刷新保留的冲突，或为 null |
+| `unchanged` | 命令完成，但没有需要推进的内容 |
+| `saved` / `uploaded` / `reloaded` | 分别表示本机保存、云端上传或云端拉取已经完成 |
+| `conflict` | 命令发现或保留了冲突，没有自动选择覆盖方向 |
+| `busy` | 当次轮询或观察处理因另一公共操作占用而跳过 |
+
+`ModuleRuntimeBusyError` 表示模块在 runtime 正忙时尝试同步 dispatch；`ModuleRuntimeUnavailableError` 表示在非 ready 状态使用 runtime。模块应恢复可操作 UI并提供安全重试，而不是绕过 runtime。
+
+## 6. 设计软约束
+
+- event 应对应用户能理解的语义动作，只携带正向与反向业务变化需要的信息，不机械记录 DOM event。
+- capacity 应依据典型 event 大小和用户需要的撤销深度选择，并在模块文档中记录具体决定和理由。
+- validate、content key、codec、apply 和 invert 应保持确定且无副作用。
+- project 后应清除不再可靠的实时引用、草稿和选择。
+- 保存、同步和冲突方向应是明确、可重试的用户动作。
+- 模块测试聚焦自己的业务模型、event、settle、project 和 UI 接线，不重复验证 Shared 内部算法。
