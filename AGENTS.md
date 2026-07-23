@@ -7,6 +7,28 @@
 - `my-dashboard` 是公开源码仓库。推送到 `main` 后，GitHub Actions 自动测试、构建并部署到 GitHub Pages。
 - `my-dashboard-data` 是私人数据仓库。需要持久化的模块通过用户提供的 GitHub 用户名和 token 访问其 `main` 分支，以保存隐私数据并支持跨设备同步。
 
+## 架构概览
+
+本项目是使用 TypeScript 和 Vite 构建的多页面静态前端，没有自建后端。首页和各模块拥有独立 HTML 入口，由 Vite 统一构建并部署到 GitHub Pages。
+
+| 位置 | 职责 |
+| --- | --- |
+| `index.html`、`src/home/` | 首页、统一认证入口和模块导航 |
+| `modules/<module>/index.html` | 模块页面入口 |
+| `src/<module>/` | 模块的业务规则、页面状态和 UI |
+| `src/shared/` | 持久化模块共用的认证、本地保存、GitHub 同步、历史、编辑锁和公共操作 UI |
+| `tests/` | Shared 通用测试和各模块的 domain/codec 测试 |
+| `vite.config.ts` | 首页和模块页面的构建入口 |
+
+持久化模块把业务动作表示为 event，并维护完整 payload；Shared runtime 负责历史、本机保存和云端同步。
+
+数据路径：
+
+    模块 UI → 模块 event/payload → Shared runtime → IndexedDB
+                                             → GitHub API → my-dashboard-data
+
+模块负责自身业务和页面交互，Shared 负责平台能力。业务模块只通过 `src/shared` 根入口使用 Shared。
+
 ## 模块目录
 
 | moduleId            | 用途               | 状态   | 是否持久化 | 长期文档                           |
@@ -27,6 +49,10 @@
 | 开发不持久化模块 | 该模块的长期文档（如果存在） |
 | 修改 `src/shared`、首页认证、持久化或同步基础设施 | 先获得用户明确允许；再读 [持久化模块公共契约](./.agents/persistent-module-contract.md) 和 [Shared 维护](./.agents/shared-maintenance.md) |
 
+## 文档同步
+
+变更模块目录、开发状态、任务路由或项目级规则时，同步更新本文件。变更用户操作、业务规则、持久化定义或代码职责时，同步更新对应模块文档。变更 Shared 的公共行为或内部维护方式时，同步更新持久化模块公共契约或 Shared 维护规范。
+
 ## 验证
 
 Agent 运行 [README.md](./README.md) 中的测试和构建命令。实际页面的呈现和交互体验由用户验收。
@@ -36,3 +62,7 @@ Agent 运行 [README.md](./README.md) 中的测试和构建命令。实际页面
 - 需要保存业务数据的模块必须使用 `src/shared` 根入口提供的 SDK；不保存数据的模块不要求使用。
 - 未经用户明确允许，不得修改 Shared，也不得访问、修改或迁移真实 `my-dashboard-data` 数据。
 - token 不得进入 DOM、日志、错误文本、业务 payload 或 event 历史。
+
+## 常见实际问题
+
+- Vite 和 Vitest 需要启动 esbuild 子进程；不要在受限 sandbox 中运行 `npm test` 或 `npm run build`，直接申请沙箱外权限执行。
