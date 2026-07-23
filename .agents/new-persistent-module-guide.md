@@ -153,7 +153,7 @@ codec 只管理模块业务文件：
 在创建 runtime 之前准备完整 hooks。`settle` 处理公共命令到来时仍未结束的页面操作，`project` 处理完整 payload 到来后的页面重建。
 
 ```ts
-import type { ModuleRuntimeHooks } from "../shared";
+import type { ModuleRuntimeHooks } from "../../shared";
 
 export const hooks: ModuleRuntimeHooks<NotesPayload, NotesEvent> = {
   settle(reason) {
@@ -262,7 +262,7 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 1. 在首页模块注册表添加入口；
 2. 在 Vite 多页面构建输入中添加模块 HTML；
-3. 确认生产产物不包含测试夹具；
+3. 为模块的 domain 和 codec 建立自动测试；
 4. 如果模块确实需要长期维护文档，在 `.agents/` 建立一份模块文档。
 
 模块文档不必套固定章数，但应按下面的顺序回答实际问题：
@@ -275,14 +275,18 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 简单模块不因形式要求强制建立文档。模块文档只记录本模块的决定，不重复五层模型、IndexedDB、GitHub、编辑锁或同步算法。
 
-最终验收集中检查：
+模块自动测试覆盖以下内容：
 
-- payload 能独立恢复业务内容，校验和 codec 往返正确；
-- 每种 event 的 apply/invert 可逆，容量与分支行为符合模块决定；
-- settle/project 覆盖该模块所有实时交互；
-- 业务 UI 只通过 runtime 编辑、保存和同步；
-- 按钮、快捷键、冲突确认、状态显示和监听清理符合模块规则；
-- 严格 CSP 下公共操作样式能够加载；
-- 测试使用 fake GitHub 边界，不访问真实私人仓库。
+- payload 校验和核心业务不变量；
+- event 的 apply/invert；
+- payload 与远端文件的编码往返；
+- 非法或损坏的远端内容。
 
-Shared 自身的 IndexedDB 原子性、Git commit、轮询、编辑锁和公共遮罩算法由 Shared 测试负责，业务模块不重复测试。
+Shared 的本地保存、GitHub 同步、冲突、历史、编辑锁和 runtime 生命周期由平台测试覆盖，模块不重复建立这些测试。
+
+完成后运行：
+
+```bash
+npm test
+npm run build
+```

@@ -266,7 +266,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 9. 损坏 payload 在 validate 边界停止，不猜测修复或迁移；
 10. runtime 启动失败逆序释放全部已取得资源；
 11. dispose 后没有 poller、Shared listener、lease、store 或 token 可达链继续存活；
-12. 测试、夹具和开发工具不访问或修改真实 GitHub 数据。
+12. 自动测试通过注入边界运行，与真实 GitHub 数据隔离。
 
 ## 6. 修改要求与验证
 
@@ -316,8 +316,8 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 - 登录全部成功条件与各失败条件；长期恢复；401 与 403 区分；token 不出现在 DOM、日志或错误。
 - 第二标签阻止、锁释放、不支持浏览器阻止编辑。
-- local 仅 inert，cloud 全页遮罩；presentation 异常和命令异常后完整恢复；严格 CSP 外链样式生效。
+- local 仅 inert，cloud 全页遮罩；presentation 异常和命令异常后完整恢复；持久化页面 HTML 引用 `operationGate.css`。
 
 #### 工程
 
-修改 Shared 后按 [README](../README.md) 运行项目规定的测试与构建。生产模块和测试夹具必须继续保持隔离。
+修改 Shared 后按 [README](../README.md) 运行项目规定的测试与构建。
