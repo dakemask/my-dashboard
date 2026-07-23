@@ -17,7 +17,7 @@
 | `modules/<module>/index.html` | 模块页面入口 |
 | `src/<module>/` | 模块的业务规则、页面状态和 UI |
 | `src/shared/` | 持久化模块共用的认证、本地保存、GitHub 同步、历史、编辑锁和公共操作 UI |
-| `tests/` | Shared 通用测试和各模块的 domain/codec 测试 |
+| `tests/` | Shared 通用测试和各模块的 domain/codec 测试，开发完成后需要运行 `npm test`，进行简单的初步验证 |
 | `vite.config.ts` | 首页和模块页面的构建入口 |
 
 持久化模块把业务动作表示为 event，并维护完整 payload；Shared runtime 负责历史、本机保存和云端同步。
@@ -55,7 +55,14 @@
 
 ## 验证
 
-Agent 运行 [README.md](./README.md) 中的测试和构建命令。实际页面的呈现和交互体验由用户验收。
+Agent 完成开发后运行以下命令：
+
+```bash
+npm test
+npm run build
+```
+
+实际页面的呈现和交互体验由用户验收。
 
 ## 最高级规则
 
