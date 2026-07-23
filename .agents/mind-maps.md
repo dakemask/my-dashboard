@@ -1,7 +1,5 @@
 # Mind Map
 
-维护本模块时同时阅读 [持久化模块公共契约](./persistent-module-contract.md)。只有首次接入或重做 SDK 接线时才阅读 [新持久化模块接入指南](./new-persistent-module-guide.md)。
-
 ## 1. 目的与范围
 
 ### 解决的问题
@@ -21,14 +19,11 @@ Mind Map 让用户在一个资料库中管理多张脑图，并在自由画布�
 
 本模块不提供：
 
-- 旧 payload/文件读取、schemaVersion 或自动迁移；
 - 复制粘贴画布对象、搜索、节点样式、富文本或自动布局；
 - 箭头文字、曲线、样式或创建后的端点修改；
 - 触控专用编辑；
-- 当前脑图刷新按钮或退出登录；
-- 冲突自动合并、逐图/逐节点合并，或自动删除真实旧云端数据。
 
-模块当前没有分页、虚拟化或业务数据量上限，不声明额外的大规模性能保证。100 步历史限制不是 payload 大小限制。
+模块当前没有分页、虚拟化或业务数据量上限，不声明额外的大规模性能保证。
 
 ## 2. 业务数据与规则
 
@@ -72,7 +67,7 @@ Mind Map 让用户在一个资料库中管理多张脑图，并在自由画布�
 
 ### 格式边界
 
-payload 多余或缺失字段、非法路径、重复 ID、无效几何、缺失箭头节点、非法受管文件或损坏 JSON 均被拒绝。模块只支持当前格式，不猜测或迁移旧数据；真实旧云端数据只能由用户在应用外明确清理。
+payload 多余或缺失字段、非法路径、重复 ID、无效几何、缺失箭头节点、非法受管文件或损坏 JSON 均被拒绝。
 
 ## 3. 用户操作与交互
 
@@ -226,68 +221,9 @@ Canvas / Tree 用户命令
 
 ## 5. 本模块的持久化定义
 
-本章中的 Payload/Event 定义必须与源码同次更新；源码类型是可执行真相。
+### moduleId 和持久化边界
 
-### moduleId 和定义
-
-```ts
-defineJsonModule<MindMapPayload, MindMapEvent>({
-  moduleId: "mind-maps",
-  createEmpty: createEmptyMindMapPayload,
-  validate: validateMindMapPayload,
-  history: {
-    capacity: 100,
-    apply: applyMindMapEvent,
-    invert: invertMindMapEvent,
-  },
-  encode: encodeMindMapPayload,
-  decode: decodeMindMapPayload,
-});
-```
-
-整个资料库是一个 payload、一个本机保存边界、一个同步/冲突边界和一条历史。远端根由 Shared 派生为 `data/mind-maps/`。
-
-### Payload
-
-```ts
-type ConnectorSide = "top" | "right" | "bottom" | "left";
-
-interface MindMapEndpoint {
-  readonly nodeId: string;
-  readonly side: ConnectorSide;
-}
-
-interface NodeFrame {
-  readonly x: number;
-  readonly y: number;
-  readonly width: number;
-  readonly height: number;
-}
-
-interface MindMapNode extends NodeFrame {
-  readonly id: string;
-  readonly text: string;
-  readonly autoWidth: boolean;
-}
-
-interface MindMapArrow {
-  readonly id: string;
-  readonly from: MindMapEndpoint;
-  readonly to: MindMapEndpoint;
-}
-
-interface MindMapDocument {
-  readonly id: string;
-  readonly path: string;
-  readonly nodes: readonly MindMapNode[];
-  readonly arrows: readonly MindMapArrow[];
-}
-
-interface MindMapPayload {
-  readonly folders: readonly string[];
-  readonly maps: readonly MindMapDocument[];
-}
-```
+本模块的 `moduleId` 为 `mind-maps`。整个资料库使用一个 payload、一个本机保存边界、一个同步/冲突边界和一条历史；远端根为 `data/mind-maps/`。
 
 ### Event
 
@@ -312,6 +248,7 @@ interface MindMapPayload {
 ### 历史容量与跨图历史
 
 - `history.capacity` 固定为 100，理由是资料库动作可能携带完整删除子树，需要限制页面会话内历史内存。
+- 100 步历史限制不是 payload 大小限制。
 - 整个资料库共享一条队列；切换脑图/文件夹不切换或清空历史。
 - 一次资料库动作、文字提交、拖动、resize、连线或批量删除各占一步。
 - pointermove、选择、框选过程、viewport、平移、侧栏和展开不进入历史。
@@ -348,9 +285,3 @@ undo/redo 完成后，controller 比较 before/after 完整 payload：画布 eve
 - 没有直接子文件夹或脑图的空叶文件夹编码为空的 `<folder>/.gitkeep`。
 - decode 接受合法 `.json` 和空 `.gitkeep`，从路径补齐全部祖先，再执行完整 payload 校验。
 - codec 不生成 `revision.json`；远端清单和未知文件的处理由 Shared 完成。
-
-### 冲突界面
-
-- 冲突通过版本区域颜色与文字呈现，不使用阻塞横幅。
-- 上传动作确认 local-wins；拉取动作确认 cloud-wins；取消不改变冲突。
-- 不提供自动或局部合并。

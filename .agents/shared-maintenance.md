@@ -1,6 +1,6 @@
 # Shared 与平台维护规范
 
-本文只供已经获得用户明确允许、需要修改 `src/shared`、首页认证、持久化或同步基础设施的 agent 阅读。业务模块开发不得顺手重构 Shared。业务模块的可观察规则以 [持久化模块公共契约](./persistent-module-contract.md) 为准。
+Shared 的可观察行为以 [持久化模块公共契约](./persistent-module-contract.md) 为准；本文记录其内部结构和维护约束。
 
 ## 1. Shared 的职责与非职责
 
@@ -40,7 +40,7 @@ Shared 不定义模块业务 payload、event、快捷键、页面布局或冲突
 
 ## 2. 源码结构、依赖与资源寿命
 
-`src/shared/index.ts` 是业务模块唯一的 TypeScript 入口；其可观察语义由 [持久化模块公共契约](./persistent-module-contract.md) 说明。本文件不再把公共方法重新写成一份使用教程，只把根出口视为 Shared 修改时必须保持兼容的边界。
+`src/shared/index.ts` 是业务模块唯一的 TypeScript 入口，其可观察语义由 [持久化模块公共契约](./persistent-module-contract.md) 说明。
 
 `ModuleRuntimeEnvironment` 不从根入口导出。它是平台组合和测试注入点，可替换 auth、fetch、IndexedDB、LockManager、Document、Window、随机数、时钟、UUID、reload 和认证返回回调；生产业务模块不得依赖它。
 
@@ -277,7 +277,6 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 - `operationGate.css` 的公共 class/加载约定是页面接入契约；改变时必须同步修改所有持久化页面。
 - IndexedDB envelope 或远端文件格式变化必须单独决定兼容策略。当前没有业务 schemaVersion 或通用旧格式迁移，不得悄悄解释旧数据。
 - 修改公共边界时，源码、[持久化模块公共契约](./persistent-module-contract.md)、[接入指南](./new-persistent-module-guide.md)、受影响模块文档和测试必须在同一次任务更新。
-- 任何 Shared 修改仍受根目录 `AGENTS.md` 的用户授权要求约束。
 
 ### 6.2 验证范围
 

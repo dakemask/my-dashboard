@@ -6,7 +6,6 @@
 
 - `my-dashboard` 是公开源码仓库。推送到 `main` 后，GitHub Actions 自动测试、构建并部署到 GitHub Pages。
 - `my-dashboard-data` 是私人数据仓库。需要持久化的模块通过用户提供的 GitHub 用户名和 token 访问其 `main` 分支，以保存隐私数据并支持跨设备同步。
-- 本地开发、测试、构建和部署命令见 [README.md](./README.md)。
 
 ## 模块目录
 
