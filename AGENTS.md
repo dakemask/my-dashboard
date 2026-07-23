@@ -37,4 +37,3 @@ Agent 运行 [README.md](./README.md) 中的测试和构建命令。实际页面
 - 需要保存业务数据的模块必须使用 `src/shared` 根入口提供的 SDK；不保存数据的模块不要求使用。
 - 未经用户明确允许，不得修改 Shared，也不得访问、修改或迁移真实 `my-dashboard-data` 数据。
 - token 不得进入 DOM、日志、错误文本、业务 payload 或 event 历史。
-- 自动测试使用注入的 fake GitHub 请求，与真实私人仓库隔离。

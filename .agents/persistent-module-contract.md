@@ -166,7 +166,6 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 模块不能把系统状态混入 payload、event 或撤销队列；
 - 模块使用 SDK 提供的单标签锁、操作阻塞和云端遮罩，不实现竞态降级方案或第二套公共 UI；
 - 失败提示不得包含 token、原始 GitHub 响应、请求头或任意序列化的捕获异常；
-- 自动测试使用注入的模拟 GitHub 边界，与真实私人仓库隔离。
 
 通常还应：
 
@@ -174,4 +173,4 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 根据典型 event 大小和实际撤销需要选择容量，而不是统一套用固定值；
 - 在 `project` 后清理不再可靠的实时引用；
 - 把保存、上传、拉取和冲突方向做成明确、可重试的用户动作；
-- 持久化模块的自动测试聚焦 domain 和 codec，包括 payload 校验、event 的 apply/invert、远端编码往返和非法输入；保存、同步、冲突、锁和 runtime 生命周期由 Shared 测试覆盖。
+- 持久化模块的自动测试聚焦 domain 和 codec，包括 payload 校验、event 的 apply/invert、远端编码往返和非法输入。

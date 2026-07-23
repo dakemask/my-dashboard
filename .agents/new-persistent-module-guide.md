@@ -275,15 +275,6 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 简单模块不因形式要求强制建立文档。模块文档只记录本模块的决定，不重复五层模型、IndexedDB、GitHub、编辑锁或同步算法。
 
-模块自动测试覆盖以下内容：
-
-- payload 校验和核心业务不变量；
-- event 的 apply/invert；
-- payload 与远端文件的编码往返；
-- 非法或损坏的远端内容。
-
-Shared 的本地保存、GitHub 同步、冲突、历史、编辑锁和 runtime 生命周期由平台测试覆盖，模块不重复建立这些测试。
-
 完成后运行：
 
 ```bash
