@@ -65,4 +65,6 @@ Agent 运行 [README.md](./README.md) 中的测试和构建命令。实际页面
 
 ## 常见实际问题
 
+本节记录在日常开发中稳定触发、会造成重复失败或无效排查，并且已有固定处理方式的问题。有问题稳定出现时更新本节。
+
 - Vite 和 Vitest 需要启动 esbuild 子进程；不要在受限 sandbox 中运行 `npm test` 或 `npm run build`，直接申请沙箱外权限执行。
