@@ -1010,8 +1010,8 @@ export class MindMapCanvas {
     resizeHit?.setAttribute("x", String(frame.width - 10));
     resizeHit?.setAttribute("y", String(frame.height - 10));
     const handle = group.querySelector<SVGRectElement>(".mind-map-canvas__resize-handle");
-    handle?.setAttribute("x", String(frame.width - 5));
-    handle?.setAttribute("y", String(frame.height - 5));
+    handle?.setAttribute("x", String(frame.width - 4));
+    handle?.setAttribute("y", String(frame.height - 4));
   }
 
   #selectionInside(rect: Rect): MutableSelection {
@@ -1234,7 +1234,7 @@ export class MindMapCanvas {
     moveHit.setAttribute("height", String(frame.height));
     moveHit.setAttribute("fill", "none");
     moveHit.setAttribute("stroke", "transparent");
-    moveHit.setAttribute("stroke-width", "12");
+    moveHit.setAttribute("stroke-width", "14");
     moveHit.setAttribute("pointer-events", "stroke");
     moveHit.addEventListener("pointerdown", (event) => this.#beginNodeMove(event, node.id));
     group.append(body, foreignObject, moveHit);
@@ -1253,7 +1253,7 @@ export class MindMapCanvas {
         connector.dataset.side = side;
         connector.setAttribute("cx", String(point.x));
         connector.setAttribute("cy", String(point.y));
-        connector.setAttribute("r", "5");
+        connector.setAttribute("r", "3.5");
         connector.addEventListener("pointerdown", (event) => this.#beginConnectorDrag(event, endpoint));
         group.append(connector);
       }
@@ -1275,10 +1275,10 @@ export class MindMapCanvas {
     hit.addEventListener("pointerdown", (event) => this.#beginResize(event, nodeId));
     const handle = createSvg(this.#ownerDocument, "rect");
     handle.classList.add("mind-map-canvas__resize-handle");
-    handle.setAttribute("x", String(frame.width - 5));
-    handle.setAttribute("y", String(frame.height - 5));
-    handle.setAttribute("width", "10");
-    handle.setAttribute("height", "10");
+    handle.setAttribute("x", String(frame.width - 4));
+    handle.setAttribute("y", String(frame.height - 4));
+    handle.setAttribute("width", "8");
+    handle.setAttribute("height", "8");
     handle.setAttribute("pointer-events", "none");
     control.append(hit, handle);
     return control;
@@ -1377,7 +1377,7 @@ export class MindMapCanvas {
       const arrowHead = createSvg(this.#ownerDocument, "path");
       arrowHead.classList.add("mind-map-canvas__arrow-head");
       if (selected) arrowHead.classList.add("is-selected");
-      arrowHead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+      arrowHead.setAttribute("d", "M 1 1.7 L 10 5 L 1 8.3 z");
       marker.append(arrowHead);
       return marker;
     };

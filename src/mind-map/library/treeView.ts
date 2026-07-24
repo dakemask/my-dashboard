@@ -1,5 +1,4 @@
 import {
-  CloseSmall,
   Down,
   FolderClose,
   FolderOpen,
@@ -240,7 +239,15 @@ export class LibraryTreeView {
       && this.#draft.selection.kind === "folder"
       && this.#draft.selection.path === folder.path
     ) {
-      item.append(this.#createDraftEditor(this.#draft, folder.name));
+      item.append(this.#createDraftEditor(this.#draft, folder.name, expanded));
+      if (expanded) {
+        const children = this.#container.ownerDocument.createElement("ul");
+        children.className = "library-level";
+        children.setAttribute("role", "group");
+        for (const child of folder.folders) children.append(this.#renderFolder(child));
+        for (const map of folder.maps) children.append(this.#renderMap(map));
+        item.append(children);
+      }
       return item;
     }
 
@@ -363,20 +370,37 @@ export class LibraryTreeView {
     list.append(item);
   }
 
-  #createDraftEditor(draft: LibraryDraft, value: string): HTMLElement {
+  #createDraftEditor(
+    draft: LibraryDraft,
+    value: string,
+    folderExpanded = false,
+  ): HTMLElement {
     const editor = this.#container.ownerDocument.createElement("div");
     editor.className = "library-inline-editor";
+    editor.classList.toggle("is-rename", draft.kind === "rename");
+    const spacer = this.#container.ownerDocument.createElement("span");
+    spacer.className = "folder-arrow folder-arrow-spacer";
+    const icon = this.#container.ownerDocument.createElement("span");
+    icon.className = "library-item-icon";
+    const isFolder = draft.kind === "new-folder"
+      || (draft.kind === "rename" && draft.selection.kind === "folder");
+    if (isFolder && draft.kind === "rename") {
+      spacer.append(createMindMapIcon(this.#container.ownerDocument, Down));
+    }
+    icon.classList.toggle("library-folder-icon", isFolder);
+    icon.classList.toggle("map-icon", !isFolder);
+    icon.append(createMindMapIcon(
+      this.#container.ownerDocument,
+      isFolder ? (folderExpanded ? FolderOpen : FolderClose) : MindmapMap,
+    ));
     const input = this.#container.ownerDocument.createElement("input");
     input.type = "text";
     input.value = value;
     input.setAttribute("aria-label", draft.kind === "rename" ? "新名称" : "项目名称");
     const cancel = this.#container.ownerDocument.createElement("button");
     cancel.type = "button";
-    cancel.className = "inline-cancel icon-only";
-    cancel.title = "取消";
-    cancel.setAttribute("aria-label", "取消");
-    cancel.append(createMindMapIcon(this.#container.ownerDocument, CloseSmall));
-    cancel.addEventListener("pointerdown", (event) => event.preventDefault());
+    cancel.className = "inline-cancel";
+    cancel.hidden = true;
     cancel.addEventListener("click", () => this.cancelDraft());
     const error = this.#container.ownerDocument.createElement("span");
     error.className = "inline-error";
@@ -386,6 +410,18 @@ export class LibraryTreeView {
       input.removeAttribute("aria-invalid");
     });
     input.addEventListener("keydown", (event) => {
+      if (
+        event.key === "Escape"
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.metaKey
+        && !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.cancelDraft();
+        return;
+      }
       if (
         event.key !== "Enter"
         || event.isComposing
@@ -399,7 +435,7 @@ export class LibraryTreeView {
       this.#attemptDraftCommit();
     });
     input.addEventListener("blur", () => this.#attemptDraftCommit());
-    editor.append(input, cancel, error);
+    editor.append(spacer, icon, input, cancel, error);
     this.#draftInput = input;
     this.#draftError = error;
     return editor;

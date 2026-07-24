@@ -9,7 +9,6 @@ import {
   FolderPlus,
   Home,
   MindmapList,
-  MindmapMap,
   Save,
   UploadOne,
 } from "@icon-park/svg";
@@ -153,7 +152,7 @@ export class MindMapShell {
       document,
       "文本",
       "添加文本节点（Alt+1）",
-      "toolbar-button toolbar-icon-button toolbar-button-primary",
+      "toolbar-button toolbar-icon-button",
       AddText,
       true,
     );
@@ -189,10 +188,8 @@ export class MindMapShell {
     const sidebarHeading = document.createElement("div");
     sidebarHeading.className = "library-heading";
     const sidebarTitle = document.createElement("h2");
-    sidebarTitle.textContent = "资料库";
-    const sidebarSubtitle = document.createElement("p");
-    sidebarSubtitle.textContent = "整理文件夹与脑图";
-    sidebarHeading.append(sidebarTitle, sidebarSubtitle);
+    sidebarTitle.textContent = "文件夹";
+    sidebarHeading.append(sidebarTitle);
     const libraryActions = document.createElement("div");
     libraryActions.className = "library-actions";
     const newFolderButton = button(
@@ -207,7 +204,7 @@ export class MindMapShell {
       document,
       "新脑图",
       "新建脑图",
-      "library-button library-icon-button library-button-primary",
+      "library-button library-icon-button",
       FileAddition,
       true,
     );
@@ -250,17 +247,6 @@ export class MindMapShell {
     canvasMount.className = "mind-map-canvas-mount";
     const canvasEmpty = document.createElement("div");
     canvasEmpty.className = "canvas-empty";
-    const canvasEmptyCard = document.createElement("div");
-    canvasEmptyCard.className = "canvas-empty-card";
-    const canvasEmptyIcon = document.createElement("span");
-    canvasEmptyIcon.className = "canvas-empty-icon";
-    canvasEmptyIcon.append(createMindMapIcon(document, MindmapMap));
-    const canvasEmptyTitle = document.createElement("strong");
-    canvasEmptyTitle.textContent = "让想法有迹可循";
-    const canvasEmptyMessage = document.createElement("p");
-    canvasEmptyMessage.textContent = "从资料库新建或打开一张脑图。";
-    canvasEmptyCard.append(canvasEmptyIcon, canvasEmptyTitle, canvasEmptyMessage);
-    canvasEmpty.append(canvasEmptyCard);
     canvasArea.append(canvasMount, canvasEmpty);
     workspace.append(sidebar, canvasArea);
 

@@ -404,6 +404,9 @@ export class MindMapController {
     this.#prepareLibraryCommand();
     const parent = this.#selectedParentPath();
     if (parent) this.#preferences.setFolderExpanded(parent, true);
+    this.#librarySelection = null;
+    this.#renderTree();
+    this.shell.setLibrarySelectionAvailable(false);
     this.tree.beginCreate(kind, parent);
   }
 
@@ -887,6 +890,20 @@ export class MindMapController {
         this.canvas.setArrowMode(true);
         this.shell.setArrowMode(this.canvas.arrowMode);
       }
+      return;
+    }
+    if (
+      event.key === "F2"
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.metaKey
+      && !event.shiftKey
+      && this.#librarySelection
+      && !isTextEditingTarget(event.target)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.#beginRename();
       return;
     }
     if (event.key !== "Delete" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
