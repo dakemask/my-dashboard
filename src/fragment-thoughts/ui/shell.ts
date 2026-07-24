@@ -131,7 +131,7 @@ export class FragmentThoughtsShell {
     titleRow.append(title, homeLink);
     const subtitle = document.createElement("p");
     subtitle.className = "ft-subtitle";
-    subtitle.textContent = "随手写下想法。";
+    subtitle.textContent = "快速记录随手写下的想法。";
     identity.append(eyebrow, titleRow, subtitle);
 
     const syncRegion = document.createElement("section");
