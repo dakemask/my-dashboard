@@ -104,6 +104,8 @@ export interface CanvasTextMeasureInput {
 
 export interface CanvasTextMetrics {
   readonly naturalWidth: number;
+  readonly wrappedWidth: number;
+  readonly characterWidth: number;
   readonly height: number;
   readonly minimumWidth: number;
   readonly minimumHeight: number;
@@ -979,8 +981,23 @@ export class MindMapCanvas {
     const minimumWidth = Math.max(this.#minimumNodeWidth, initial.minimumWidth);
     const naturalWidth = Math.max(minimumWidth, initial.naturalWidth);
     const requestedWidth = Math.max(minimumWidth, draggedFrame.width);
+    const requested = requestedWidth === draggedFrame.width
+      ? initial
+      : this.#textMeasurement.measure({
+          element: textarea,
+          text: node.text,
+          width: requestedWidth,
+        });
     const autoWidth = requestedWidth > naturalWidth;
-    const width = autoWidth ? naturalWidth : requestedWidth;
+    const wrappedWidth = Math.max(minimumWidth, requested.wrappedWidth);
+    const remainingWidth = requestedWidth - wrappedWidth;
+    const tightenWrappedWidth = remainingWidth > 0
+      && remainingWidth < requested.characterWidth;
+    const width = autoWidth
+      ? naturalWidth
+      : tightenWrappedWidth
+        ? wrappedWidth
+        : requestedWidth;
     const measured = this.#textMeasurement.measure({ element: textarea, text: node.text, width });
     return {
       frame: {
@@ -1610,6 +1627,7 @@ class BrowserTextMeasurement implements CanvasTextMeasurement {
     const minimumHeight = Math.max(DEFAULT_MINIMUM_NODE_HEIGHT, Math.ceil(lineHeight + NODE_PADDING_Y));
     const availableContentWidth = Math.max(1, input.width - NODE_PADDING_X);
     let visualLineCount = 0;
+    let maximumVisualLineWidth = 0;
 
     for (const logicalLine of logicalLines) {
       if (logicalLine.length === 0) {
@@ -1621,17 +1639,21 @@ class BrowserTextMeasurement implements CanvasTextMeasurement {
       for (const character of logicalLine) {
         const width = Math.max(1, measure(character));
         if (lineWidth > 0 && lineWidth + width > availableContentWidth) {
+          maximumVisualLineWidth = Math.max(maximumVisualLineWidth, lineWidth);
           lines += 1;
           lineWidth = width;
         } else {
           lineWidth += width;
         }
       }
+      maximumVisualLineWidth = Math.max(maximumVisualLineWidth, lineWidth);
       visualLineCount += lines;
     }
 
     return {
       naturalWidth: Math.max(minimumWidth, Math.ceil(naturalContentWidth + NODE_PADDING_X)),
+      wrappedWidth: Math.max(minimumWidth, Math.ceil(maximumVisualLineWidth + NODE_PADDING_X)),
+      characterWidth,
       height: Math.max(minimumHeight, Math.ceil(visualLineCount * lineHeight + NODE_PADDING_Y)),
       minimumWidth,
       minimumHeight,
