@@ -121,14 +121,17 @@ export class FragmentThoughtsShell {
     title.textContent = "碎片想法";
     const homeLink = document.createElement("a");
     homeLink.className = "ft-home-link ft-icon-only";
-    homeLink.href = new URL(import.meta.env.BASE_URL, document.location.href).href;
+    homeLink.href = new URL(
+      import.meta.env.BASE_URL,
+      document.location.href,
+    ).href;
     homeLink.title = "返回首页";
     homeLink.setAttribute("aria-label", "返回首页");
     homeLink.append(createIcon(document, Home));
     titleRow.append(title, homeLink);
     const subtitle = document.createElement("p");
     subtitle.className = "ft-subtitle";
-    subtitle.textContent = "随手写下想法，保留每一次修改。";
+    subtitle.textContent = "随手写下想法。";
     identity.append(eyebrow, titleRow, subtitle);
 
     const syncRegion = document.createElement("section");
@@ -203,7 +206,10 @@ export class FragmentThoughtsShell {
 
     const composer = document.createElement("section");
     composer.className = "ft-composer";
-    composer.setAttribute("aria-labelledby", "fragment-thoughts-composer-title");
+    composer.setAttribute(
+      "aria-labelledby",
+      "fragment-thoughts-composer-title",
+    );
     const composerHeading = document.createElement("div");
     composerHeading.className = "ft-section-heading";
     const composerTitle = document.createElement("h2");
@@ -224,7 +230,10 @@ export class FragmentThoughtsShell {
     composerInput.name = "content";
     composerInput.rows = 7;
     composerInput.autocomplete = "off";
-    composerInput.setAttribute("aria-describedby", "fragment-thoughts-composer-error");
+    composerInput.setAttribute(
+      "aria-describedby",
+      "fragment-thoughts-composer-error",
+    );
     const composerError = document.createElement("p");
     composerError.id = "fragment-thoughts-composer-error";
     composerError.className = "ft-field-error";
@@ -261,7 +270,10 @@ export class FragmentThoughtsShell {
 
     const browseSection = document.createElement("section");
     browseSection.className = "ft-browse";
-    browseSection.setAttribute("aria-labelledby", "fragment-thoughts-list-title");
+    browseSection.setAttribute(
+      "aria-labelledby",
+      "fragment-thoughts-list-title",
+    );
     const browseHeading = document.createElement("div");
     browseHeading.className = "ft-browse-heading";
     const listTitle = document.createElement("h2");
@@ -468,7 +480,10 @@ export class FragmentThoughtsShell {
   setComposerError(message: string | null): void {
     this.elements.composerError.textContent = message ?? "";
     this.elements.composerError.hidden = message === null;
-    this.elements.composerInput.setAttribute("aria-invalid", String(message !== null));
+    this.elements.composerInput.setAttribute(
+      "aria-invalid",
+      String(message !== null),
+    );
   }
 
   setComposerValue(value: string): void {
@@ -501,16 +516,22 @@ export class FragmentThoughtsShell {
     }
   }
 
-  renderThoughts(thoughts: readonly ThoughtCardView[], emptyMessage?: string): void {
+  renderThoughts(
+    thoughts: readonly ThoughtCardView[],
+    emptyMessage?: string,
+  ): void {
     const document = this.elements.thoughtList.ownerDocument;
-    const cards = thoughts.map((thought) => createThoughtCard(document, thought));
+    const cards = thoughts.map((thought) =>
+      createThoughtCard(document, thought),
+    );
     this.elements.thoughtList.replaceChildren(...cards);
     for (const editor of this.elements.thoughtList.querySelectorAll<HTMLTextAreaElement>(
       ".ft-edit-input",
     )) {
       resizeTextarea(editor, 1);
     }
-    this.elements.listEmpty.textContent = emptyMessage ?? "还没有想法。先记录第一条吧。";
+    this.elements.listEmpty.textContent =
+      emptyMessage ?? "还没有想法。先记录第一条吧。";
     this.elements.listEmpty.hidden = thoughts.length !== 0;
   }
 
@@ -529,21 +550,23 @@ export class FragmentThoughtsShell {
         'button[data-action="toggle-history"][aria-pressed="true"]',
       );
       if (root.classList.contains("history-open") && !historyPanel.hidden) {
-        if (selectedHistoryButton) this.#historyReturnFocus = selectedHistoryButton;
+        if (selectedHistoryButton)
+          this.#historyReturnFocus = selectedHistoryButton;
         return;
       }
-      this.#historyReturnFocus = selectedHistoryButton
-        ?? (
-          activeElement instanceof HTMLElement
-          && activeElement.isConnected
-          && !historyPanel.contains(activeElement)
-            ? activeElement
-            : null
-        );
+      this.#historyReturnFocus =
+        selectedHistoryButton ??
+        (activeElement instanceof HTMLElement &&
+        activeElement.isConnected &&
+        !historyPanel.contains(activeElement)
+          ? activeElement
+          : null);
       historyPanel.hidden = false;
       historyPanel.setAttribute("aria-hidden", "false");
       root.ownerDocument.documentElement.classList.add("ft-history-modal-open");
-      this.#setHistoryBackgroundInert(this.#mobileHistoryQuery?.matches ?? false);
+      this.#setHistoryBackgroundInert(
+        this.#mobileHistoryQuery?.matches ?? false,
+      );
       void historyPanel.offsetWidth;
       root.classList.add("history-open");
       return;
@@ -564,14 +587,16 @@ export class FragmentThoughtsShell {
       return;
     }
 
-    const reduceMotion = pageWindow?.matchMedia?.("(prefers-reduced-motion: reduce)").matches
-      ?? true;
+    const reduceMotion =
+      pageWindow?.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+      true;
     if (!pageWindow || reduceMotion) {
       this.#finishHistoryClose(true);
       return;
     }
     this.#historyCloseTimer = pageWindow.setTimeout(() => {
-      if (!root.classList.contains("history-open")) this.#finishHistoryClose(true);
+      if (!root.classList.contains("history-open"))
+        this.#finishHistoryClose(true);
       this.#historyCloseTimer = null;
     }, HISTORY_TRANSITION_MS);
   }
@@ -589,14 +614,18 @@ export class FragmentThoughtsShell {
       return;
     }
     const versions = history.versions.map((version) =>
-      createHistoryVersion(document, history.thoughtId, version)
+      createHistoryVersion(document, history.thoughtId, version),
     );
     this.elements.historyPanel.dataset.thoughtId = history.thoughtId;
     this.elements.historyList.replaceChildren(...versions);
     this.elements.historyEmpty.hidden = history.versions.length !== 0;
   }
 
-  showMessage(message: string, tone: MessageTone = "normal", duration = 4200): void {
+  showMessage(
+    message: string,
+    tone: MessageTone = "normal",
+    duration = 4200,
+  ): void {
     if (this.#toastTimer !== null) {
       window.clearTimeout(this.#toastTimer);
     }
@@ -609,7 +638,11 @@ export class FragmentThoughtsShell {
     }, duration);
   }
 
-  choose(title: string, message: string, choices: readonly DialogChoice[]): Promise<string> {
+  choose(
+    title: string,
+    message: string,
+    choices: readonly DialogChoice[],
+  ): Promise<string> {
     if (this.#dialog.open) {
       this.#dialogResolve?.("cancel");
       this.#dialogResolve = null;
@@ -629,7 +662,9 @@ export class FragmentThoughtsShell {
           `ft-dialog-button ${choice.tone ?? "neutral"}`,
         );
         choiceButton.dataset.choice = choice.id;
-        choiceButton.addEventListener("click", () => this.#resolveDialog(choice.id));
+        choiceButton.addEventListener("click", () =>
+          this.#resolveDialog(choice.id),
+        );
         this.#dialogActions.append(choiceButton);
       }
       this.#dialog.showModal();
@@ -642,7 +677,9 @@ export class FragmentThoughtsShell {
       this.#toastTimer = null;
     }
     if (this.#historyCloseTimer !== null) {
-      this.elements.root.ownerDocument.defaultView?.clearTimeout(this.#historyCloseTimer);
+      this.elements.root.ownerDocument.defaultView?.clearTimeout(
+        this.#historyCloseTimer,
+      );
       this.#historyCloseTimer = null;
     }
     this.elements.root.ownerDocument.documentElement.classList.remove(
@@ -677,9 +714,9 @@ export class FragmentThoughtsShell {
     );
     this.#setHistoryBackgroundInert(false);
     if (
-      restoreFocus
-      && this.#historyReturnFocus?.isConnected
-      && !this.#historyReturnFocus.inert
+      restoreFocus &&
+      this.#historyReturnFocus?.isConnected &&
+      !this.#historyReturnFocus.inert
     ) {
       this.#historyReturnFocus.focus();
     }
@@ -721,7 +758,10 @@ export function formatTimestamp(value: string): string {
   }).format(date);
 }
 
-function createThoughtCard(document: Document, thought: ThoughtCardView): HTMLElement {
+function createThoughtCard(
+  document: Document,
+  thought: ThoughtCardView,
+): HTMLElement {
   const card = document.createElement("article");
   card.className = "ft-thought-card";
   card.dataset.thoughtId = thought.id;
@@ -754,7 +794,11 @@ function createThoughtCard(document: Document, thought: ThoughtCardView): HTMLEl
   } else {
     const content = document.createElement("p");
     content.className = "ft-thought-content";
-    appendHighlightedText(content, thought.content, thought.highlightQuery ?? "");
+    appendHighlightedText(
+      content,
+      thought.content,
+      thought.highlightQuery ?? "",
+    );
 
     if ((thought.historyMatchCount ?? 0) > 0) {
       const historyMatch = createActionButton(
@@ -969,7 +1013,11 @@ function updateHistoryToggleLock(
   toggle.title = toggle.dataset.defaultTitle ?? "";
 }
 
-function appendHighlightedText(parent: HTMLElement, text: string, query: string): void {
+function appendHighlightedText(
+  parent: HTMLElement,
+  text: string,
+  query: string,
+): void {
   if (query.length === 0) {
     parent.textContent = text;
     return;
@@ -1004,11 +1052,11 @@ function resizeTextarea(textarea: HTMLTextAreaElement, minimum: number): void {
   const styles = pageWindow?.getComputedStyle(textarea);
   const lineHeight = Number.parseFloat(styles?.lineHeight ?? "") || 24;
   const verticalPadding =
-    (Number.parseFloat(styles?.paddingTop ?? "") || 0)
-    + (Number.parseFloat(styles?.paddingBottom ?? "") || 0);
+    (Number.parseFloat(styles?.paddingTop ?? "") || 0) +
+    (Number.parseFloat(styles?.paddingBottom ?? "") || 0);
   const verticalBorder =
-    (Number.parseFloat(styles?.borderTopWidth ?? "") || 0)
-    + (Number.parseFloat(styles?.borderBottomWidth ?? "") || 0);
+    (Number.parseFloat(styles?.borderTopWidth ?? "") || 0) +
+    (Number.parseFloat(styles?.borderBottomWidth ?? "") || 0);
   const minimumHeight = lineHeight * minimum + verticalPadding + verticalBorder;
   textarea.style.height = `${Math.max(textarea.scrollHeight, minimumHeight)}px`;
 }
