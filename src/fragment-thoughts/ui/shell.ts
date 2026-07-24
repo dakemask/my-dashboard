@@ -109,9 +109,13 @@ export class FragmentThoughtsShell {
 
     const pageHeader = document.createElement("header");
     pageHeader.className = "ft-page-header";
+    const headerBar = document.createElement("div");
+    headerBar.className = "ft-header-bar";
 
     const identity = document.createElement("div");
     identity.className = "ft-identity";
+    const titleCopy = document.createElement("div");
+    titleCopy.className = "ft-title-copy";
     const eyebrow = document.createElement("p");
     eyebrow.className = "ft-eyebrow";
     eyebrow.textContent = "MY DASHBOARD";
@@ -128,11 +132,12 @@ export class FragmentThoughtsShell {
     homeLink.title = "返回首页";
     homeLink.setAttribute("aria-label", "返回首页");
     homeLink.append(createIcon(document, Home));
-    titleRow.append(title, homeLink);
+    titleRow.append(title);
     const subtitle = document.createElement("p");
     subtitle.className = "ft-subtitle";
     subtitle.textContent = "快速记录你的想法。";
-    identity.append(eyebrow, titleRow, subtitle);
+    titleCopy.append(eyebrow, titleRow, subtitle);
+    identity.append(homeLink, titleCopy);
 
     const syncRegion = document.createElement("section");
     syncRegion.className = "ft-sync-region";
@@ -190,7 +195,8 @@ export class FragmentThoughtsShell {
     retrySaveButton.dataset.action = "retry-save";
     saveFailure.append(saveFailureText, retrySaveButton);
     syncRegion.append(syncSummary, syncActions, saveFailure);
-    pageHeader.append(identity, syncRegion);
+    headerBar.append(identity, syncRegion);
+    pageHeader.append(headerBar);
 
     const draftNotice = document.createElement("div");
     draftNotice.className = "ft-draft-notice";
