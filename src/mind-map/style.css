@@ -515,6 +515,9 @@ button:disabled {
   line-height: 1.42;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .mind-map-canvas__node-editor[readonly] {

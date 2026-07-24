@@ -8,6 +8,8 @@ import type {
 import {
   MindMapCanvas,
   type CanvasSelection,
+  type CanvasTextCommitMode,
+  type CanvasTextCommitResult,
   type CanvasTextChange,
 } from "../canvas";
 import {
@@ -82,6 +84,7 @@ export class MindMapController {
   #currentMapId: string | null = null;
   #librarySelection: LibrarySelection = null;
   #suppressCanvasSelection = false;
+  #suppressCanvasRender = false;
   #pendingDraftCommit: DraftCommit | null = null;
   #disposed = false;
 
@@ -114,7 +117,7 @@ export class MindMapController {
           if (!mapId) return;
           this.#dispatch({ type: "set-node-frame", mapId, nodeId, frame, autoWidth });
         },
-        onChangeNodeText: (change) => this.#commitTextChange(change),
+        onChangeNodeText: (change, mode) => this.#commitTextChange(change, mode),
         onCreateArrow: ({ from, to }) => this.#createArrow(from, to),
         onDeleteSelection: (selection) => this.#deleteCanvasSelection(selection),
         isArrowTargetValid: (from, to) => this.#isArrowTargetValid(from, to),
@@ -291,6 +294,7 @@ export class MindMapController {
     this.shell.setLibrarySelectionAvailable(this.#librarySelection !== null);
     this.shell.setArrowMode(this.canvas.arrowMode);
     this.#renderTree(dirty);
+    if (this.#suppressCanvasRender) return;
 
     this.#suppressCanvasSelection = true;
     try {
@@ -618,9 +622,24 @@ export class MindMapController {
     if (positions.length > 0) this.#dispatch({ type: "move-nodes", mapId: map.id, positions });
   }
 
-  #commitTextChange(change: CanvasTextChange): void {
+  #commitTextChange(
+    change: CanvasTextChange,
+    mode: CanvasTextCommitMode,
+  ): CanvasTextCommitResult {
     const event = this.#textEvent(change);
-    if (event) this.#dispatch(event);
+    const currentMap = this.#currentMap();
+    if (!event || !currentMap) return { accepted: false };
+    const preserveCanvasDom = mode === "pointer-handoff";
+    if (preserveCanvasDom) this.#suppressCanvasRender = true;
+    try {
+      const dispatched = this.#dispatch(event);
+      const map = this.#currentMap();
+      return map && (dispatched || mapReflectsTextChange(map, change))
+        ? { accepted: true, map }
+        : { accepted: false };
+    } finally {
+      if (preserveCanvasDom) this.#suppressCanvasRender = false;
+    }
   }
 
   #textEvent(change: CanvasTextChange): MindMapEvent | null {
@@ -918,6 +937,19 @@ export class MindMapController {
   #assertAlive(): void {
     if (this.#disposed) throw new Error("Mind Map controller is disposed.");
   }
+}
+
+function mapReflectsTextChange(map: MindMapDocument, change: CanvasTextChange): boolean {
+  const node = map.nodes.find((candidate) => candidate.id === change.nodeId);
+  return Boolean(
+    node
+    && node.text === change.text
+    && node.x === change.frame.x
+    && node.y === change.frame.y
+    && node.width === change.frame.width
+    && node.height === change.frame.height
+    && node.autoWidth === change.autoWidth,
+  );
 }
 
 function draftKind(draft: LibraryDraft): "folder" | "map" {

@@ -57,6 +57,12 @@ export interface CanvasTextChange {
   readonly autoWidth: boolean;
 }
 
+export type CanvasTextCommitMode = "normal" | "pointer-handoff";
+
+export type CanvasTextCommitResult =
+  | { readonly accepted: true; readonly map: MindMapDocument }
+  | { readonly accepted: false };
+
 export interface MindMapCanvasCallbacks {
   onSelectionChange?(selection: CanvasSelection): void;
   onAddNodeRequest?(command: { readonly position: Point }): void;
@@ -70,7 +76,10 @@ export interface MindMapCanvasCallbacks {
     readonly frame: NodeFrame;
     readonly autoWidth: boolean;
   }): void;
-  onChangeNodeText?(command: CanvasTextChange): void;
+  onChangeNodeText?(
+    command: CanvasTextChange,
+    mode: CanvasTextCommitMode,
+  ): CanvasTextCommitResult | void;
   onCreateArrow?(command: {
     readonly from: MindMapEndpoint;
     readonly to: MindMapEndpoint;
@@ -169,6 +178,11 @@ interface EditingState {
   readonly originalAutoWidth: boolean;
   currentFrame: NodeFrame;
   currentAutoWidth: boolean;
+}
+
+interface TextCommitResult {
+  readonly change: CanvasTextChange | null;
+  readonly accepted: boolean;
 }
 
 export class MindMapCanvas {
@@ -376,10 +390,17 @@ export class MindMapCanvas {
 
   commitActiveTextEdit(): CanvasTextChange | null {
     this.#assertAlive();
-    const change = this.#takeTextChange();
-    if (change) this.#callbacks.onChangeNodeText?.(change);
+    const previousEdit = this.#editing;
+    const previousText = previousEdit
+      ? this.#findTextarea(previousEdit.nodeId)?.value ?? previousEdit.originalText
+      : "";
+    const committed = this.#commitTextEdit("normal");
+    if (!committed.accepted && previousEdit) {
+      this.#restoreTextEdit(previousEdit, previousText);
+      return null;
+    }
     this.#render();
-    return change;
+    return committed.change;
   }
 
   requestAddNode(): void {
@@ -401,7 +422,7 @@ export class MindMapCanvas {
     const node = this.#findNode(nodeId);
     if (!node) return;
     if (this.#editing?.nodeId === nodeId) {
-      this.#focusEditor(nodeId);
+      this.#focusEditor(nodeId, false);
       return;
     }
     this.commitActiveTextEdit();
@@ -419,7 +440,7 @@ export class MindMapCanvas {
     };
     this.#render();
     this.#emitSelection();
-    this.#focusEditor(nodeId);
+    this.#focusEditor(nodeId, true);
   }
 
   setArrowMode(enabled: boolean): void {
@@ -651,16 +672,50 @@ export class MindMapCanvas {
     this.#setSelection({ nodeIds: new Set(), arrowIds: new Set([arrowId]) });
   }
 
-  #handleTextPointerDown(event: PointerEvent, nodeId: string): void {
+  #handleTextPointerDown(
+    event: PointerEvent,
+    nodeId: string,
+    textarea: HTMLTextAreaElement,
+  ): void {
     if (event.button !== 0 || this.#arrowMode) return;
     event.stopPropagation();
-    if (!event.ctrlKey) return;
-    event.preventDefault();
-    this.commitActiveTextEdit();
-    const next = cloneSelection(this.#selection);
-    if (next.nodeIds.has(nodeId)) next.nodeIds.delete(nodeId);
-    else next.nodeIds.add(nodeId);
-    this.#setSelection(next);
+    if (event.ctrlKey) {
+      event.preventDefault();
+      this.commitActiveTextEdit();
+      const next = cloneSelection(this.#selection);
+      if (next.nodeIds.has(nodeId)) next.nodeIds.delete(nodeId);
+      else next.nodeIds.add(nodeId);
+      this.#setSelection(next);
+      return;
+    }
+    if (this.#editing?.nodeId === nodeId) return;
+
+    const previousEdit = this.#editing;
+    const previousTextarea = previousEdit ? this.#findTextarea(previousEdit.nodeId) : null;
+    const previousText = previousTextarea?.value ?? previousEdit?.originalText ?? "";
+    const committed = this.#commitTextEdit("pointer-handoff");
+    if (!committed.accepted && previousEdit) {
+      event.preventDefault();
+      this.#restoreTextEdit(previousEdit, previousText);
+      return;
+    }
+    if (previousEdit) this.#renderArrowsOnly();
+
+    this.#cancelPointerInteraction(true);
+    const node = this.#findNode(nodeId);
+    if (!node || !textarea.isConnected) return;
+    this.#selection = { nodeIds: new Set([nodeId]), arrowIds: new Set() };
+    const frame = this.#effectiveFrame(node);
+    this.#editing = {
+      nodeId,
+      originalText: node.text,
+      originalFrame: frame,
+      originalAutoWidth: node.autoWidth,
+      currentFrame: frame,
+      currentAutoWidth: node.autoWidth,
+    };
+    this.#syncInteractionChromeInPlace();
+    this.#emitSelection();
   }
 
   #beginPointerInteraction(interaction: Exclude<PointerInteraction, { kind: "idle" }>): void {
@@ -791,14 +846,60 @@ export class MindMapCanvas {
     this.#editing = null;
   }
 
-  #focusEditor(nodeId: string): void {
+  #commitTextEdit(mode: CanvasTextCommitMode): TextCommitResult {
+    const change = this.#takeTextChange();
+    if (!change) return { change: null, accepted: true };
+    const result = this.#callbacks.onChangeNodeText?.(change, mode);
+    if (result === undefined) {
+      this.#applyTextChangeToMap(change);
+    } else if (!result.accepted || !mapReflectsTextChange(result.map, change)) {
+      return { change, accepted: false };
+    } else {
+      this.#map = result.map;
+    }
+    return { change, accepted: true };
+  }
+
+  #restoreTextEdit(editing: EditingState, text: string): void {
+    this.#editing = editing;
+    this.#frameOverrides.set(editing.nodeId, editing.currentFrame);
+    const textarea = this.#findTextarea(editing.nodeId);
+    if (textarea) textarea.value = text;
+    this.#applyEditingFrameToDom(editing.nodeId, editing.currentFrame);
+    this.#renderArrowsOnly();
+    this.#syncInteractionChromeInPlace();
+  }
+
+  #applyTextChangeToMap(change: CanvasTextChange): void {
+    const map = this.#map;
+    if (!map) return;
+    this.#map = {
+      ...map,
+      nodes: map.nodes.map((node) => node.id === change.nodeId
+        ? {
+            ...node,
+            text: change.text,
+            x: change.frame.x,
+            y: change.frame.y,
+            width: change.frame.width,
+            height: change.frame.height,
+            autoWidth: change.autoWidth,
+          }
+        : node),
+    };
+  }
+
+  #focusEditor(nodeId: string, moveCaretToEnd: boolean): void {
     queueMicrotask(() => {
       if (this.#editing?.nodeId !== nodeId) return;
       const textarea = this.#findTextarea(nodeId);
       if (!textarea) return;
       textarea.readOnly = false;
+      textarea.tabIndex = 0;
       textarea.focus({ preventScroll: true });
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      if (moveCaretToEnd) {
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
     });
   }
 
@@ -1071,10 +1172,18 @@ export class MindMapCanvas {
     textarea.dataset.nodeId = node.id;
     textarea.value = node.text;
     textarea.readOnly = this.#editing?.nodeId !== node.id;
+    textarea.tabIndex = textarea.readOnly ? -1 : 0;
     textarea.setAttribute("aria-label", "节点文本");
-    textarea.addEventListener("pointerdown", (event) => this.#handleTextPointerDown(event, node.id));
+    textarea.addEventListener(
+      "pointerdown",
+      (event) => this.#handleTextPointerDown(event, node.id, textarea),
+    );
     textarea.addEventListener("click", (event) => {
-      if (!event.ctrlKey && !this.#arrowMode) this.editNode(node.id);
+      if (
+        !event.ctrlKey
+        && !this.#arrowMode
+        && this.#editing?.nodeId !== node.id
+      ) this.editNode(node.id);
     });
     textarea.addEventListener("blur", () => {
       if (this.#suppressBlur || this.#editing?.nodeId !== node.id) return;
@@ -1096,17 +1205,7 @@ export class MindMapCanvas {
     moveHit.addEventListener("pointerdown", (event) => this.#beginNodeMove(event, node.id));
     group.append(body, foreignObject, moveHit);
 
-    if (this.#shouldShowResizeHandle(node.id)) {
-      const handle = createSvg(this.#ownerDocument, "rect");
-      handle.classList.add("mind-map-canvas__resize-handle");
-      handle.dataset.nodeId = node.id;
-      handle.setAttribute("x", String(frame.width - 5));
-      handle.setAttribute("y", String(frame.height - 5));
-      handle.setAttribute("width", "10");
-      handle.setAttribute("height", "10");
-      handle.addEventListener("pointerdown", (event) => this.#beginResize(event, node.id));
-      group.append(handle);
-    }
+    if (this.#shouldShowResizeHandle(node.id)) group.append(this.#createResizeHandle(node.id, frame));
 
     if (this.#arrowMode) {
       for (const side of CONNECTOR_SIDES) {
@@ -1126,6 +1225,58 @@ export class MindMapCanvas {
       }
     }
     return group;
+  }
+
+  #createResizeHandle(nodeId: string, frame: NodeFrame): SVGRectElement {
+    const handle = createSvg(this.#ownerDocument, "rect");
+    handle.classList.add("mind-map-canvas__resize-handle");
+    handle.dataset.nodeId = nodeId;
+    handle.setAttribute("x", String(frame.width - 5));
+    handle.setAttribute("y", String(frame.height - 5));
+    handle.setAttribute("width", "10");
+    handle.setAttribute("height", "10");
+    handle.addEventListener("pointerdown", (event) => this.#beginResize(event, nodeId));
+    return handle;
+  }
+
+  #syncInteractionChromeInPlace(): void {
+    this.#updateRootClasses();
+    for (const group of this.#arrowLayer.querySelectorAll<SVGGElement>(".mind-map-canvas__arrow")) {
+      const arrowId = group.dataset.arrowId;
+      group.classList.toggle("is-selected", Boolean(arrowId && this.#selection.arrowIds.has(arrowId)));
+    }
+
+    const map = this.#map;
+    if (!map) return;
+    const groups = new Map<string, SVGGElement>();
+    for (const group of this.#nodeLayer.querySelectorAll<SVGGElement>(".mind-map-canvas__node")) {
+      if (group.dataset.nodeId) groups.set(group.dataset.nodeId, group);
+    }
+    for (const node of map.nodes) {
+      const group = groups.get(node.id);
+      if (!group) continue;
+      group.classList.remove("is-idle", "is-moving", "is-resizing", "is-editing");
+      group.classList.add(this.#nodeStateClass(node.id));
+      group.classList.toggle("is-selected", this.#selection.nodeIds.has(node.id));
+      group.classList.toggle("is-raised", this.#nodeRaiseRank(node.id) > 0);
+
+      const editor = group.querySelector<HTMLTextAreaElement>(".mind-map-canvas__node-editor");
+      if (editor) {
+        const editing = this.#editing?.nodeId === node.id;
+        editor.readOnly = !editing;
+        editor.tabIndex = editing ? 0 : -1;
+      }
+
+      const handle = group.querySelector<SVGRectElement>(".mind-map-canvas__resize-handle");
+      if (!this.#shouldShowResizeHandle(node.id)) {
+        handle?.remove();
+      } else if (!handle) {
+        group.append(this.#createResizeHandle(node.id, this.#effectiveFrame(node)));
+      }
+    }
+    // Re-inserting a node group here can break the native caret/selection gesture
+    // that is still being established for this pointerdown. The next full render
+    // restores rank order without replacing the active pointer target mid-gesture.
   }
 
   #renderArrowsOnly(nodes?: ReadonlyMap<string, MindMapNode>): void {
@@ -1319,6 +1470,16 @@ function framesEqual(left: NodeFrame, right: NodeFrame): boolean {
     left.y === right.y &&
     left.width === right.width &&
     left.height === right.height
+  );
+}
+
+function mapReflectsTextChange(map: MindMapDocument, change: CanvasTextChange): boolean {
+  const node = map.nodes.find((candidate) => candidate.id === change.nodeId);
+  return Boolean(
+    node
+    && node.text === change.text
+    && node.autoWidth === change.autoWidth
+    && framesEqual(nodeFrame(node), change.frame),
   );
 }
 
