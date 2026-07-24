@@ -39,6 +39,8 @@ const CONNECTOR_SIDES: readonly ConnectorSide[] = ["top", "right", "bottom", "le
 const DEFAULT_MINIMUM_NODE_WIDTH = 32;
 const DEFAULT_MINIMUM_NODE_HEIGHT = 35;
 const DEFAULT_CONNECTOR_HIT_RADIUS = 18;
+const RESIZE_PREVIEW_MINIMUM_SIZE = 2;
+const RESIZE_PREVIEW_MOVE_EPSILON = 2;
 const GRID_EXTENT = 100_000;
 const DEFAULT_NODE_WIDTH = 260;
 const DEFAULT_NODE_HEIGHT = 92;
@@ -157,7 +159,10 @@ type PointerInteraction =
       readonly kind: "resizing";
       readonly nodeId: string;
       readonly startFrame: NodeFrame;
+      readonly startClient: Point;
       currentFrame: NodeFrame;
+      textPaintHeight: number;
+      moved: boolean;
     })
   | (PointerInteractionBase & {
       readonly kind: "connecting";
@@ -637,7 +642,10 @@ export class MindMapCanvas {
       pointerId: pointerId(event),
       nodeId,
       startFrame,
+      startClient: client,
       currentFrame: startFrame,
+      textPaintHeight: startFrame.height,
+      moved: false,
       lastClient: client,
     });
   }
@@ -764,9 +772,23 @@ export class MindMapCanvas {
       interaction.currentFrame = resizeFrameFromSouthEast(
         interaction.startFrame,
         world,
-        this.#minimumNodeWidth,
-        this.#minimumNodeHeight,
+        RESIZE_PREVIEW_MINIMUM_SIZE,
+        RESIZE_PREVIEW_MINIMUM_SIZE,
       );
+      interaction.moved ||= (
+        Math.abs(interaction.lastClient.x - interaction.startClient.x) > RESIZE_PREVIEW_MOVE_EPSILON
+        || Math.abs(interaction.lastClient.y - interaction.startClient.y) > RESIZE_PREVIEW_MOVE_EPSILON
+      );
+      const node = this.#findNode(interaction.nodeId);
+      const textarea = this.#findTextarea(interaction.nodeId);
+      const textHeight = node
+        ? this.#textMeasurement.measure({
+            element: textarea,
+            text: node.text,
+            width: interaction.currentFrame.width,
+          }).height
+        : interaction.currentFrame.height;
+      interaction.textPaintHeight = Math.max(interaction.currentFrame.height, textHeight);
       this.#frameOverrides.set(interaction.nodeId, interaction.currentFrame);
       this.#render();
       return;
@@ -954,16 +976,18 @@ export class MindMapCanvas {
       text: node.text,
       width: draggedFrame.width,
     });
-    const requestedWidth = Math.max(initial.minimumWidth, draggedFrame.width);
-    const autoWidth = requestedWidth > initial.naturalWidth;
-    const width = autoWidth ? initial.naturalWidth : requestedWidth;
+    const minimumWidth = Math.max(this.#minimumNodeWidth, initial.minimumWidth);
+    const naturalWidth = Math.max(minimumWidth, initial.naturalWidth);
+    const requestedWidth = Math.max(minimumWidth, draggedFrame.width);
+    const autoWidth = requestedWidth > naturalWidth;
+    const width = autoWidth ? naturalWidth : requestedWidth;
     const measured = this.#textMeasurement.measure({ element: textarea, text: node.text, width });
     return {
       frame: {
         x: draggedFrame.x,
         y: draggedFrame.y,
         width,
-        height: Math.max(measured.minimumHeight, measured.height),
+        height: Math.max(this.#minimumNodeHeight, measured.minimumHeight, measured.height),
       },
       autoWidth,
     };
@@ -1031,7 +1055,9 @@ export class MindMapCanvas {
   }
 
   #autoPanPointer(): Point | null {
-    return usesAutoPan(this.#interaction) ? this.#interaction.lastClient : null;
+    const interaction = this.#interaction;
+    if (interaction.kind === "resizing" && !interaction.moved) return null;
+    return usesAutoPan(interaction) ? interaction.lastClient : null;
   }
 
   #applyAutoPan(delta: Point): void {
@@ -1151,6 +1177,7 @@ export class MindMapCanvas {
 
   #createNodeElement(node: MindMapNode): SVGGElement {
     const frame = this.#effectiveFrame(node);
+    const editorHeight = this.#nodeEditorHeight(node.id, frame);
     const group = createSvg(this.#ownerDocument, "g");
     group.classList.add("mind-map-canvas__node", this.#nodeStateClass(node.id));
     if (this.#selection.nodeIds.has(node.id)) group.classList.add("is-selected");
@@ -1166,7 +1193,7 @@ export class MindMapCanvas {
     const foreignObject = createSvg(this.#ownerDocument, "foreignObject");
     foreignObject.classList.add("mind-map-canvas__node-editor-host");
     foreignObject.setAttribute("width", String(frame.width));
-    foreignObject.setAttribute("height", String(frame.height));
+    foreignObject.setAttribute("height", String(editorHeight));
     const textarea = this.#ownerDocument.createElementNS(XHTML_NAMESPACE, "textarea") as HTMLTextAreaElement;
     textarea.classList.add("mind-map-canvas__node-editor");
     textarea.dataset.nodeId = node.id;
@@ -1344,9 +1371,23 @@ export class MindMapCanvas {
 
   #nodeStateClass(nodeId: string): string {
     if (this.#editing?.nodeId === nodeId) return "is-editing";
-    if (this.#interaction.kind === "resizing" && this.#interaction.nodeId === nodeId) return "is-resizing";
+    if (
+      this.#interaction.kind === "resizing"
+      && this.#interaction.nodeId === nodeId
+      && this.#interaction.moved
+    ) return "is-resizing";
     if (this.#selection.nodeIds.has(nodeId)) return "is-moving";
     return "is-idle";
+  }
+
+  #nodeEditorHeight(nodeId: string, frame: NodeFrame): number {
+    const interaction = this.#interaction;
+    return (
+      interaction.kind === "resizing"
+      && interaction.nodeId === nodeId
+    )
+      ? Math.max(frame.height, interaction.textPaintHeight)
+      : frame.height;
   }
 
   #nodeRaiseRank(nodeId: string): number {
