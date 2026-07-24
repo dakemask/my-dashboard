@@ -190,11 +190,28 @@ export class MindMapController {
     this.#listen(elements.newMapButton, "click", () => this.#beginCreate("map"));
     this.#listen(elements.renameButton, "click", () => this.#beginRename());
     this.#listen(elements.deleteButton, "click", () => void this.#confirmDeleteLibrarySelection());
+    this.#listen(elements.sidebar, "pointerdown", (event) => {
+      const target = event.target as Element | null;
+      if (
+        event.button !== 0
+        || target?.closest("button, input, .library-inline-editor")
+      ) return;
+      if (this.tree.settleDraft(false)) this.#clearLibrarySelection();
+    });
+    this.#listen(this.#pageWindow.document, "pointerdown", (event) => {
+      if (
+        !this.tree.draft
+        || elements.sidebar.contains(event.target as Node | null)
+      ) return;
+      this.tree.settleDraft(false);
+    });
 
     const updateArrowButton = (): void => {
       this.#pageWindow.queueMicrotask(() => this.shell.setArrowMode(this.canvas.arrowMode));
     };
-    this.#listen(this.canvas.element, "pointerdown", () => this.#clearLibrarySelection());
+    this.#listen(this.canvas.element, "pointerdown", () => {
+      if (this.tree.settleDraft(false)) this.#clearLibrarySelection();
+    });
     this.#listen(this.canvas.element, "pointerdown", updateArrowButton);
     this.#listen(this.canvas.element, "pointerup", updateArrowButton);
     this.#listen(this.canvas.element, "pointercancel", updateArrowButton);
