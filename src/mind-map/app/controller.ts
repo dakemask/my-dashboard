@@ -104,9 +104,12 @@ export class MindMapController {
     this.canvas = new MindMapCanvas(this.shell.elements.canvasMount, {
       measurements: {
         getCanvasRect: (svg) => rectLike(svg.getBoundingClientRect()),
-        getSidebarRect: () => this.shell.elements.sidebar.hidden
+        getSidebarRect: () => !this.shell.elements.root.classList.contains("sidebar-open")
           ? null
-          : rectLike(this.shell.elements.sidebar.getBoundingClientRect()),
+          : stableSidebarRect(
+              this.shell.elements.sidebar,
+              this.shell.elements.canvasArea,
+            ),
       },
       callbacks: {
         onSelectionChange: (selection) => this.#onCanvasSelectionChange(selection),
@@ -172,7 +175,7 @@ export class MindMapController {
   #bindUi(): void {
     const elements = this.shell.elements;
     this.#listen(elements.sidebarButton, "click", () => {
-      const open = elements.sidebar.hidden;
+      const open = !elements.root.classList.contains("sidebar-open");
       this.#preferences.setSidebarOpen(open);
       this.shell.setSidebarOpen(open);
     });
@@ -1015,6 +1018,19 @@ function isTextEditingTarget(target: EventTarget | null): boolean {
 
 function rectLike(rect: DOMRect): { left: number; top: number; width: number; height: number } {
   return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+}
+
+function stableSidebarRect(
+  sidebar: HTMLElement,
+  canvasArea: HTMLElement,
+): { left: number; top: number; width: number; height: number } {
+  const canvasRect = canvasArea.getBoundingClientRect();
+  return {
+    left: canvasRect.left + sidebar.offsetLeft,
+    top: canvasRect.top + sidebar.offsetTop,
+    width: sidebar.offsetWidth,
+    height: sidebar.offsetHeight,
+  };
 }
 
 function payloadKey(payload: MindMapPayload): string {

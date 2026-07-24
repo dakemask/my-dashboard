@@ -1,4 +1,12 @@
+import {
+  CloseSmall,
+  Down,
+  FolderClose,
+  FolderOpen,
+  MindmapMap,
+} from "@icon-park/svg";
 import type { MindMapPayload } from "../domain";
+import { createMindMapIcon } from "../ui/icons";
 
 export type LibrarySelection =
   | { readonly kind: "folder"; readonly path: string }
@@ -107,8 +115,8 @@ export class LibraryTreeView {
     expandedFolders.add(path);
     this.#state = { ...state, expandedFolders };
     item.setAttribute("aria-expanded", "true");
-    const arrow = row.querySelector<HTMLElement>(".folder-arrow");
-    if (arrow) arrow.textContent = "▾";
+    const folderIcon = row.querySelector<HTMLElement>(".library-folder-icon");
+    folderIcon?.replaceChildren(createMindMapIcon(this.#container.ownerDocument, FolderOpen));
 
     const children = this.#container.ownerDocument.createElement("ul");
     children.className = "library-level";
@@ -130,9 +138,16 @@ export class LibraryTreeView {
     for (const folder of root.folders) list.append(this.#renderFolder(folder));
     for (const map of root.maps) list.append(this.#renderMap(map));
     if (root.folders.length === 0 && root.maps.length === 0 && !this.#draft) {
-      const empty = this.#container.ownerDocument.createElement("p");
+      const empty = this.#container.ownerDocument.createElement("div");
       empty.className = "library-empty";
-      empty.textContent = "资料库为空，请新建脑图或文件夹。";
+      const icon = this.#container.ownerDocument.createElement("span");
+      icon.className = "library-empty-icon";
+      icon.append(createMindMapIcon(this.#container.ownerDocument, MindmapMap));
+      const title = this.#container.ownerDocument.createElement("strong");
+      title.textContent = "资料库还是空的";
+      const message = this.#container.ownerDocument.createElement("p");
+      message.textContent = "新建一张脑图，开始整理想法。";
+      empty.append(icon, title, message);
       this.#container.replaceChildren(empty);
     } else {
       this.#container.replaceChildren(list);
@@ -246,11 +261,20 @@ export class LibraryTreeView {
 
     const arrow = this.#container.ownerDocument.createElement("span");
     arrow.className = "folder-arrow";
-    arrow.textContent = expanded ? "▾" : "▸";
+    arrow.append(createMindMapIcon(this.#container.ownerDocument, Down));
+    const folderIcon = this.#container.ownerDocument.createElement("span");
+    folderIcon.className = "library-item-icon library-folder-icon";
+    folderIcon.append(
+      createMindMapIcon(this.#container.ownerDocument, expanded ? FolderOpen : FolderClose),
+    );
     const name = this.#container.ownerDocument.createElement("span");
     name.className = "library-item-name";
-    name.textContent = `${folder.name}${state.dirtyFolderPaths.has(folder.path) ? " *" : ""}`;
-    row.append(arrow, name);
+    name.textContent = folder.name;
+    row.append(arrow, folderIcon, name);
+    if (state.dirtyFolderPaths.has(folder.path)) {
+      row.append(this.#createDirtyMarker());
+      row.setAttribute("aria-label", `${folder.name}，有未保存修改`);
+    }
     item.append(row);
 
     if (expanded) {
@@ -293,13 +317,19 @@ export class LibraryTreeView {
       this.#callbacks.onSelect(selection);
       this.#callbacks.onOpenMap(map.id);
     });
+    const spacer = this.#container.ownerDocument.createElement("span");
+    spacer.className = "folder-arrow folder-arrow-spacer";
     const icon = this.#container.ownerDocument.createElement("span");
-    icon.className = "map-icon";
-    icon.textContent = "◇";
+    icon.className = "library-item-icon map-icon";
+    icon.append(createMindMapIcon(this.#container.ownerDocument, MindmapMap));
     const name = this.#container.ownerDocument.createElement("span");
     name.className = "library-item-name";
-    name.textContent = `${map.name}${state.dirtyMapIds.has(map.id) ? " *" : ""}`;
-    row.append(icon, name);
+    name.textContent = map.name;
+    row.append(spacer, icon, name);
+    if (state.dirtyMapIds.has(map.id)) {
+      row.append(this.#createDirtyMarker());
+      row.setAttribute("aria-label", `${map.name}，有未保存修改`);
+    }
     item.append(row);
     return item;
   }
@@ -342,8 +372,10 @@ export class LibraryTreeView {
     input.setAttribute("aria-label", draft.kind === "rename" ? "新名称" : "项目名称");
     const cancel = this.#container.ownerDocument.createElement("button");
     cancel.type = "button";
-    cancel.className = "inline-cancel";
-    cancel.textContent = "取消";
+    cancel.className = "inline-cancel icon-only";
+    cancel.title = "取消";
+    cancel.setAttribute("aria-label", "取消");
+    cancel.append(createMindMapIcon(this.#container.ownerDocument, CloseSmall));
     cancel.addEventListener("pointerdown", (event) => event.preventDefault());
     cancel.addEventListener("click", () => this.cancelDraft());
     const error = this.#container.ownerDocument.createElement("span");
@@ -403,6 +435,15 @@ export class LibraryTreeView {
   #showDraftError(message: string): void {
     if (this.#draftError) this.#draftError.textContent = message;
     this.#draftInput?.setAttribute("aria-invalid", "true");
+  }
+
+  #createDirtyMarker(): HTMLElement {
+    const marker = this.#container.ownerDocument.createElement("span");
+    marker.className = "library-dirty-marker";
+    marker.textContent = "*";
+    marker.title = "有未保存修改";
+    marker.setAttribute("aria-hidden", "true");
+    return marker;
   }
 
   #draftInitialValue(draft: LibraryDraft): string {

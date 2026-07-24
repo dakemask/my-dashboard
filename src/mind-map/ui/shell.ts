@@ -1,4 +1,20 @@
+import {
+  AddText,
+  AutoFocus,
+  ConnectionArrow,
+  Delete,
+  DownloadOne,
+  Edit,
+  FileAddition,
+  FolderPlus,
+  Home,
+  MindmapList,
+  MindmapMap,
+  Save,
+  UploadOne,
+} from "@icon-park/svg";
 import type { ModuleRuntimeSnapshot } from "../../shared";
+import { createMindMapIcon, type MindMapIconRenderer } from "./icons";
 
 export interface MindMapShellElements {
   readonly root: HTMLElement;
@@ -6,6 +22,7 @@ export interface MindMapShellElements {
   readonly sidebarButton: HTMLButtonElement;
   readonly mapTitle: HTMLElement;
   readonly versionStatus: HTMLElement;
+  readonly syncState: HTMLElement;
   readonly localVersion: HTMLElement;
   readonly cloudVersion: HTMLElement;
   readonly saveButton: HTMLButtonElement;
@@ -51,64 +68,175 @@ export class MindMapShell {
     toolbar.className = "mind-map-toolbar";
 
     const left = document.createElement("div");
-    left.className = "toolbar-group toolbar-primary";
-    const homeButton = button(document, "首页", "返回首页", "toolbar-button");
-    const sidebarButton = button(document, "资料库", "打开或关闭资料库", "toolbar-button");
+    left.className = "toolbar-group toolbar-identity";
+    const homeButton = button(
+      document,
+      "首页",
+      "返回首页",
+      "toolbar-button toolbar-icon-button",
+      Home,
+      true,
+    );
+    const sidebarButton = button(
+      document,
+      "资料库",
+      "打开或关闭资料库",
+      "toolbar-button toolbar-icon-button",
+      MindmapList,
+      true,
+    );
+    sidebarButton.setAttribute("aria-controls", "mind-map-library-panel");
+    const titleCopy = document.createElement("div");
+    titleCopy.className = "toolbar-title-copy";
+    const eyebrow = document.createElement("span");
+    eyebrow.className = "toolbar-eyebrow";
+    eyebrow.textContent = "思维导图";
     const mapTitle = document.createElement("h1");
     mapTitle.className = "current-map-title";
     mapTitle.textContent = "未打开脑图";
-    left.append(homeButton, sidebarButton, mapTitle);
+    titleCopy.append(eyebrow, mapTitle);
+    left.append(homeButton, sidebarButton, titleCopy);
 
-    const versionStatus = document.createElement("div");
+    const versionStatus = document.createElement("section");
     versionStatus.className = "version-status";
     versionStatus.setAttribute("aria-label", "本地与云端版本状态");
+    const syncSummary = document.createElement("div");
+    syncSummary.className = "version-summary";
+    const syncDot = document.createElement("span");
+    syncDot.className = "version-dot";
+    const syncState = document.createElement("strong");
+    syncState.className = "version-state";
+    syncState.textContent = "正在读取状态…";
+    syncSummary.append(syncDot, syncState);
+    const versionDetails = document.createElement("div");
+    versionDetails.className = "version-details";
     const localVersion = document.createElement("span");
     localVersion.className = "version-item version-local";
     const cloudVersion = document.createElement("span");
     cloudVersion.className = "version-item version-cloud";
-    versionStatus.append(localVersion, cloudVersion);
+    versionDetails.append(localVersion, cloudVersion);
+    versionStatus.append(syncSummary, versionDetails);
 
     const actions = document.createElement("div");
     actions.className = "toolbar-group toolbar-actions";
-    const saveButton = button(document, "保存", "保存到本机（Ctrl+S）");
-    const uploadButton = button(document, "上传", "上传到云端");
-    const pullButton = button(document, "拉取", "用云端版本更新本机");
-    const addNodeButton = button(document, "文本", "添加文本节点（Alt+1）");
-    const addArrowButton = button(document, "箭头", "添加箭头（Alt+2）");
-    const resetViewButton = button(document, "复位", "适配并居中全部节点");
-    actions.append(
-      saveButton,
-      uploadButton,
-      pullButton,
-      addNodeButton,
-      addArrowButton,
-      resetViewButton,
+    const syncActions = document.createElement("div");
+    syncActions.className = "toolbar-cluster";
+    const saveButton = button(
+      document,
+      "保存",
+      "保存到本机（Ctrl+S）",
+      "toolbar-button toolbar-icon-button",
+      Save,
+      true,
     );
+    const uploadButton = button(
+      document,
+      "上传",
+      "上传到云端",
+      "toolbar-button toolbar-icon-button",
+      UploadOne,
+      true,
+    );
+    const pullButton = button(
+      document,
+      "拉取",
+      "用云端版本更新本机",
+      "toolbar-button toolbar-icon-button",
+      DownloadOne,
+      true,
+    );
+    syncActions.append(saveButton, uploadButton, pullButton);
+
+    const canvasActions = document.createElement("div");
+    canvasActions.className = "toolbar-cluster";
+    const addNodeButton = button(
+      document,
+      "文本",
+      "添加文本节点（Alt+1）",
+      "toolbar-button toolbar-icon-button toolbar-button-primary",
+      AddText,
+      true,
+    );
+    const addArrowButton = button(
+      document,
+      "箭头",
+      "添加箭头（Alt+2）",
+      "toolbar-button toolbar-icon-button",
+      ConnectionArrow,
+      true,
+    );
+    const resetViewButton = button(
+      document,
+      "复位",
+      "适配并居中全部节点",
+      "toolbar-button toolbar-icon-button",
+      AutoFocus,
+      true,
+    );
+    canvasActions.append(addNodeButton, addArrowButton, resetViewButton);
+    actions.append(syncActions, canvasActions);
     toolbar.append(left, versionStatus, actions);
 
     const workspace = document.createElement("section");
     workspace.className = "mind-map-workspace";
     const sidebar = document.createElement("aside");
     sidebar.className = "mind-map-library";
+    sidebar.id = "mind-map-library-panel";
     sidebar.setAttribute("aria-label", "思维导图资料库");
 
     const sidebarHeader = document.createElement("header");
     sidebarHeader.className = "library-header";
+    const sidebarHeading = document.createElement("div");
+    sidebarHeading.className = "library-heading";
     const sidebarTitle = document.createElement("h2");
     sidebarTitle.textContent = "资料库";
+    const sidebarSubtitle = document.createElement("p");
+    sidebarSubtitle.textContent = "整理文件夹与脑图";
+    sidebarHeading.append(sidebarTitle, sidebarSubtitle);
     const libraryActions = document.createElement("div");
     libraryActions.className = "library-actions";
-    const newFolderButton = button(document, "新文件夹", "新建文件夹", "library-button");
-    const newMapButton = button(document, "新脑图", "新建脑图", "library-button");
-    const renameButton = button(document, "重命名", "重命名所选项目", "library-button");
-    const deleteButton = button(document, "删除", "删除所选项目", "library-button danger-button");
+    const newFolderButton = button(
+      document,
+      "新文件夹",
+      "新建文件夹",
+      "library-button library-icon-button",
+      FolderPlus,
+      true,
+    );
+    const newMapButton = button(
+      document,
+      "新脑图",
+      "新建脑图",
+      "library-button library-icon-button library-button-primary",
+      FileAddition,
+      true,
+    );
+    const renameButton = button(
+      document,
+      "重命名",
+      "重命名所选项目",
+      "library-button library-icon-button",
+      Edit,
+      true,
+    );
+    const deleteButton = button(
+      document,
+      "删除",
+      "删除所选项目",
+      "library-button library-icon-button danger-button",
+      Delete,
+      true,
+    );
     libraryActions.append(newFolderButton, newMapButton, renameButton, deleteButton);
-    sidebarHeader.append(sidebarTitle, libraryActions);
+    sidebarHeader.append(sidebarHeading, libraryActions);
 
     const rootDropTarget = document.createElement("div");
     rootDropTarget.className = "library-root-drop";
-    rootDropTarget.textContent = "资料库根目录";
     rootDropTarget.dataset.dropTarget = "root";
+    rootDropTarget.append(
+      createMindMapIcon(document, MindmapList, "library-root-icon"),
+      document.createTextNode("拖到这里移至根目录"),
+    );
     const tree = document.createElement("div");
     tree.className = "library-tree";
     tree.setAttribute("role", "tree");
@@ -122,7 +250,17 @@ export class MindMapShell {
     canvasMount.className = "mind-map-canvas-mount";
     const canvasEmpty = document.createElement("div");
     canvasEmpty.className = "canvas-empty";
-    canvasEmpty.textContent = "从左侧资料库新建或打开一张脑图。";
+    const canvasEmptyCard = document.createElement("div");
+    canvasEmptyCard.className = "canvas-empty-card";
+    const canvasEmptyIcon = document.createElement("span");
+    canvasEmptyIcon.className = "canvas-empty-icon";
+    canvasEmptyIcon.append(createMindMapIcon(document, MindmapMap));
+    const canvasEmptyTitle = document.createElement("strong");
+    canvasEmptyTitle.textContent = "让想法有迹可循";
+    const canvasEmptyMessage = document.createElement("p");
+    canvasEmptyMessage.textContent = "从资料库新建或打开一张脑图。";
+    canvasEmptyCard.append(canvasEmptyIcon, canvasEmptyTitle, canvasEmptyMessage);
+    canvasEmpty.append(canvasEmptyCard);
     canvasArea.append(canvasMount, canvasEmpty);
     workspace.append(sidebar, canvasArea);
 
@@ -134,11 +272,15 @@ export class MindMapShell {
 
     const dialog = document.createElement("dialog");
     dialog.className = "mind-map-dialog";
+    dialog.setAttribute("aria-labelledby", "mind-map-dialog-title");
+    dialog.setAttribute("aria-describedby", "mind-map-dialog-message");
     dialog.addEventListener("cancel", (event) => event.preventDefault());
     const dialogTitle = document.createElement("h2");
     dialogTitle.className = "dialog-title";
+    dialogTitle.id = "mind-map-dialog-title";
     const dialogMessage = document.createElement("p");
     dialogMessage.className = "dialog-message";
+    dialogMessage.id = "mind-map-dialog-message";
     const dialogActions = document.createElement("div");
     dialogActions.className = "dialog-actions";
     dialog.append(dialogTitle, dialogMessage, dialogActions);
@@ -156,6 +298,7 @@ export class MindMapShell {
       sidebarButton,
       mapTitle,
       versionStatus,
+      syncState,
       localVersion,
       cloudVersion,
       saveButton,
@@ -180,8 +323,9 @@ export class MindMapShell {
 
   setSidebarOpen(open: boolean): void {
     this.elements.root.classList.toggle("sidebar-open", open);
-    this.elements.sidebar.hidden = !open;
-    this.elements.sidebarButton.setAttribute("aria-pressed", String(open));
+    this.elements.sidebar.inert = !open;
+    this.elements.sidebar.setAttribute("aria-hidden", String(!open));
+    this.elements.sidebarButton.setAttribute("aria-expanded", String(open));
   }
 
   setMapTitle(title: string | null, dirty: boolean): void {
@@ -205,6 +349,16 @@ export class MindMapShell {
   }
 
   renderSnapshot(snapshot: ModuleRuntimeSnapshot): void {
+    if (!snapshot.initialized) {
+      this.elements.syncState.textContent = "正在读取状态…";
+      this.elements.localVersion.textContent = "本地：读取中";
+      this.elements.cloudVersion.textContent = "云端：读取中";
+      this.elements.localVersion.title = "";
+      this.elements.cloudVersion.title = "";
+      this.elements.versionStatus.dataset.state = "loading";
+      this.elements.versionStatus.title = "正在读取本地与云端版本状态。";
+      return;
+    }
     const localVersion = snapshot.localSavedAt
       ? `本地：${formatTimestamp(snapshot.localSavedAt)}`
       : "本地：时间未知";
@@ -225,10 +379,21 @@ export class MindMapShell {
       ? "conflict"
       : snapshot.pendingUpload
         ? "pending"
-        : snapshot.sessionDirty || snapshot.localChangedSinceSync
+        : snapshot.sessionDirty
+          ? "unsaved"
+          : snapshot.localChangedSinceSync
           ? "local-ahead"
           : "synced";
     this.elements.versionStatus.dataset.state = state;
+    this.elements.syncState.textContent = state === "conflict"
+      ? "同步冲突"
+      : state === "pending"
+        ? "等待云端确认"
+        : state === "unsaved"
+          ? "有未保存修改"
+          : state === "local-ahead"
+            ? "本地待上传"
+            : "已同步";
     this.elements.versionStatus.title = snapshot.conflict
       ? "本地与云端发生冲突，请使用上传或拉取选择保留方向。"
       : snapshot.pendingUpload
@@ -294,11 +459,22 @@ function button(
   text: string,
   title: string,
   className = "toolbar-button",
+  icon?: MindMapIconRenderer,
+  iconOnly = false,
 ): HTMLButtonElement {
   const element = document.createElement("button");
   element.type = "button";
   element.className = className;
-  element.textContent = text;
+  element.classList.toggle("icon-only", iconOnly);
+  if (icon) element.append(createMindMapIcon(document, icon));
+  if (iconOnly) {
+    element.setAttribute("aria-label", title);
+  } else {
+    const label = document.createElement("span");
+    label.className = "button-label";
+    label.textContent = text;
+    element.append(label);
+  }
   element.title = title;
   return element;
 }

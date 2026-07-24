@@ -1006,6 +1006,9 @@ export class MindMapCanvas {
     const foreignObject = group.querySelector<SVGForeignObjectElement>(".mind-map-canvas__node-editor-host");
     foreignObject?.setAttribute("width", String(frame.width));
     foreignObject?.setAttribute("height", String(frame.height));
+    const resizeHit = group.querySelector<SVGRectElement>(".mind-map-canvas__resize-hit");
+    resizeHit?.setAttribute("x", String(frame.width - 10));
+    resizeHit?.setAttribute("y", String(frame.height - 10));
     const handle = group.querySelector<SVGRectElement>(".mind-map-canvas__resize-handle");
     handle?.setAttribute("x", String(frame.width - 5));
     handle?.setAttribute("y", String(frame.height - 5));
@@ -1158,12 +1161,16 @@ export class MindMapCanvas {
   #createArrowElement(id: string, from: Point, to: Point): SVGGElement {
     const group = createSvg(this.#ownerDocument, "g");
     group.classList.add("mind-map-canvas__arrow");
-    if (this.#selection.arrowIds.has(id)) group.classList.add("is-selected");
+    const selected = this.#selection.arrowIds.has(id);
+    if (selected) group.classList.add("is-selected");
     group.dataset.arrowId = id;
     const line = createSvg(this.#ownerDocument, "line");
     line.classList.add("mind-map-canvas__arrow-line");
     setLine(line, from, to);
-    line.setAttribute("marker-end", `url(#${this.#markerId})`);
+    line.setAttribute(
+      "marker-end",
+      `url(#${selected ? `${this.#markerId}-selected` : this.#markerId})`,
+    );
     const hit = createSvg(this.#ownerDocument, "line");
     hit.classList.add("mind-map-canvas__arrow-hit");
     setLine(hit, from, to);
@@ -1254,23 +1261,39 @@ export class MindMapCanvas {
     return group;
   }
 
-  #createResizeHandle(nodeId: string, frame: NodeFrame): SVGRectElement {
+  #createResizeHandle(nodeId: string, frame: NodeFrame): SVGGElement {
+    const control = createSvg(this.#ownerDocument, "g");
+    control.classList.add("mind-map-canvas__resize-control");
+    const hit = createSvg(this.#ownerDocument, "rect");
+    hit.classList.add("mind-map-canvas__resize-hit");
+    hit.dataset.nodeId = nodeId;
+    hit.setAttribute("x", String(frame.width - 10));
+    hit.setAttribute("y", String(frame.height - 10));
+    hit.setAttribute("width", "20");
+    hit.setAttribute("height", "20");
+    hit.setAttribute("fill", "transparent");
+    hit.addEventListener("pointerdown", (event) => this.#beginResize(event, nodeId));
     const handle = createSvg(this.#ownerDocument, "rect");
     handle.classList.add("mind-map-canvas__resize-handle");
-    handle.dataset.nodeId = nodeId;
     handle.setAttribute("x", String(frame.width - 5));
     handle.setAttribute("y", String(frame.height - 5));
     handle.setAttribute("width", "10");
     handle.setAttribute("height", "10");
-    handle.addEventListener("pointerdown", (event) => this.#beginResize(event, nodeId));
-    return handle;
+    handle.setAttribute("pointer-events", "none");
+    control.append(hit, handle);
+    return control;
   }
 
   #syncInteractionChromeInPlace(): void {
     this.#updateRootClasses();
     for (const group of this.#arrowLayer.querySelectorAll<SVGGElement>(".mind-map-canvas__arrow")) {
       const arrowId = group.dataset.arrowId;
-      group.classList.toggle("is-selected", Boolean(arrowId && this.#selection.arrowIds.has(arrowId)));
+      const selected = Boolean(arrowId && this.#selection.arrowIds.has(arrowId));
+      group.classList.toggle("is-selected", selected);
+      group.querySelector<SVGLineElement>(".mind-map-canvas__arrow-line")?.setAttribute(
+        "marker-end",
+        `url(#${selected ? `${this.#markerId}-selected` : this.#markerId})`,
+      );
     }
 
     const map = this.#map;
@@ -1294,10 +1317,10 @@ export class MindMapCanvas {
         editor.tabIndex = editing ? 0 : -1;
       }
 
-      const handle = group.querySelector<SVGRectElement>(".mind-map-canvas__resize-handle");
+      const resizeControl = group.querySelector<SVGGElement>(".mind-map-canvas__resize-control");
       if (!this.#shouldShowResizeHandle(node.id)) {
-        handle?.remove();
-      } else if (!handle) {
+        resizeControl?.remove();
+      } else if (!resizeControl) {
         group.append(this.#createResizeHandle(node.id, this.#effectiveFrame(node)));
       }
     }
@@ -1342,30 +1365,39 @@ export class MindMapCanvas {
 
   #createDefinitions(): SVGDefsElement {
     const defs = createSvg(this.#ownerDocument, "defs");
-    const marker = createSvg(this.#ownerDocument, "marker");
-    marker.id = this.#markerId;
-    marker.setAttribute("viewBox", "0 0 10 10");
-    marker.setAttribute("refX", "9");
-    marker.setAttribute("refY", "5");
-    marker.setAttribute("markerWidth", "7");
-    marker.setAttribute("markerHeight", "7");
-    marker.setAttribute("orient", "auto");
-    const arrowHead = createSvg(this.#ownerDocument, "path");
-    arrowHead.classList.add("mind-map-canvas__arrow-head");
-    arrowHead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-    marker.append(arrowHead);
+    const createArrowMarker = (id: string, selected: boolean): SVGMarkerElement => {
+      const marker = createSvg(this.#ownerDocument, "marker");
+      marker.id = id;
+      marker.setAttribute("viewBox", "0 0 10 10");
+      marker.setAttribute("refX", "9");
+      marker.setAttribute("refY", "5");
+      marker.setAttribute("markerWidth", "7");
+      marker.setAttribute("markerHeight", "7");
+      marker.setAttribute("orient", "auto");
+      const arrowHead = createSvg(this.#ownerDocument, "path");
+      arrowHead.classList.add("mind-map-canvas__arrow-head");
+      if (selected) arrowHead.classList.add("is-selected");
+      arrowHead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+      marker.append(arrowHead);
+      return marker;
+    };
 
     const pattern = createSvg(this.#ownerDocument, "pattern");
     pattern.id = `${this.#markerId}-grid`;
     pattern.setAttribute("patternUnits", "userSpaceOnUse");
     pattern.setAttribute("width", "24");
     pattern.setAttribute("height", "24");
-    const gridPath = createSvg(this.#ownerDocument, "path");
-    gridPath.classList.add("mind-map-canvas__grid-line");
-    gridPath.setAttribute("d", "M 24 0 L 0 0 0 24");
-    gridPath.setAttribute("fill", "none");
-    pattern.append(gridPath);
-    defs.append(marker, pattern);
+    const gridDot = createSvg(this.#ownerDocument, "circle");
+    gridDot.classList.add("mind-map-canvas__grid-dot");
+    gridDot.setAttribute("cx", "1");
+    gridDot.setAttribute("cy", "1");
+    gridDot.setAttribute("r", "1.15");
+    pattern.append(gridDot);
+    defs.append(
+      createArrowMarker(this.#markerId, false),
+      createArrowMarker(`${this.#markerId}-selected`, true),
+      pattern,
+    );
     return defs;
   }
 
