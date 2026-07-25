@@ -1040,9 +1040,14 @@ mark {
     z-index: 70;
     inset: 0;
     width: 100%;
-    max-height: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
     overflow-y: auto;
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     background: var(--ft-bg);
     border: 0;
     border-radius: 0;
