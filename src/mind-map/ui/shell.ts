@@ -24,7 +24,7 @@ export interface MindMapShellElements {
   readonly syncState: HTMLElement;
   readonly localVersion: HTMLElement;
   readonly cloudVersion: HTMLElement;
-  readonly saveButton: HTMLButtonElement;
+  readonly retrySaveButton: HTMLButtonElement;
   readonly uploadButton: HTMLButtonElement;
   readonly pullButton: HTMLButtonElement;
   readonly addNodeButton: HTMLButtonElement;
@@ -120,14 +120,15 @@ export class MindMapShell {
     actions.className = "toolbar-group toolbar-actions";
     const syncActions = document.createElement("div");
     syncActions.className = "toolbar-cluster";
-    const saveButton = button(
+    const retrySaveButton = button(
       document,
-      "保存",
-      "保存到本机（Ctrl+S）",
+      "重试保存",
+      "自动保存失败，重试保存到本机",
       "toolbar-button toolbar-icon-button",
       Save,
       true,
     );
+    retrySaveButton.hidden = true;
     const uploadButton = button(
       document,
       "上传",
@@ -144,7 +145,7 @@ export class MindMapShell {
       DownloadOne,
       true,
     );
-    syncActions.append(saveButton, uploadButton, pullButton);
+    syncActions.append(retrySaveButton, uploadButton, pullButton);
 
     const canvasActions = document.createElement("div");
     canvasActions.className = "toolbar-cluster";
@@ -287,7 +288,7 @@ export class MindMapShell {
       syncState,
       localVersion,
       cloudVersion,
-      saveButton,
+      retrySaveButton,
       uploadButton,
       pullButton,
       addNodeButton,
@@ -332,6 +333,10 @@ export class MindMapShell {
   setArrowMode(active: boolean): void {
     this.elements.addArrowButton.classList.toggle("active", active);
     this.elements.addArrowButton.setAttribute("aria-pressed", String(active));
+  }
+
+  setSaveRetryVisible(visible: boolean): void {
+    this.elements.retrySaveButton.hidden = !visible;
   }
 
   renderSnapshot(snapshot: ModuleRuntimeSnapshot): void {

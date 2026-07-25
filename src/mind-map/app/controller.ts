@@ -86,6 +86,10 @@ export class MindMapController {
   #suppressCanvasSelection = false;
   #suppressCanvasRender = false;
   #pendingDraftCommit: DraftCommit | null = null;
+  #autoSaveScheduled = false;
+  #autoSavePromise: Promise<boolean> | null = null;
+  #savingCommittedEvent = false;
+  #localSaveFailed = false;
   #disposed = false;
 
   constructor(appRoot: HTMLElement, options: MindMapControllerOptions = {}) {
@@ -180,7 +184,7 @@ export class MindMapController {
       this.shell.setSidebarOpen(open);
     });
     this.#listen(elements.homeButton, "click", () => void this.#returnHome());
-    this.#listen(elements.saveButton, "click", () => void this.#save());
+    this.#listen(elements.retrySaveButton, "click", () => void this.#retryLocalSave());
     this.#listen(elements.uploadButton, "click", () => void this.#upload());
     this.#listen(elements.pullButton, "click", () => void this.#pull());
     this.#listen(elements.addNodeButton, "click", () => this.#requestAddNode());
@@ -266,7 +270,10 @@ export class MindMapController {
     const previousBaselineKey = payloadKey(this.#localBaseline);
     this.#snapshot = snapshot;
     if (this.#runtime?.state === "ready") this.#payload = this.#runtime.current;
-    if (!snapshot.sessionDirty) this.#localBaseline = this.#payload;
+    if (!snapshot.sessionDirty) {
+      this.#localBaseline = this.#payload;
+      this.#localSaveFailed = false;
+    }
     let requiresProjection = previousPayloadKey !== payloadKey(this.#payload)
       || previousBaselineKey !== payloadKey(this.#localBaseline);
     const pending = this.#pendingDraftCommit;
@@ -276,10 +283,11 @@ export class MindMapController {
       requiresProjection = true;
     }
     if (requiresProjection) this.#render(false);
-    else this.shell.renderSnapshot(snapshot);
+    else this.#renderSnapshot();
   }
 
-  #settle(_reason: SettleReason): MindMapEvent | null {
+  #settle(reason: SettleReason): MindMapEvent | null {
+    if (reason === "local-save" && this.#savingCommittedEvent) return null;
     this.tree.cancelLiveInteraction();
     const settledDraft = this.tree.takeDraftForSettle(true);
     if (settledDraft) {
@@ -310,7 +318,7 @@ export class MindMapController {
     }
     const dirty = computeDirtyLibraryState(this.#payload, this.#localBaseline);
     this.shell.setMapTitle(map ? baseName(map.path) : null, Boolean(map && dirty.mapIds.has(map.id)));
-    this.shell.renderSnapshot(this.#snapshot);
+    this.#renderSnapshot();
     this.shell.setLibrarySelectionAvailable(this.#librarySelection !== null);
     this.shell.setArrowMode(this.canvas.arrowMode);
     this.#renderTree(dirty);
@@ -344,6 +352,7 @@ export class MindMapController {
       this.#payload = runtime.dispatch(event);
       after?.();
       this.#render(false);
+      this.#scheduleAutoSave();
       return true;
     } catch {
       this.shell.showMessage("这次修改未能完成，请稍后重试。", "error");
@@ -738,6 +747,7 @@ export class MindMapController {
       this.#payload = after;
       this.#applyHistoryFocus(findHistoryFocus(before, after));
       this.#render(true);
+      await this.#saveAfterMutation();
     } catch {
       this.shell.showMessage("撤销未能完成，请重试。", "error");
     }
@@ -752,6 +762,7 @@ export class MindMapController {
       this.#payload = after;
       this.#applyHistoryFocus(findHistoryFocus(before, after));
       this.#render(true);
+      await this.#saveAfterMutation();
     } catch {
       this.shell.showMessage("重做未能完成，请重试。", "error");
     }
@@ -773,16 +784,58 @@ export class MindMapController {
     }
   }
 
-  async #save(): Promise<boolean> {
+  #scheduleAutoSave(): void {
+    if (this.#autoSaveScheduled || this.#disposed) return;
+    this.#autoSaveScheduled = true;
+    this.#pageWindow.queueMicrotask(() => {
+      if (!this.#autoSaveScheduled || this.#disposed) return;
+      this.#autoSaveScheduled = false;
+      this.#startAutoSave();
+    });
+  }
+
+  #startAutoSave(): void {
+    if (this.#autoSavePromise || this.#disposed) return;
+    const operation = this.#saveAfterMutation();
+    this.#autoSavePromise = operation;
+    void operation.then(() => {
+      if (this.#autoSavePromise === operation) this.#autoSavePromise = null;
+    });
+  }
+
+  async #flushAutoSave(): Promise<boolean> {
+    if (this.#autoSaveScheduled) {
+      this.#autoSaveScheduled = false;
+      this.#startAutoSave();
+    }
+    return await (this.#autoSavePromise ?? Promise.resolve(true));
+  }
+
+  async #retryLocalSave(): Promise<boolean> {
+    await this.#flushAutoSave();
+    return await this.#saveAfterMutation(true, false);
+  }
+
+  async #saveAfterMutation(
+    showRetrySuccess = false,
+    savingCommittedEvent = true,
+  ): Promise<boolean> {
     const runtime = this.#runtime;
     if (!runtime) return false;
+    this.#savingCommittedEvent = savingCommittedEvent;
     try {
-      const result = await runtime.save();
-      this.shell.showMessage(result === "unchanged" ? "本机内容已经是最新版本。" : "已保存到本机。");
+      await runtime.save();
+      this.#localSaveFailed = false;
+      this.#renderSnapshot();
+      if (showRetrySuccess) this.shell.showMessage("已重新保存到本机。");
       return true;
     } catch {
-      this.shell.showMessage("保存到本机失败，内容和撤销历史均已保留。", "error");
+      this.#localSaveFailed = true;
+      this.#renderSnapshot();
+      this.shell.showMessage("自动保存到本机失败，内容和撤销历史均已保留。", "error");
       return false;
+    } finally {
+      this.#savingCommittedEvent = false;
     }
   }
 
@@ -862,6 +915,7 @@ export class MindMapController {
 
   async #returnHome(): Promise<void> {
     this.#commitPendingUi();
+    await this.#flushAutoSave();
     const runtime = this.#runtime;
     if (!runtime || !runtime.dirty) {
       this.#navigateHome();
@@ -871,13 +925,13 @@ export class MindMapController {
       "返回首页",
       "还有尚未保存到本机的内容。",
       [
-        { id: "save", label: "保存并返回", tone: "primary" },
+        { id: "save", label: "重试保存并返回", tone: "primary" },
         { id: "discard", label: "不保存返回", tone: "danger" },
         { id: "cancel", label: "取消" },
       ],
     );
     if (choice === "discard") this.#navigateHome();
-    if (choice === "save" && await this.#save()) this.#navigateHome();
+    if (choice === "save" && await this.#retryLocalSave()) this.#navigateHome();
   }
 
   #onKeyDown(event: KeyboardEvent): void {
@@ -889,12 +943,11 @@ export class MindMapController {
       event.stopPropagation();
       return;
     }
-    if (exactControl && !event.shiftKey && (key === "z" || key === "y" || key === "s")) {
+    if (exactControl && !event.shiftKey && (key === "z" || key === "y")) {
       event.preventDefault();
       event.stopPropagation();
       if (key === "z") void this.#undo();
-      else if (key === "y") void this.#redo();
-      else void this.#save();
+      else void this.#redo();
       return;
     }
     if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "1" || event.key === "2")) {
@@ -942,11 +995,17 @@ export class MindMapController {
   #onBeforeUnload(event: BeforeUnloadEvent): void {
     if (
       !this.#runtime?.dirty
+      && !this.#localSaveFailed
       && !this.canvas.hasPendingTextChange()
       && !this.#hasPendingLibraryChange()
     ) return;
     event.preventDefault();
     event.returnValue = "";
+  }
+
+  #renderSnapshot(): void {
+    this.shell.renderSnapshot(this.#snapshot);
+    this.shell.setSaveRetryVisible(this.#localSaveFailed);
   }
 
   #hasPendingLibraryChange(): boolean {
