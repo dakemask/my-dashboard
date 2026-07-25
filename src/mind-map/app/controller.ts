@@ -1004,7 +1004,7 @@ export class MindMapController {
   }
 
   #renderSnapshot(): void {
-    this.shell.renderSnapshot(this.#snapshot);
+    this.shell.renderSnapshot(this.#snapshot, this.#localSaveFailed);
     this.shell.setSaveRetryVisible(this.#localSaveFailed);
   }
 

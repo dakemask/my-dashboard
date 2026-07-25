@@ -339,7 +339,7 @@ export class MindMapShell {
     this.elements.retrySaveButton.hidden = !visible;
   }
 
-  renderSnapshot(snapshot: ModuleRuntimeSnapshot): void {
+  renderSnapshot(snapshot: ModuleRuntimeSnapshot, localSaveFailed = false): void {
     if (!snapshot.initialized) {
       this.elements.syncState.textContent = "正在读取状态…";
       this.elements.localVersion.textContent = "本地：读取中";
@@ -353,7 +353,8 @@ export class MindMapShell {
     const localVersion = snapshot.localSavedAt
       ? `本地：${formatTimestamp(snapshot.localSavedAt)}`
       : "本地：时间未知";
-    const localText = snapshot.sessionDirty
+    const unsaved = snapshot.sessionDirty && localSaveFailed;
+    const localText = unsaved
       ? `${localVersion}（有未保存修改）`
       : localVersion;
     const cloudText = snapshot.knownRemoteUpdatedAt
@@ -370,30 +371,30 @@ export class MindMapShell {
       ? "conflict"
       : snapshot.pendingUpload
         ? "pending"
-        : snapshot.sessionDirty
+        : unsaved
           ? "unsaved"
           : snapshot.localChangedSinceSync
           ? "local-ahead"
           : "synced";
     this.elements.versionStatus.dataset.state = state;
     this.elements.syncState.textContent = state === "conflict"
-      ? "同步冲突"
+      ? "本地与云端冲突"
       : state === "pending"
-        ? "等待云端确认"
+        ? "上传结果待确认"
         : state === "unsaved"
-          ? "有未保存修改"
+          ? "尚未保存到本机"
           : state === "local-ahead"
-            ? "本地待上传"
-            : "已同步";
+            ? "本地修改尚未上传"
+            : "本地与云端一致";
     this.elements.versionStatus.title = snapshot.conflict
-      ? "本地与云端发生冲突，请使用上传或拉取选择保留方向。"
+      ? "本地与云端都已变化，请通过上传或拉取选择保留方向。"
       : snapshot.pendingUpload
-        ? "上传结果尚待确认。"
-        : snapshot.sessionDirty
-          ? "有尚未保存到本机的修改。"
+        ? "上传结果待确认。"
+        : unsaved
+          ? "自动保存失败，当前页面内容仍然保留。"
           : snapshot.localChangedSinceSync
-          ? "本地版本尚未上传。"
-          : "本地与云端状态一致。";
+          ? "本地修改已经保存，尚未上传。"
+          : "本地与云端一致。";
   }
 
   showMessage(message: string, tone: "normal" | "error" = "normal"): void {
