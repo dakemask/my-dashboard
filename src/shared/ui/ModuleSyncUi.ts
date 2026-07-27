@@ -1,3 +1,7 @@
+import {
+  DownloadOne,
+  UploadOne,
+} from "@icon-park/svg";
 import type {
   ConflictResolution,
   SyncActionResult,
@@ -100,12 +104,14 @@ export class ModuleSyncUi {
       "上传",
       "将本模块的本地完整数据上传到云端",
       "upload",
+      UploadOne,
     );
     const pullButton = createButton(
       document,
       "拉取",
       "用本模块的云端完整数据更新本机",
       "pull",
+      DownloadOne,
     );
     actions.append(uploadButton, pullButton);
     region.append(summary, actions);
@@ -432,14 +438,39 @@ function createButton(
   label: string,
   title: string,
   action: ModuleSyncAction,
+  icon: IconRenderer,
 ): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "shared-module-sync-button";
   button.dataset.action = action;
-  button.textContent = label;
+  button.append(createIcon(document, icon));
+  button.setAttribute("aria-label", label);
   button.title = title;
   return button;
+}
+
+type IconRenderer = typeof UploadOne;
+
+function createIcon(
+  document: Document,
+  renderer: IconRenderer,
+): SVGSVGElement {
+  const template = document.createElement("template");
+  template.innerHTML = renderer({
+    size: 20,
+    strokeWidth: 3,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    theme: "outline",
+    fill: "currentColor",
+  }).replace(/^<\?xml[^>]*>\s*/u, "");
+  const icon = template.content.querySelector("svg");
+  if (!icon) throw new Error("IconPark did not return an SVG element.");
+  icon.classList.add("shared-module-sync-icon");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  return icon;
 }
 
 function createDialogButton(

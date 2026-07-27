@@ -130,6 +130,18 @@
   padding: 0.35rem 0.7rem;
 }
 
+.shared-module-sync-button {
+  padding: 0;
+  width: 2.1rem;
+}
+
+.shared-module-sync-icon {
+  color: currentcolor;
+  height: 1.2rem;
+  pointer-events: none;
+  width: 1.2rem;
+}
+
 .shared-module-sync-button:hover:not(:disabled),
 .shared-module-sync-dialog-button:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--shared-sync-accent) 45%, white);

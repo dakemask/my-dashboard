@@ -255,6 +255,8 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 严格 CSP 页面必须在 HTML 中外链唯一的 `operationGate.css`，其中同时包含操作遮罩和标准同步 UI 样式。不得从 TypeScript 动态导入：Vite 开发服务器会把它转换为 CSP 拒绝的内联 style。`DomOperationGatePresentation` 只创建 DOM、切换公共 class 和 finally 清理；每个 runtime 独立实例，不使用跨模块全局 spinner 单例。每个模块页面创建自己的 `ModuleSyncUi` 实例，卸载时显式 dispose。
 
+公共同步 UI 中适合图标表达的按钮使用字节跳动 IconPark `@icon-park/svg`，由 TypeScript 静态引用并随 Vite 构建产物发布，不使用运行时 CDN。纯图标按钮必须保留准确的 `aria-label` 和 `title`。
+
 ### 5.3 不变量
 
 1. payload、event、codec、history 回调、hooks 和 snapshot 之间不共享可被调用者修改的内部引用；
