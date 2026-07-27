@@ -75,7 +75,7 @@ payload 多余或缺失字段、非法路径、重复 ID、无效几何、缺失
 
 页面使用浅色主题，由顶栏、左侧固定宽度浮动资料库、SVG 自由画布、版本区域、toast 和确认对话框组成。资料库浮在画布上方，不改变画布业务坐标。
 
-顶栏只读显示当前脑图名称，并提供：首页、资料库开关、上传、拉取、添加文本、添加箭头和复位。自动保存失败后才额外显示“重试保存”。没有当前脑图时禁用添加文本、添加箭头和复位。
+顶栏只读显示当前脑图名称，并提供：首页、资料库开关、Shared 标准上传/拉取区、添加文本、添加箭头和复位。自动保存失败后才由模块额外显示“重试保存”。没有当前脑图时禁用添加文本、添加箭头和复位。
 
 资料库首次默认打开，之后按本机偏好恢复；打开脑图不关闭资料库。
 
@@ -155,6 +155,8 @@ viewport、平移、缩放、框选过程和纯选择变化不进入业务历史
 - 云端显示 `knownRemoteUpdatedAt`；只有 revision 时显示“时间未知”，二者均无时显示“尚无版本”。pending、本地领先、同步一致和冲突使用不同非阻塞状态。
 - 顶部状态使用“本地与云端冲突 / 上传结果待确认 / 尚未保存到本机 / 本地修改尚未上传 / 本地与云端一致”五类信息。event 后自动保存期间不显示瞬时未保存状态；只有自动保存失败时才显示“尚未保存到本机”。
 - 已保存但未上传必须显示为独立状态，不能误标为页面未保存。
+- 上传、拉取、版本状态、覆盖确认和同步结果由 Shared `ModuleSyncUi` 统一呈现；模块不维护第二套同步按钮、状态文案或冲突确认。
+- 本模块的同步业务门禁始终允许操作；拉取前先结算当前名称、文字和 pointer 实时交互，再交给 Shared 执行标准流程。自动保存、保存失败提示和“重试保存”仍由本模块负责。
 
 返回首页前先结算有效文字/名称草稿并等待这次自动保存。自动保存失败、`sessionDirty` 仍为 true 时提供“重试保存并返回 / 不保存返回 / 取消”；保存成功后再导航。已保存但未上传时直接返回。`beforeunload` 只在尚未保存到本机时提示：runtime dirty、自动保存失败，或仍存在有效未提交文字/名称变化；同步领先和冲突本身不触发提示。
 
@@ -187,7 +189,7 @@ Backspace、Ctrl+A 和 Escape 不是模块命令；在输入控件中保留文�
 | `src/mind-map/domain/names.ts` | 名称、路径、归属辅助和显示排序 |
 | `src/mind-map/domain/events.ts` | event apply/invert |
 | `src/mind-map/domain/codec.ts` | payload 与远端受管文件映射 |
-| `src/mind-map/app/controller.ts` | 唯一 runtime 持有者；协调业务命令、投影、自动保存和同步 UI |
+| `src/mind-map/app/controller.ts` | 唯一 runtime 持有者；协调业务命令、投影、自动保存，并向 Shared 同步 UI 提供门禁 |
 | `src/mind-map/app/payloadDiff.ts` | dirty 资料库标记和跨图历史焦点 |
 | `src/mind-map/app/preferences.ts` | 侧栏、最近 map 和展开文件夹偏好 |
 | `src/mind-map/canvas/MindMapCanvas.ts` | SVG 投影与画布实时状态机 |
@@ -195,7 +197,7 @@ Backspace、Ctrl+A 和 Escape 不是模块命令；在输入控件中保留文�
 | `src/mind-map/canvas/viewport.ts` | viewport 转换、缩放和适配 |
 | `src/mind-map/canvas/autoPan.ts` | 四类交互共用的自动平移 |
 | `src/mind-map/library/treeView.ts` | 资料库 DOM、名称草稿、折叠和拖放 |
-| `src/mind-map/ui/shell.ts` | 页面壳、顶栏、版本、toast 和确认对话框 |
+| `src/mind-map/ui/shell.ts` | 页面壳、顶栏、同步 UI 挂载点、业务 toast 和业务确认对话框 |
 
 ### 状态所有者
 

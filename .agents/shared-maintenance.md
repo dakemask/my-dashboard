@@ -16,6 +16,7 @@ Shared 为所有持久化模块提供统一平台能力：
 - GitHub 远端受管文件、原子上传和幂等确认；
 - 轮询、同步四象限和持久化冲突；
 - 本地操作阻塞、云端 spinner/遮罩和阻止页面。
+- 上传、拉取、版本状态、冲突确认和同步结果的统一 UI。
 
 固定平台约定：
 
@@ -34,7 +35,7 @@ Shared 为所有持久化模块提供统一平台能力：
 
 ### 1.2 非职责
 
-Shared 不定义模块业务 payload、event、快捷键、页面布局或冲突提示外观；不提供业务 `schemaVersion`、旧格式迁移、自动冲突合并、退出登录或真实数据迁移。它也不替模块注册或清理业务 UI/键盘监听。
+Shared 不定义模块业务 payload、event、快捷键、页面布局、本地自动保存或保存重试；不提供业务 `schemaVersion`、旧格式迁移、自动冲突合并、退出登录或真实数据迁移。它也不替模块注册或清理业务 UI/键盘监听。模块必须通过公共门禁接口处理同步前的业务状态，Shared 不理解或猜测门禁内部规则。
 
 改变这些边界不是内部重构，必须先形成新的用户决策和公共契约。
 
@@ -55,14 +56,15 @@ src/shared/persistence/      每模块 IndexedDB 记录及 CAS
 src/shared/concurrency/      OperationGate 与 Web Locks 编辑租约
 src/shared/github/           Git Data API client 与远端模块仓库
 src/shared/sync/             SyncCoordinator、content hash 和 revision poller
-src/shared/ui/               公共遮罩、spinner 和阻止页面
+src/shared/ui/               公共同步 UI、遮罩、spinner 和阻止页面
 ```
 
 - `module/runtime` 是组合根，拥有 auth subscription、lease、gate、store、repository、coordinator 和 poller。
 - `SyncCoordinator` 只依赖本地 store、远端 repository port、history、gate 和 hooks，不依赖业务 DOM。
 - `RemoteModuleRepository` 负责远端模块格式；`GitHubGitDataClient` 只负责 GitHub 请求。
 - history、persistence、github、concurrency 和 sync 不得依赖任何具体业务模块。
-- UI presentation 不决定同步状态；只根据 gate/lease 命令呈现公共状态。
+- `DomOperationGatePresentation` 只根据 gate 命令呈现阻塞状态；`ModuleSyncUi` 根据公开 snapshot 呈现同步状态，并通过 runtime 执行标准上传、拉取和覆盖流程。
+- `ModuleSyncUi` 不直接依赖具体业务模块；模块通过 `guardAction` 返回 `ready` 或带安全说明的 `blocked`。
 
 ### 2.2 runtime 装配顺序
 
@@ -251,7 +253,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 首页和模块保持严格 CSP：脚本/样式只允许 self，连接只允许 self 与 GitHub API，不允许 unsafe-eval、任意 token 发送目标、object 或第三方 form action。
 
-严格 CSP 页面必须在 HTML 中外链唯一的 `operationGate.css`。不得从 TypeScript 动态导入：Vite 开发服务器会把它转换为 CSP 拒绝的内联 style。`DomOperationGatePresentation` 只创建 DOM、切换公共 class 和 finally 清理；每个 runtime 独立实例，不使用跨模块全局 spinner 单例。
+严格 CSP 页面必须在 HTML 中外链唯一的 `operationGate.css`，其中同时包含操作遮罩和标准同步 UI 样式。不得从 TypeScript 动态导入：Vite 开发服务器会把它转换为 CSP 拒绝的内联 style。`DomOperationGatePresentation` 只创建 DOM、切换公共 class 和 finally 清理；每个 runtime 独立实例，不使用跨模块全局 spinner 单例。每个模块页面创建自己的 `ModuleSyncUi` 实例，卸载时显式 dispose。
 
 ### 5.3 不变量
 
@@ -274,7 +276,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 - `src/shared/index.ts` 根出口的删除、改名、签名变化或可观察语义变化都属于破坏性修改。
 - runtime 属性/方法、启动四状态、SettleReason、ProjectionReason、SyncActionResult、snapshot 字段和 conflict 形态同样属于公共契约。
 - 内部目录、类和算法可以重构，但不能改变公共契约承诺的状态流、失败保证或资源清理。
-- `operationGate.css` 的公共 class/加载约定是页面接入契约；改变时必须同步修改所有持久化页面。
+- `operationGate.css` 和 `ModuleSyncUi` 的公共 class/加载约定是页面接入契约；改变时必须同步修改所有持久化页面。
 - IndexedDB envelope 或远端文件格式变化必须单独决定兼容策略。当前没有业务 schemaVersion 或通用旧格式迁移，不得悄悄解释旧数据。
 - 修改公共边界时，源码、[持久化模块公共契约](./persistent-module-contract.md)、[接入指南](./new-persistent-module-guide.md)、受影响模块文档和测试必须在同一次任务更新。
 

@@ -83,6 +83,21 @@ button:disabled {
   padding: 0;
 }
 
+.mind-map-sync-mount {
+  min-width: 0;
+  padding-inline: 18px;
+  border-right: 1px solid var(--mm-line);
+  border-left: 1px solid var(--mm-line);
+}
+
+.mind-map-sync-mount .shared-module-sync {
+  --shared-sync-accent: var(--mm-accent);
+  --shared-sync-border: var(--mm-line);
+  --shared-sync-muted: var(--mm-muted);
+  --shared-sync-panel: var(--mm-panel-soft);
+  --shared-sync-text: var(--mm-text);
+}
+
 .mind-map-toolbar {
   position: relative;
   z-index: 40;
@@ -245,90 +260,6 @@ button:disabled {
   flex: 0 0 auto;
   color: currentcolor;
   pointer-events: none;
-}
-
-.version-status {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 14px;
-  padding: 3px 18px;
-  border-right: 1px solid var(--mm-line);
-  border-left: 1px solid var(--mm-line);
-}
-
-.version-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  white-space: nowrap;
-}
-
-.version-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  background: var(--mm-success);
-  border-radius: 999px;
-  box-shadow: 0 0 0 4px var(--mm-success-soft);
-}
-
-.version-state {
-  color: var(--mm-success);
-  font-size: 13px;
-  font-weight: 720;
-}
-
-.version-details {
-  min-width: 0;
-  display: flex;
-  gap: 5px 12px;
-  color: var(--mm-muted);
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: nowrap;
-}
-
-.version-item + .version-item::before {
-  margin-right: 12px;
-  color: var(--mm-line-strong);
-  content: "·";
-}
-
-.version-status[data-state="unsaved"] .version-dot,
-.version-status[data-state="local-ahead"] .version-dot,
-.version-status[data-state="pending"] .version-dot {
-  background: var(--mm-warning);
-  box-shadow: 0 0 0 4px var(--mm-warning-soft);
-}
-
-.version-status[data-state="unsaved"] .version-state,
-.version-status[data-state="local-ahead"] .version-state,
-.version-status[data-state="pending"] .version-state {
-  color: var(--mm-warning);
-}
-
-.version-status[data-state="pending"] .version-dot {
-  animation: mm-status-pulse 1.5s ease-in-out infinite;
-}
-
-.version-status[data-state="conflict"] .version-dot {
-  background: var(--mm-danger);
-  box-shadow: 0 0 0 4px var(--mm-danger-soft);
-}
-
-.version-status[data-state="conflict"] .version-state {
-  color: var(--mm-danger);
-}
-
-.version-status[data-state="loading"] .version-dot {
-  background: #98a2b3;
-  box-shadow: 0 0 0 4px #f0f2f5;
-}
-
-.version-status[data-state="loading"] .version-state {
-  color: var(--mm-muted);
 }
 
 .mind-map-workspace {

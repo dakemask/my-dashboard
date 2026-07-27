@@ -2,9 +2,11 @@ import type {
   ModuleRuntime,
   ModuleRuntimeHooks,
   ModuleRuntimeSnapshot,
+  ModuleSyncAction,
   ProjectionReason,
   SettleReason,
 } from "../../shared";
+import { ModuleSyncUi } from "../../shared";
 import {
   MindMapCanvas,
   type CanvasSelection,
@@ -69,6 +71,7 @@ export class MindMapController {
   readonly shell: MindMapShell;
   readonly canvas: MindMapCanvas;
   readonly tree: LibraryTreeView;
+  readonly syncUi: ModuleSyncUi;
   readonly hooks: ModuleRuntimeHooks<MindMapPayload, MindMapEvent>;
 
   readonly #preferences: MindMapPreferences;
@@ -104,6 +107,10 @@ export class MindMapController {
 
     this.shell = new MindMapShell(appRoot);
     this.shell.setSidebarOpen(this.#preferences.snapshot.sidebarOpen);
+    this.syncUi = new ModuleSyncUi({
+      mount: this.shell.elements.syncMount,
+      guardAction: (action) => this.#guardSyncAction(action),
+    });
 
     this.canvas = new MindMapCanvas(this.shell.elements.canvasMount, {
       measurements: {
@@ -160,6 +167,7 @@ export class MindMapController {
     this.#payload = initialPayload;
     this.#localBaseline = initialPayload;
     this.#snapshot = runtime.getSnapshot();
+    this.syncUi.attachRuntime(runtime);
     this.#restoreInitialMap();
     this.#render(true);
   }
@@ -170,6 +178,7 @@ export class MindMapController {
     for (const remove of this.#removeListeners.splice(0)) remove();
     this.tree.dispose();
     this.canvas.dispose();
+    this.syncUi.dispose();
     this.shell.dispose();
     const runtime = this.#runtime;
     this.#runtime = null;
@@ -185,8 +194,6 @@ export class MindMapController {
     });
     this.#listen(elements.homeButton, "click", () => void this.#returnHome());
     this.#listen(elements.retrySaveButton, "click", () => void this.#retryLocalSave());
-    this.#listen(elements.uploadButton, "click", () => void this.#upload());
-    this.#listen(elements.pullButton, "click", () => void this.#pull());
     this.#listen(elements.addNodeButton, "click", () => this.#requestAddNode());
     this.#listen(elements.addArrowButton, "click", () => this.#toggleArrowMode());
     this.#listen(elements.resetViewButton, "click", () => this.canvas.resetViewport());
@@ -839,78 +846,9 @@ export class MindMapController {
     }
   }
 
-  async #upload(): Promise<void> {
-    const runtime = this.#runtime;
-    if (!runtime) return;
-    try {
-      let result;
-      let localWinsConfirmed = false;
-      if (runtime.getSnapshot().conflict) {
-        if (!await this.#confirmLocalWins()) return;
-        localWinsConfirmed = true;
-        result = await runtime.resolveConflict("local-wins");
-      } else {
-        result = await runtime.upload();
-      }
-      if (result === "conflict" && !localWinsConfirmed) {
-        if (!await this.#confirmLocalWins()) return;
-        localWinsConfirmed = true;
-        result = await runtime.resolveConflict("local-wins");
-      }
-      if (result === "conflict") {
-        this.shell.showMessage("覆盖期间云端再次变化，请检查版本后手动重试。", "error");
-        return;
-      }
-      this.shell.showMessage(result === "unchanged" ? "云端内容已经是最新版本。" : "已上传到云端。");
-    } catch {
-      this.shell.showMessage("上传失败；本机内容仍保留，可稍后重试。", "error");
-    }
-  }
-
-  async #pull(): Promise<void> {
-    const runtime = this.#runtime;
-    if (!runtime) return;
-    this.#commitPendingUi();
-    try {
-      const snapshot = runtime.getSnapshot();
-      const needsChoice = Boolean(snapshot.conflict || snapshot.sessionDirty || snapshot.localChangedSinceSync);
-      if (needsChoice) {
-        if (!await this.#confirmCloudWins()) return;
-        await runtime.resolveConflict("cloud-wins");
-        return;
-      }
-      const result = await runtime.pull();
-      if (result === "conflict") {
-        if (!await this.#confirmCloudWins()) return;
-        await runtime.resolveConflict("cloud-wins");
-      } else if (result === "unchanged") {
-        this.shell.showMessage("本机已经是已知的最新云端版本。");
-      }
-    } catch {
-      this.shell.showMessage("拉取失败；本机内容没有被覆盖。", "error");
-    }
-  }
-
-  async #confirmLocalWins(): Promise<boolean> {
-    return await this.shell.choose(
-      "用本地版本覆盖云端？",
-      "本地和云端都已变化。继续会以本地完整资料库覆盖本模块的云端受管文件。",
-      [
-        { id: "local-wins", label: "本地覆盖云端", tone: "danger" },
-        { id: "cancel", label: "取消" },
-      ],
-    ) === "local-wins";
-  }
-
-  async #confirmCloudWins(): Promise<boolean> {
-    return await this.shell.choose(
-      "用云端版本覆盖本地？",
-      "继续会丢弃本模块尚未上传的本地变化，并以云端完整资料库替换本机版本。",
-      [
-        { id: "cloud-wins", label: "云端覆盖本地", tone: "danger" },
-        { id: "cancel", label: "取消" },
-      ],
-    ) === "cloud-wins";
+  #guardSyncAction(action: ModuleSyncAction): { readonly status: "ready" } {
+    if (action === "pull") this.#commitPendingUi();
+    return { status: "ready" };
   }
 
   async #returnHome(): Promise<void> {
@@ -1004,7 +942,8 @@ export class MindMapController {
   }
 
   #renderSnapshot(): void {
-    this.shell.renderSnapshot(this.#snapshot, this.#localSaveFailed);
+    this.syncUi.renderSnapshot(this.#snapshot);
+    this.syncUi.setLocalSaveFailed(this.#localSaveFailed);
     this.shell.setSaveRetryVisible(this.#localSaveFailed);
   }
 

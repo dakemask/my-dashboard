@@ -2,15 +2,12 @@ import {
   CloseSmall,
   Delete,
   Down,
-  DownloadOne,
   Edit,
   History as HistoryIcon,
   Home,
   Save,
   Search,
-  UploadOne,
 } from "@icon-park/svg";
-import type { ModuleRuntimeSnapshot } from "../../shared";
 
 type IconRenderer = typeof Search;
 
@@ -54,14 +51,9 @@ export interface ThoughtHistoryView {
 export interface FragmentThoughtsShellElements {
   readonly root: HTMLElement;
   readonly homeLink: HTMLAnchorElement;
-  readonly syncRegion: HTMLElement;
-  readonly syncState: HTMLElement;
-  readonly localVersion: HTMLElement;
-  readonly cloudVersion: HTMLElement;
+  readonly syncMount: HTMLElement;
   readonly saveFailure: HTMLElement;
   readonly retrySaveButton: HTMLButtonElement;
-  readonly uploadButton: HTMLButtonElement;
-  readonly pullButton: HTMLButtonElement;
   readonly draftNotice: HTMLElement;
   readonly composerForm: HTMLFormElement;
   readonly composerInput: HTMLTextAreaElement;
@@ -139,46 +131,8 @@ export class FragmentThoughtsShell {
     titleCopy.append(eyebrow, titleRow, subtitle);
     identity.append(homeLink, titleCopy);
 
-    const syncRegion = document.createElement("section");
-    syncRegion.className = "ft-sync-region";
-    syncRegion.setAttribute("aria-label", "本地与云端同步");
-    const syncSummary = document.createElement("div");
-    syncSummary.className = "ft-sync-summary";
-    const syncState = document.createElement("strong");
-    syncState.className = "ft-sync-state";
-    syncState.textContent = "正在读取状态…";
-    const versionStatus = document.createElement("div");
-    versionStatus.className = "ft-version-status";
-    const localVersion = document.createElement("span");
-    localVersion.className = "ft-version-item";
-    localVersion.textContent = "本地：时间未知";
-    const cloudVersion = document.createElement("span");
-    cloudVersion.className = "ft-version-item";
-    cloudVersion.textContent = "云端：尚无版本";
-    versionStatus.append(localVersion, cloudVersion);
-    syncSummary.append(syncState, versionStatus);
-
-    const syncActions = document.createElement("div");
-    syncActions.className = "ft-sync-actions";
-    const uploadButton = createButton(
-      document,
-      "上传",
-      "将本地完整数据上传到云端",
-      "ft-button",
-      UploadOne,
-      true,
-    );
-    uploadButton.dataset.action = "upload";
-    const pullButton = createButton(
-      document,
-      "拉取",
-      "用云端完整数据更新本机",
-      "ft-button",
-      DownloadOne,
-      true,
-    );
-    pullButton.dataset.action = "pull";
-    syncActions.append(uploadButton, pullButton);
+    const syncMount = document.createElement("div");
+    syncMount.className = "ft-sync-mount";
 
     const saveFailure = document.createElement("div");
     saveFailure.className = "ft-save-failure";
@@ -194,9 +148,8 @@ export class FragmentThoughtsShell {
     );
     retrySaveButton.dataset.action = "retry-save";
     saveFailure.append(saveFailureText, retrySaveButton);
-    syncRegion.append(syncSummary, syncActions, saveFailure);
-    headerBar.append(identity, syncRegion);
-    pageHeader.append(headerBar);
+    headerBar.append(identity, syncMount);
+    pageHeader.append(headerBar, saveFailure);
 
     const draftNotice = document.createElement("div");
     draftNotice.className = "ft-draft-notice";
@@ -388,14 +341,9 @@ export class FragmentThoughtsShell {
     this.elements = {
       root,
       homeLink,
-      syncRegion,
-      syncState,
-      localVersion,
-      cloudVersion,
+      syncMount,
       saveFailure,
       retrySaveButton,
-      uploadButton,
-      pullButton,
       draftNotice,
       composerForm,
       composerInput,
@@ -432,41 +380,6 @@ export class FragmentThoughtsShell {
       event.preventDefault();
       this.#resolveDialog("cancel");
     });
-  }
-
-  renderSnapshot(snapshot: ModuleRuntimeSnapshot): void {
-    const localBase = snapshot.localSavedAt
-      ? `本地：${formatTimestamp(snapshot.localSavedAt)}`
-      : "本地：时间未知";
-    this.elements.localVersion.textContent = snapshot.sessionDirty
-      ? `${localBase}（有未保存修改）`
-      : localBase;
-    this.elements.localVersion.title = snapshot.localSavedAt ?? "";
-
-    this.elements.cloudVersion.textContent = snapshot.knownRemoteUpdatedAt
-      ? `云端：${formatTimestamp(snapshot.knownRemoteUpdatedAt)}`
-      : snapshot.knownRemoteRevision
-        ? "云端：时间未知"
-        : "云端：尚无版本";
-    this.elements.cloudVersion.title = snapshot.knownRemoteUpdatedAt ?? "";
-
-    const state = snapshot.conflict
-      ? "conflict"
-      : snapshot.pendingUpload
-        ? "pending"
-        : snapshot.sessionDirty
-          ? "unsaved"
-          : snapshot.localChangedSinceSync
-            ? "local-ahead"
-            : "synced";
-    this.elements.syncRegion.dataset.state = state;
-    this.elements.syncState.textContent = {
-      conflict: "本地与云端冲突",
-      pending: "上传结果待确认",
-      unsaved: "尚未保存到本机",
-      "local-ahead": "本地修改尚未上传",
-      synced: "本地与云端一致",
-    }[state];
   }
 
   setSaveFailure(message: string | null): void {
@@ -506,12 +419,6 @@ export class FragmentThoughtsShell {
   setSearchStatus(message: string | null): void {
     this.elements.searchStatus.textContent = message ?? "";
     this.elements.searchStatus.hidden = message === null;
-  }
-
-  setMutationControlsDisabled(disabled: boolean): void {
-    this.elements.uploadButton.disabled = disabled;
-    this.elements.pullButton.disabled = disabled;
-    this.elements.retrySaveButton.disabled = disabled;
   }
 
   setHistoryCollapseDraftLocked(locked: boolean): void {

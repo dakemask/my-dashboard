@@ -215,7 +215,7 @@ button:disabled {
   line-height: 1.6;
 }
 
-.ft-sync-region {
+.ft-sync-mount {
   width: 100%;
   min-width: 0;
   justify-self: stretch;
@@ -231,61 +231,20 @@ button:disabled {
   backdrop-filter: none;
 }
 
-.ft-sync-summary {
-  min-width: 0;
+.ft-sync-mount .shared-module-sync {
+  --shared-sync-accent: var(--ft-accent);
+  --shared-sync-border: var(--ft-line);
+  --shared-sync-muted: var(--ft-muted);
+  --shared-sync-panel: var(--ft-panel-soft);
+  --shared-sync-text: var(--ft-text);
 }
 
-.ft-sync-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ft-success);
-  font-size: 15px;
-}
-
-.ft-sync-state::before {
-  width: 8px;
-  height: 8px;
-  background: currentcolor;
-  border-radius: 999px;
-  content: "";
-}
-
-.ft-sync-region[data-state="unsaved"] .ft-sync-state,
-.ft-sync-region[data-state="local-ahead"] .ft-sync-state,
-.ft-sync-region[data-state="pending"] .ft-sync-state {
-  color: var(--ft-warning);
-}
-
-.ft-sync-region[data-state="conflict"] .ft-sync-state {
-  color: var(--ft-danger);
-}
-
-.ft-version-status {
-  display: grid;
-  gap: 2px;
-  margin-top: 4px;
-  color: var(--ft-muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-}
-
-.ft-version-item {
-  white-space: nowrap;
-}
-
-.ft-sync-actions,
 .ft-composer-actions,
 .ft-card-actions,
 .ft-dialog-actions {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-
-.ft-sync-actions {
-  align-self: center;
 }
 
 .ft-button,
@@ -989,7 +948,7 @@ mark {
     padding: 18px 20px;
   }
 
-  .ft-sync-region {
+  .ft-sync-mount {
     width: 100%;
     padding: 16px 0 0;
     border-left: 0;
@@ -1021,12 +980,8 @@ mark {
     margin-left: auto;
   }
 
-  .ft-sync-region {
+  .ft-sync-mount {
     grid-template-columns: 1fr;
-  }
-
-  .ft-sync-actions {
-    justify-content: flex-end;
   }
 
   html.ft-history-modal-open,
@@ -1113,12 +1068,8 @@ mark {
     padding: 15px;
   }
 
-  .ft-sync-region {
+  .ft-sync-mount {
     padding: 12px 0 0;
-  }
-
-  .ft-sync-actions .ft-button {
-    flex: 0 0 auto;
   }
 
   .ft-browse-heading {

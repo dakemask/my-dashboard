@@ -1,10 +1,11 @@
 import {
+  ModuleSyncUi,
   type ModuleRuntime,
   type ModuleRuntimeHooks,
   type ModuleRuntimeSnapshot,
+  type ModuleSyncAction,
   type ProjectionReason,
   type SettleReason,
-  type SyncActionResult,
 } from "../../shared";
 import { fragmentThoughtsDefinition } from "../definition";
 import {
@@ -60,6 +61,7 @@ export class FragmentThoughtsController {
   >;
 
   readonly #shell: FragmentThoughtsShell;
+  readonly #syncUi: ModuleSyncUi;
   readonly #pageWindow: Window;
   readonly #removeListeners: Array<() => void> = [];
   #runtime: FragmentThoughtsRuntime | null = null;
@@ -77,16 +79,13 @@ export class FragmentThoughtsController {
     this.#pageWindow = pageWindow;
     this.#shell = new FragmentThoughtsShell(appRoot);
     this.#shell.elements.homeLink.href = import.meta.env.BASE_URL;
+    this.#syncUi = new ModuleSyncUi({
+      mount: this.#shell.elements.syncMount,
+      guardAction: (action) => this.#guardSyncAction(action),
+    });
     this.hooks = {
       settle: (reason) => this.#settle(reason),
       project: (payload, reason) => this.#project(payload, reason),
-      onConflict: () => {
-        this.#shell.showMessage(
-          "本地与云端都已变化，请通过上传或拉取选择保留方向。",
-          "error",
-          6200,
-        );
-      },
       onSnapshotChange: (snapshot) => this.#onSnapshotChange(snapshot),
     };
     this.#bindUi();
@@ -101,6 +100,7 @@ export class FragmentThoughtsController {
     this.#runtime = runtime;
     this.#payload = initialPayload;
     this.#snapshot = runtime.getSnapshot();
+    this.#syncUi.attachRuntime(runtime);
     this.#renderAll();
   }
 
@@ -108,6 +108,7 @@ export class FragmentThoughtsController {
     if (this.#disposed) return;
     this.#disposed = true;
     for (const remove of this.#removeListeners.splice(0)) remove();
+    this.#syncUi.dispose();
     this.#shell.dispose();
     const runtime = this.#runtime;
     this.#runtime = null;
@@ -208,12 +209,6 @@ export class FragmentThoughtsController {
     });
     this.#listen(elements.retrySaveButton, "click", () => {
       void this.#retryLocalSave();
-    });
-    this.#listen(elements.uploadButton, "click", () => {
-      void this.#upload();
-    });
-    this.#listen(elements.pullButton, "click", () => {
-      void this.#pull();
     });
     this.#listen(this.#pageWindow.document, "keydown", (event) => {
       this.#onKeyDown(event as KeyboardEvent);
@@ -579,96 +574,17 @@ export class FragmentThoughtsController {
     );
   }
 
-  async #upload(): Promise<void> {
-    if (this.#hasDraft()) {
-      this.#showDraftGateMessage();
-      return;
-    }
-    const runtime = this.#runtime;
-    if (!runtime) return;
-    try {
-      let result: SyncActionResult;
-      let overwriteConfirmed = false;
-      if (runtime.getSnapshot().conflict) {
-        if (!await this.#confirmLocalWins()) return;
-        overwriteConfirmed = true;
-        result = await runtime.resolveConflict("local-wins");
-      } else {
-        result = await runtime.upload();
-      }
-      if (result === "conflict" && !overwriteConfirmed) {
-        if (!await this.#confirmLocalWins()) return;
-        result = await runtime.resolveConflict("local-wins");
-      }
-      if (result === "conflict") {
-        this.#shell.showMessage(
-          "覆盖期间云端再次变化，请检查版本后重试。",
-          "error",
-        );
-        return;
-      }
-      this.#localSaveFailed = false;
-      this.#renderSnapshot();
-      this.#shell.showMessage(
-        result === "unchanged" ? "云端内容已经是最新版本。" : "已上传到云端。",
-        "success",
-      );
-    } catch {
-      this.#shell.showMessage("上传失败；本机内容仍然保留。", "error");
-    }
-  }
-
-  async #pull(): Promise<void> {
-    if (this.#hasDraft()) {
-      this.#showDraftGateMessage();
-      return;
-    }
-    const runtime = this.#runtime;
-    if (!runtime) return;
-    try {
-      const snapshot = runtime.getSnapshot();
-      const needsChoice = Boolean(
-        snapshot.conflict
-        || snapshot.sessionDirty
-        || snapshot.localChangedSinceSync,
-      );
-      if (needsChoice) {
-        if (!await this.#confirmCloudWins()) return;
-        await runtime.resolveConflict("cloud-wins");
-        return;
-      }
-      const result = await runtime.pull();
-      if (result === "conflict") {
-        if (!await this.#confirmCloudWins()) return;
-        await runtime.resolveConflict("cloud-wins");
-      } else if (result === "unchanged") {
-        this.#shell.showMessage("本机已经是已知的最新云端版本。");
-      }
-    } catch {
-      this.#shell.showMessage("拉取失败；本机内容没有被覆盖。", "error");
-    }
-  }
-
-  async #confirmLocalWins(): Promise<boolean> {
-    return await this.#shell.choose(
-      "用本地版本覆盖云端？",
-      "本地和云端都已变化。继续会以本地全部碎片想法及历史版本覆盖云端。",
-      [
-        { id: "local-wins", label: "本地覆盖云端", tone: "danger" },
-        { id: "cancel", label: "取消" },
-      ],
-    ) === "local-wins";
-  }
-
-  async #confirmCloudWins(): Promise<boolean> {
-    return await this.#shell.choose(
-      "用云端版本覆盖本地？",
-      "继续会丢弃尚未上传的本地变化，并以云端全部碎片想法及历史版本替换本机。",
-      [
-        { id: "cloud-wins", label: "云端覆盖本地", tone: "danger" },
-        { id: "cancel", label: "取消" },
-      ],
-    ) === "cloud-wins";
+  #guardSyncAction(
+    _action: ModuleSyncAction,
+  ):
+    | { readonly status: "ready" }
+    | { readonly status: "blocked"; readonly message: string } {
+    return this.#hasDraft()
+      ? {
+          status: "blocked",
+          message: "请先保存、清空或取消当前草稿，再执行同步操作。",
+        }
+      : { status: "ready" };
   }
 
   #onKeyDown(event: KeyboardEvent): void {
@@ -739,7 +655,8 @@ export class FragmentThoughtsController {
   }
 
   #renderSnapshot(): void {
-    this.#shell.renderSnapshot(this.#snapshot);
+    this.#syncUi.renderSnapshot(this.#snapshot);
+    this.#syncUi.setLocalSaveFailed(this.#localSaveFailed);
     this.#shell.setSaveFailure(
       this.#localSaveFailed
         ? "自动保存失败，当前页面内容仍然保留。"
@@ -758,7 +675,6 @@ export class FragmentThoughtsController {
           ? "有尚未提交的新增草稿。请先保存或清空，再执行其他数据操作。"
           : null,
     );
-    this.#shell.setMutationControlsDisabled(hasDraft || this.#runtime === null);
     this.#shell.elements.composerInput.disabled = editing;
     this.#shell.elements.composerClearButton.disabled = editing;
     this.#shell.elements.composerSaveButton.disabled = editing;

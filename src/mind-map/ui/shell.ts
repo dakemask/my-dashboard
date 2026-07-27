@@ -3,16 +3,13 @@ import {
   AutoFocus,
   ConnectionArrow,
   Delete,
-  DownloadOne,
   Edit,
   FileAddition,
   FolderPlus,
   Home,
   MindmapList,
   Save,
-  UploadOne,
 } from "@icon-park/svg";
-import type { ModuleRuntimeSnapshot } from "../../shared";
 import { createMindMapIcon, type MindMapIconRenderer } from "./icons";
 
 export interface MindMapShellElements {
@@ -20,13 +17,8 @@ export interface MindMapShellElements {
   readonly homeButton: HTMLButtonElement;
   readonly sidebarButton: HTMLButtonElement;
   readonly mapTitle: HTMLElement;
-  readonly versionStatus: HTMLElement;
-  readonly syncState: HTMLElement;
-  readonly localVersion: HTMLElement;
-  readonly cloudVersion: HTMLElement;
+  readonly syncMount: HTMLElement;
   readonly retrySaveButton: HTMLButtonElement;
-  readonly uploadButton: HTMLButtonElement;
-  readonly pullButton: HTMLButtonElement;
   readonly addNodeButton: HTMLButtonElement;
   readonly addArrowButton: HTMLButtonElement;
   readonly resetViewButton: HTMLButtonElement;
@@ -96,30 +88,11 @@ export class MindMapShell {
     titleCopy.append(eyebrow, mapTitle);
     left.append(homeButton, sidebarButton, titleCopy);
 
-    const versionStatus = document.createElement("section");
-    versionStatus.className = "version-status";
-    versionStatus.setAttribute("aria-label", "本地与云端版本状态");
-    const syncSummary = document.createElement("div");
-    syncSummary.className = "version-summary";
-    const syncDot = document.createElement("span");
-    syncDot.className = "version-dot";
-    const syncState = document.createElement("strong");
-    syncState.className = "version-state";
-    syncState.textContent = "正在读取状态…";
-    syncSummary.append(syncDot, syncState);
-    const versionDetails = document.createElement("div");
-    versionDetails.className = "version-details";
-    const localVersion = document.createElement("span");
-    localVersion.className = "version-item version-local";
-    const cloudVersion = document.createElement("span");
-    cloudVersion.className = "version-item version-cloud";
-    versionDetails.append(localVersion, cloudVersion);
-    versionStatus.append(syncSummary, versionDetails);
+    const syncMount = document.createElement("div");
+    syncMount.className = "mind-map-sync-mount";
 
     const actions = document.createElement("div");
     actions.className = "toolbar-group toolbar-actions";
-    const syncActions = document.createElement("div");
-    syncActions.className = "toolbar-cluster";
     const retrySaveButton = button(
       document,
       "重试保存",
@@ -129,23 +102,6 @@ export class MindMapShell {
       true,
     );
     retrySaveButton.hidden = true;
-    const uploadButton = button(
-      document,
-      "上传",
-      "上传到云端",
-      "toolbar-button toolbar-icon-button",
-      UploadOne,
-      true,
-    );
-    const pullButton = button(
-      document,
-      "拉取",
-      "用云端版本更新本机",
-      "toolbar-button toolbar-icon-button",
-      DownloadOne,
-      true,
-    );
-    syncActions.append(retrySaveButton, uploadButton, pullButton);
 
     const canvasActions = document.createElement("div");
     canvasActions.className = "toolbar-cluster";
@@ -174,8 +130,8 @@ export class MindMapShell {
       true,
     );
     canvasActions.append(addNodeButton, addArrowButton, resetViewButton);
-    actions.append(syncActions, canvasActions);
-    toolbar.append(left, versionStatus, actions);
+    actions.append(retrySaveButton, canvasActions);
+    toolbar.append(left, syncMount, actions);
 
     const workspace = document.createElement("section");
     workspace.className = "mind-map-workspace";
@@ -284,13 +240,8 @@ export class MindMapShell {
       homeButton,
       sidebarButton,
       mapTitle,
-      versionStatus,
-      syncState,
-      localVersion,
-      cloudVersion,
+      syncMount,
       retrySaveButton,
-      uploadButton,
-      pullButton,
       addNodeButton,
       addArrowButton,
       resetViewButton,
@@ -337,64 +288,6 @@ export class MindMapShell {
 
   setSaveRetryVisible(visible: boolean): void {
     this.elements.retrySaveButton.hidden = !visible;
-  }
-
-  renderSnapshot(snapshot: ModuleRuntimeSnapshot, localSaveFailed = false): void {
-    if (!snapshot.initialized) {
-      this.elements.syncState.textContent = "正在读取状态…";
-      this.elements.localVersion.textContent = "本地：读取中";
-      this.elements.cloudVersion.textContent = "云端：读取中";
-      this.elements.localVersion.title = "";
-      this.elements.cloudVersion.title = "";
-      this.elements.versionStatus.dataset.state = "loading";
-      this.elements.versionStatus.title = "正在读取本地与云端版本状态。";
-      return;
-    }
-    const localVersion = snapshot.localSavedAt
-      ? `本地：${formatTimestamp(snapshot.localSavedAt)}`
-      : "本地：时间未知";
-    const unsaved = snapshot.sessionDirty && localSaveFailed;
-    const localText = unsaved
-      ? `${localVersion}（有未保存修改）`
-      : localVersion;
-    const cloudText = snapshot.knownRemoteUpdatedAt
-      ? `云端：${formatTimestamp(snapshot.knownRemoteUpdatedAt)}`
-      : snapshot.knownRemoteRevision
-        ? "云端：时间未知"
-        : "云端：尚无版本";
-    this.elements.localVersion.textContent = localText;
-    this.elements.cloudVersion.textContent = cloudText;
-    this.elements.localVersion.title = snapshot.localSavedAt ?? "";
-    this.elements.cloudVersion.title = snapshot.knownRemoteUpdatedAt ?? "";
-
-    const state = snapshot.conflict
-      ? "conflict"
-      : snapshot.pendingUpload
-        ? "pending"
-        : unsaved
-          ? "unsaved"
-          : snapshot.localChangedSinceSync
-          ? "local-ahead"
-          : "synced";
-    this.elements.versionStatus.dataset.state = state;
-    this.elements.syncState.textContent = state === "conflict"
-      ? "本地与云端冲突"
-      : state === "pending"
-        ? "上传结果待确认"
-        : state === "unsaved"
-          ? "尚未保存到本机"
-          : state === "local-ahead"
-            ? "本地修改尚未上传"
-            : "本地与云端一致";
-    this.elements.versionStatus.title = snapshot.conflict
-      ? "本地与云端都已变化，请通过上传或拉取选择保留方向。"
-      : snapshot.pendingUpload
-        ? "上传结果待确认。"
-        : unsaved
-          ? "自动保存失败，当前页面内容仍然保留。"
-          : snapshot.localChangedSinceSync
-          ? "本地修改已经保存，尚未上传。"
-          : "本地与云端一致。";
   }
 
   showMessage(message: string, tone: "normal" | "error" = "normal"): void {
@@ -469,16 +362,4 @@ function button(
   }
   element.title = title;
   return element;
-}
-
-function formatTimestamp(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }

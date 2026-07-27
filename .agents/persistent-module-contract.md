@@ -120,7 +120,16 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | `runtime.resolveConflict("cloud-wins")` | 明确用云端完整 payload 覆盖本地 |
 | `runtime.pollNow()` | 立即执行一次与后台轮询相同的版本检查；不是“刷新当前页面” |
 
-上传、拉取和两个覆盖方向由 SDK 显示同一份全页 spinner 与模糊遮罩。模块只负责触发命令和呈现业务合适的确认、状态及错误文字，不复制公共遮罩，也不直接访问 GitHub。
+上传、拉取和两个覆盖方向由 SDK 显示同一份全页 spinner 与模糊遮罩。模块页面使用 Shared 提供的 `ModuleSyncUi` 呈现上传、拉取、版本状态、冲突确认及同步结果，不复制同步 UI，也不直接访问 GitHub。
+
+模块在创建 `ModuleSyncUi` 时必须提供 `guardAction(action)` 业务门禁。Shared 在用户主动上传或拉取前调用它：
+
+- `ready` 表示模块已准备好，Shared 继续标准同步流程；
+- `blocked` 表示当前业务状态不允许同步，Shared 显示模块返回的安全说明并停止；
+- 门禁只处理模块业务状态，不执行上传、拉取、覆盖确认或结果提示；
+- `settle` 仍由 runtime 在实际持久化命令内部调用，门禁不能替代数据安全结算。
+
+本地自动保存、保存失败反馈和“重试保存”仍由模块负责，不属于 `ModuleSyncUi`。
 
 同步判断固定为：
 
@@ -133,7 +142,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 
 冲突可以跨刷新保留。模块只能让用户选择 `local-wins` 或 `cloud-wins`；不得自行自动合并或暗中选择方向。
 
-`dirty === false` 只表示页面内容已经保存到本地，不表示已经上传。模块通过 `runtime.getSnapshot()` 或 `onSnapshotChange(snapshot)` 区分：
+`dirty === false` 只表示页面内容已经保存到本地，不表示已经上传。Shared 同步 UI 通过 `runtime.getSnapshot()` 和模块转发的 `onSnapshotChange(snapshot)` 区分：
 
 - `sessionDirty`：页面内容尚未保存到本地；
 - `localChangedSinceSync`：本地版本尚未同步；
@@ -154,6 +163,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | 启动 | `startModuleRuntime`、启动 options/result/state |
 | runtime | `current`、历史状态、`dispatch`、`undo`、`redo`、`save`、`upload`、`pull`、`resolveConflict`、`pollNow`、`getSnapshot`、`dispose` |
 | hooks | `settle`、`project`、`onConflict`、`onSnapshotChange` |
+| 同步 UI | `ModuleSyncUi`、`ModuleSyncAction`、`ModuleSyncGateResult`；模块提供挂载点和业务门禁 |
 | 同步类型 | settle/project reason、同步结果、snapshot、conflict resolution 和 persisted conflict |
 | 使用错误 | `ModuleRuntimeBusyError`、`ModuleRuntimeUnavailableError` |
 
@@ -162,7 +172,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 模块不能直接读写 IndexedDB、GitHub、token、revision、编辑锁或 Shared 内部组件；
 - 模块不能修改 `runtime.current` 来推进状态，只能 dispatch event；
 - 模块不能把系统状态混入 payload、event 或撤销队列；
-- 模块使用 SDK 提供的单标签锁、操作阻塞和云端遮罩，不实现竞态降级方案或第二套公共 UI；
+- 模块使用 SDK 提供的单标签锁、操作阻塞、云端遮罩和同步 UI，不实现竞态降级方案或第二套同步 UI；
 - 失败提示不得包含 token、原始 GitHub 响应、请求头或任意序列化的捕获异常；
 
 持久化模块的自动测试聚焦 domain 和 codec，包括 payload 校验、event 的 apply/invert、远端编码往返和非法输入。

@@ -24,3 +24,10 @@ export type {
   SyncCoordinatorSnapshot as ModuleRuntimeSnapshot,
 } from "../sync";
 export type { PersistedConflict } from "../persistence";
+export {
+  ModuleSyncUi,
+  type ModuleSyncAction,
+  type ModuleSyncGateResult,
+  type ModuleSyncUiOptions,
+  type ModuleSyncUiRuntime,
+} from "../ui";

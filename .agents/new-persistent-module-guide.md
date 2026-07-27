@@ -164,11 +164,9 @@ export const hooks: ModuleRuntimeHooks<NotesPayload, NotesEvent> = {
     // 依据完整 payload 重建 UI，并清理失效实时状态。
     projectNotes(payload, reason);
   },
-  onConflict(conflict) {
-    showConflictState(conflict);
-  },
   onSnapshotChange(snapshot) {
-    renderSaveAndSyncState(snapshot);
+    syncUi.renderSnapshot(snapshot);
+    renderLocalSaveState(snapshot);
   },
 };
 ```
@@ -186,6 +184,24 @@ initialize / undo / redo
 ```
 
 常见做法是：有效文字草稿变成 event，无效草稿取消；正在进行的 pointer 操作取消；选择、焦点和临时预览在 project 后按模块规则重建。一个 settle 最多返回一个 event，必要时使用模块自己的复合 event。
+
+页面还要为 Shared 同步 UI 提供一个空挂载点，并在创建 `ModuleSyncUi` 时实现同步业务门禁：
+
+```ts
+import { ModuleSyncUi } from "../../shared";
+
+this.syncUi = new ModuleSyncUi({
+  mount: shell.syncMount,
+  guardAction: (_action) => hasBusinessDraft()
+    ? {
+        status: "blocked",
+        message: "请先处理当前草稿，再执行同步操作。",
+      }
+    : { status: "ready" },
+});
+```
+
+门禁可以按 `upload` / `pull` 处理模块实时状态，但不自行调用 runtime、显示覆盖确认或解释同步结果。实际命令开始后，runtime 仍会调用 `settle`。
 
 ## 第四步：建立页面并启动 runtime
 
@@ -226,6 +242,8 @@ try {
 }
 ```
 
+`controller.attachRuntime` 内部同时把 runtime 交给 `ModuleSyncUi`，避免入口建立第二套同步接线。
+
 `blocked`、`unsupported` 和 `authentication-required` 已由公共边界处理，模块不建立第二套登录、锁或阻止页。初始化的 `project` 发生在 `startModuleRuntime` 返回之前，因此不能依赖尚未 attach 的 runtime。
 
 普通独立页面由 SDK 监听 `pagehide`。如果宿主会在页面不关闭时卸载模块，模块还要移除自己的监听并等待 `runtime.dispose()`。
@@ -238,15 +256,15 @@ controller 是业务 UI 与 runtime 之间的边界：
 用户完成业务动作 → 构造模块 event → runtime.dispatch(event)
 撤销/重做       → runtime.undo() / runtime.redo()
 本地保存        → runtime.save()
-上传/拉取       → runtime.upload() / runtime.pull()
-冲突选择        → runtime.resolveConflict("local-wins" | "cloud-wins")
+上传/拉取       → Shared ModuleSyncUi
+冲突选择        → Shared ModuleSyncUi
 ```
 
 不要先修改一份私有 payload 再通知 runtime。`dispatch` 返回新的完整 payload，controller 应以它作为后续投影依据。
 
-按钮、菜单和快捷键由模块绑定；Shared 不自动绑定。模块应处理忙碌状态，防止把 `ModuleRuntimeBusyError` 当作数据错误，并在卸载时清理所有监听。
+业务按钮、菜单和快捷键由模块绑定；上传、拉取按钮及其确认和反馈由 `ModuleSyncUi` 绑定。模块应处理业务命令的忙碌状态，防止把 `ModuleRuntimeBusyError` 当作数据错误，并在卸载时清理所有监听和 dispose 同步 UI。
 
-保存和同步区域从 `getSnapshot()` 或 `onSnapshotChange` 读取状态，至少区分：
+模块把 `onSnapshotChange` 收到的 snapshot 转发给 `ModuleSyncUi`。公共同步 UI 至少区分：
 
 - 页面尚未本地保存；
 - 已本地保存但尚未上传；
@@ -254,7 +272,7 @@ controller 是业务 UI 与 runtime 之间的边界：
 - 上传结果待确认；
 - 冲突及两个覆盖方向。
 
-模块只决定这些状态怎样展示、何时请求用户确认。保存基线、冲突持久化、轮询、公共阻塞和遮罩全部交给 SDK。
+模块只提供同步前业务门禁；同步状态展示、覆盖确认、结果反馈、保存基线、冲突持久化、轮询、公共阻塞和遮罩全部交给 SDK。本地自动保存、保存失败提示和重试保存仍由模块负责。
 
 ## 第六步：注册模块并完成验收
 

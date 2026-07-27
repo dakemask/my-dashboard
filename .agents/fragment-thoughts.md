@@ -110,6 +110,8 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 - 上传和拉取始终由用户明确触发。上传表示以本地完整数据为准，拉取表示以云端完整数据为准，不进行逐条或逐版本自动合并。
 - 本地和云端双方均有变化或已经形成冲突时，覆盖前必须显示清楚的方向性确认：上传选择本地覆盖云端，拉取选择云端覆盖本地。
 - 状态区区分本地保存时间、已知云端更新时间、页面未保存、本地尚未上传、上传结果待确认和冲突，不能把“已保存但未上传”显示成“页面未保存”。
+- 上传、拉取、版本状态、覆盖确认和同步结果由 Shared `ModuleSyncUi` 统一呈现；模块不维护第二套同步按钮、状态文案或冲突确认。
+- 本模块向 Shared 提供草稿门禁：存在新增或编辑草稿时返回 `blocked`，由公共 UI 显示门禁说明并停止手动上传或拉取。自动保存、保存失败提示和“重试保存”仍由本模块负责。
 
 后台远端变化恰好发生在草稿期间时属于草稿门禁的唯一例外：有效的非空新增或编辑草稿先结算为一个业务 event，使本地变化能够进入冲突判断；全空白草稿直接取消。该规则只防止远端观察打断草稿，不代表自动解决冲突。
 
@@ -125,8 +127,8 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 | `src/fragment-thoughts/domain/events.ts` | 五类 event 的纯 `apply` / `invert` |
 | `src/fragment-thoughts/domain/codec.ts` | payload 与 `thoughts.json` 的严格映射 |
 | `src/fragment-thoughts/domain/index.ts` | 领域层公共导出 |
-| `src/fragment-thoughts/app/controller.ts` | 唯一 runtime 持有者；协调草稿、投影、历史、搜索、自动保存及同步命令 |
-| `src/fragment-thoughts/ui/shell.ts` | 安全 DOM 壳、卡片/编辑器、历史栏、状态、确认对话框和 toast |
+| `src/fragment-thoughts/app/controller.ts` | 唯一 runtime 持有者；协调草稿、投影、历史、搜索、自动保存，并向 Shared 同步 UI 提供门禁 |
+| `src/fragment-thoughts/ui/shell.ts` | 安全 DOM 壳、同步 UI 挂载点、卡片/编辑器、历史栏、业务确认对话框和 toast |
 | `src/fragment-thoughts/style.css` | 页面布局、状态和桌面/窄屏响应式样式 |
 
 - Shared runtime 持有当前完整 payload、业务 event 历史和保存同步 snapshot。
@@ -156,7 +158,7 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 
 ### settle 与 project
 
-用户触发的保存重试、上传、拉取、撤销和重做在 controller 层先经过草稿门禁，因此这些命令开始时不存在未处理业务草稿。
+用户触发的保存重试、撤销和重做在 controller 层先经过草稿门禁；上传和拉取经过模块提供给 `ModuleSyncUi` 的同一业务门禁。因此这些命令开始时不存在未处理业务草稿。
 
 `settle("remote-change")` 使用特殊的数据安全规则：有效非空草稿返回一个 `insert-thought` 或 `append-version` event，全空白草稿取消。其他公共命令已由 controller 的草稿门禁保证没有待处理草稿，因此其他 settle reason 返回 `null`。
 
