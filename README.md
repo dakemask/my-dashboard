@@ -1,39 +1,20 @@
 # my-dashboard
 
-一个基于 GitHub Pages 的个人仪表盘框架。项目使用 TypeScript + Vite 构建，GitHub Actions 会把构建产物部署到 GitHub Pages。
+一个开箱即用的个人仪表盘。
 
-## 本地开发
+## 使用
 
-```bash
-npm install
-npm run dev
-```
+直接打开网站，无需安装：
 
-## Agent 开发文档
+<https://dakemask.github.io/my-dashboard/>
 
-[AGENTS.md](./AGENTS.md) 是唯一入口。它会根据任务把 agent 引导到 `.agents/` 中的持久化公共契约、首次 SDK 接入指南、Shared 维护规范或具体模块契约。
+默认情况下，数据只保存在当前浏览器中。清除浏览器站点数据可能会同时清除这些内容。
 
-## 测试
+## 多设备同步
 
-```bash
-npm test
-```
+如需在多台设备间同步数据：
 
-## 构建
-
-```bash
-npm run build
-```
-
-构建产物会生成在 `dist/`，这个目录不需要提交到仓库。
-
-## GitHub Pages 部署
-
-仓库保留源码，GitHub Actions 在每次推送到 `main` 分支时执行构建，并把 `dist/` 作为 Pages artifact 部署。也可以在 GitHub 网页的 Actions 页面手动运行 `Deploy GitHub Pages` workflow。
-
-第一次切换到 workflow 部署时，需要在 GitHub 仓库页面操作：
-
-1. 打开 `Settings -> Pages`。
-2. 在 `Build and deployment` 里把 `Source` 改成 `GitHub Actions`。
-3. 推送代码到 `main`，或打开 `Actions -> Deploy GitHub Pages -> Run workflow` 手动运行。
-4. workflow 成功后，页面会发布到仓库对应的 GitHub Pages 地址。
+1. 在 GitHub 中新建名为 `my-dashboard-data` 的**私人仓库**。
+2. 确保仓库已有 `main` 分支。创建仓库时可以勾选添加 README。
+3. 创建可读写该仓库 Contents 的 GitHub token。
+4. 在仪表盘首页打开“账户设置”，添加 GitHub 用户名和 token。

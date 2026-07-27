@@ -349,4 +349,9 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 #### 工程
 
-修改 Shared 后按 [README](../README.md) 运行项目规定的测试与构建。
+修改 Shared 后运行项目规定的测试与构建：
+
+```bash
+npm test
+npm run build
+```
