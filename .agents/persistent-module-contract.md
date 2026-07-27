@@ -35,6 +35,23 @@ payload 必须：
 - 不包含焦点、选择、pointer、DOM、动画等实时状态；
 - 不包含凭据、保存时间、revision、pending、conflict 等系统状态。
 
+### 业务 schema 迁移
+
+需要演进持久化格式的模块在 payload 或远端业务格式中保存自己的 schema
+版本，并在模块定义中提供可选的 `migration` 策略：
+
+- `currentVersion` 是当前代码产生和接受的正整数版本；
+- `readVersion(value)` 在尚未按当前结构校验前读取业务版本；
+- `migrate(value, fromVersion)` 只迁移一个版本，结果必须是
+  `fromVersion + 1`；Runtime 会逐版调用直到当前版本；
+- 每一步迁移必须确定、无副作用、不修改输入，并完整校验其源版本；
+- `validate`、`contentKey` 和 `encode` 只处理迁移完成后的当前版本；
+- `decode` 只把远端文本解析为未知版本的原始值，不得提前只接受当前版本。
+
+Shared 不理解模块字段和迁移语义，只负责克隆、按序调用、最终校验、原子保存和
+同步状态。高于 `currentVersion` 的数据、无效版本、跳级结果或迁移异常必须停止，
+不得猜测修复，也不得覆盖原始本地记录。
+
 确实使用 JSON 兼容 payload 的模块使用 `defineJsonModule`。需要 `Map`、`Set`、`Date`、`ArrayBuffer`、类型化数组或其他可 structured-clone 数据的模块使用 `defineModule`，并自行提供稳定的 `contentKey`。函数、DOM 引用、`WeakMap` 等不能可靠持久化的值不得进入 payload。
 
 ### 模块定义
@@ -46,6 +63,7 @@ payload 必须：
 - 能完整反映业务语义的 `contentKey(payload)`；
 - event 历史策略；
 - payload 与远端受管文本文件之间的 `encode`/`decode`。
+- 如需格式演进，提供业务 `migration` 策略。
 
 相同业务内容必须产生相同 content key 和相同受管文件；任何需要保存或同步的业务变化都必须改变 content key。远端文件可以是 JSON、Markdown、YAML、CSV 或模块自定义的 UTF-8 文本格式。
 
@@ -87,7 +105,12 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 
 ## 3. 初始化与页面结束
 
-模块页面用 `startModuleRuntime({ definition, appRoot, hooks })` 启动。SDK 负责恢复统一登录、取得该模块的单标签编辑权、读取本地数据、在首次使用时读取云端或建立空数据、创建空历史、启动同步观察，并调用 `project(payload, "initialize")`。
+模块页面用 `startModuleRuntime({ definition, appRoot, hooks })` 启动。SDK 负责恢复统一登录、取得该模块的单标签编辑权、读取本地数据、在首次使用时读取云端或建立空数据、在需要时迁移并原子保存本地 payload、创建空历史、启动同步观察，并调用 `project(payload, "initialize")`。
+
+本地迁移不推进同步基线。Runtime 持久化迁移变化，并区分它与用户业务修改。只有
+纯迁移、没有既有冲突时，Runtime 才在启动后自动尝试非强制上传；临时失败后可由
+后续 revision 轮询重试。存在同步前业务修改或既有冲突时不自动上传，等待用户按
+现有同步流程处理。
 
 启动结果只有四种：
 
@@ -140,12 +163,23 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | 是 | 否 | 拉取云端到本地，并建立新页面会话 |
 | 是 | 是 | 持久化冲突，不自动覆盖或合并 |
 
+业务 schema 升级仍使用这四象限。多设备从同一旧版本独立迁移时，最先成功完成
+非强制上传的设备自然发布新格式，不进行设备选举。其他仅有迁移变化的设备发现
+云端变化后，拉取并按当前 schema 准备云端 payload：
+
+- 云端已经是当前 schema 且规范化 content hash 与本地一致时，原子推进本地同步
+  基线、清除 migration/pending 状态并直接确认同步，不上传、不刷新、不产生冲突；
+- 云端仍是旧 schema、迁移结果不同、本地含业务修改或存在既有冲突时，不走等价
+  快路径，继续使用当前四象限和冲突处理。
+
 冲突可以跨刷新保留。模块只能让用户选择 `local-wins` 或 `cloud-wins`；不得自行自动合并或暗中选择方向。
 
 `dirty === false` 只表示页面内容已经保存到本地，不表示已经上传。Shared 同步 UI 通过 `runtime.getSnapshot()` 和模块转发的 `onSnapshotChange(snapshot)` 区分：
 
 - `sessionDirty`：页面内容尚未保存到本地；
 - `localChangedSinceSync`：本地版本尚未同步；
+- `businessChangedSinceSync`：本地存在尚未同步的业务修改；
+- `migrationChangedSinceSync`：本地 schema 已升级但云端尚未确认相同格式；
 - `localSavedAt`：本地版本时间；
 - `knownRemoteRevision` / `knownRemoteUpdatedAt`：最近已知云端版本；
 - `pendingUpload`：存在尚未确认结果的上传；
@@ -159,7 +193,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 
 | 类别 | 公共能力 |
 | --- | --- |
-| 定义 | `defineModule`、`defineJsonModule`、`jsonContentKey`、`ModuleDefinition`、history policy/capacity |
+| 定义 | `defineModule`、`defineJsonModule`、`jsonContentKey`、`ModuleDefinition`、`ModuleMigrationPolicy`、history policy/capacity |
 | 启动 | `startModuleRuntime`、启动 options/result/state |
 | runtime | `current`、历史状态、`dispatch`、`undo`、`redo`、`save`、`upload`、`pull`、`resolveConflict`、`pollNow`、`getSnapshot`、`dispose` |
 | hooks | `settle`、`project`、`onConflict`、`onSnapshotChange` |
@@ -172,6 +206,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 模块不能直接读写 IndexedDB、GitHub、token、revision、编辑锁或 Shared 内部组件；
 - 模块不能修改 `runtime.current` 来推进状态，只能 dispatch event；
 - 模块不能把系统状态混入 payload、event 或撤销队列；
+- 模块不得自行读写 Shared 的 migration 状态；业务 schema 版本和迁移规则仍由模块定义；
 - 模块使用 SDK 提供的单标签锁、操作阻塞、云端遮罩和同步 UI，不实现竞态降级方案或第二套同步 UI；
 - 失败提示不得包含 token、原始 GitHub 响应、请求头或任意序列化的捕获异常；
 

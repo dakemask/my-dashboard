@@ -10,12 +10,15 @@ import {
   createModuleLocalEnvelope,
   type ModuleLocalEnvelope,
   type PersistedConflict,
+  type PersistedMigration,
 } from "../persistence";
 import { hashContentKey } from "./contentHash";
 import {
   LocalDataIntegrityError,
+  ModuleMigrationError,
   SyncConflictPendingError,
   SyncCoordinatorNotInitializedError,
+  UnsupportedModuleSchemaVersionError,
   type ConflictResolution,
   type ModuleDefinition,
   type RemoteModulePort,
@@ -38,6 +41,13 @@ interface SyncCoordinatorOptions<T, E> {
 interface ObservedRemoteVersion {
   readonly revision: string | null;
   readonly updatedAt: string | null;
+}
+
+interface PreparedPayload<T> {
+  readonly payload: T;
+  readonly migrated: boolean;
+  readonly fromVersion: number | null;
+  readonly toVersion: number | null;
 }
 
 export class SyncCoordinator<T, E> {
@@ -80,6 +90,8 @@ export class SyncCoordinator<T, E> {
         initialized: false,
         sessionDirty: false,
         localChangedSinceSync: false,
+        businessChangedSinceSync: false,
+        migrationChangedSinceSync: false,
         localSavedAt: null,
         knownRemoteRevision: null,
         knownRemoteUpdatedAt: null,
@@ -95,10 +107,14 @@ export class SyncCoordinator<T, E> {
     const knownRemoteUpdatedAt = this.#local.conflict
       ? this.#local.conflict.observedRemoteUpdatedAt
       : this.#local.lastSyncedRemoteUpdatedAt;
+    const businessChangedSinceSync = this.#hasBusinessChanges();
+    const migrationChangedSinceSync = this.#local.migration !== null;
     return {
       initialized: true,
       sessionDirty: this.#history.dirty,
-      localChangedSinceSync: this.#local.contentHash !== this.#local.lastSyncedContentHash,
+      localChangedSinceSync: businessChangedSinceSync || migrationChangedSinceSync,
+      businessChangedSinceSync,
+      migrationChangedSinceSync,
       localSavedAt: this.#local.localSavedAt,
       knownRemoteRevision,
       knownRemoteUpdatedAt,
@@ -115,22 +131,45 @@ export class SyncCoordinator<T, E> {
 
     let local = await this.#localStore.load();
     if (local) {
-      const payload = this.#preparePayload(local.payload);
-      if (await this.#hashPayload(payload) !== local.contentHash) {
+      const prepared = this.#preparePayloadWithMigration(local.payload);
+      const contentHash = await this.#hashPayload(prepared.payload);
+      if (!prepared.migrated && contentHash !== local.contentHash) {
         throw new LocalDataIntegrityError();
       }
-      local = { ...local, payload };
+      if (prepared.migrated) {
+        const migration = this.#createPersistedMigration(
+          prepared,
+          contentHash,
+          local.contentHash !== local.lastSyncedContentHash || local.conflict !== null,
+        );
+        const next = {
+          ...local,
+          payload: prepared.payload,
+          contentHash,
+          localRevision: createLocalRevision(),
+          localSavedAt: this.#now().toISOString(),
+          migration,
+        };
+        local = await this.#localStore.compareAndSwap(local.localRevision, next);
+      } else {
+        local = { ...local, payload: prepared.payload };
+      }
     } else {
       local = await this.#operationGate.runCloud(async () => {
         const remote = await this.#remoteRepository.pull();
-        const payload = this.#preparePayload(remote?.data ?? this.#definition.createEmpty());
-        const contentHash = await this.#hashPayload(payload);
+        const prepared = this.#preparePayloadWithMigration(
+          remote?.data ?? this.#definition.createEmpty(),
+        );
+        const contentHash = await this.#hashPayload(prepared.payload);
         const initial = {
-          ...createModuleLocalEnvelope(payload, contentHash),
+          ...createModuleLocalEnvelope(prepared.payload, contentHash),
           localSavedAt: this.#now().toISOString(),
           lastSyncedContentHash: contentHash,
           lastSyncedRemoteRevision: remote?.revision ?? null,
           lastSyncedRemoteUpdatedAt: remote?.updatedAt ?? null,
+          migration: prepared.migrated
+            ? this.#createPersistedMigration(prepared, contentHash, false)
+            : null,
         };
         return this.#localStore.initialize(initial);
       });
@@ -150,9 +189,8 @@ export class SyncCoordinator<T, E> {
       contentKey: (payload) => this.#getContentKey(payload),
       policy: {
         capacity: this.#definition.history.capacity,
-        apply: (payload, event) => this.#preparePayload(
-          this.#definition.history.apply(payload, event),
-        ),
+        apply: (payload, event) =>
+          this.#prepareCurrentPayload(this.#definition.history.apply(payload, event)),
         invert: (event, before, after) => this.#definition.history.invert(
           event,
           before,
@@ -206,6 +244,9 @@ export class SyncCoordinator<T, E> {
 
       if ((observed?.revision ?? null) !== this.#local!.lastSyncedRemoteRevision) {
         if (this.#hasLocalChanges()) {
+          if (await this.#confirmEquivalentRemoteMigration()) {
+            return "unchanged";
+          }
           await this.#recordConflict(toObservedRemoteVersion(observed));
           throw new SyncConflictPendingError(observed?.revision ?? null);
         }
@@ -246,6 +287,9 @@ export class SyncCoordinator<T, E> {
 
       await this.#settleAndDispatch("pull");
       if (this.#hasLocalChanges()) {
+        if (await this.#confirmEquivalentRemoteMigration()) {
+          return "unchanged";
+        }
         await this.#recordConflict(toObservedRemoteVersion(remote));
         return "conflict";
       }
@@ -304,6 +348,9 @@ export class SyncCoordinator<T, E> {
     }
 
     if (remoteRevision === this.#local!.lastSyncedRemoteRevision) {
+      if (this.#hasOnlyMigrationChanges()) {
+        return this.publishMigrationIfSafe();
+      }
       if (this.#needsSyncedRemoteTimestampBackfill(observed)) {
         return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
           await this.#backfillSyncedRemoteUpdatedAt(observed);
@@ -315,6 +362,15 @@ export class SyncCoordinator<T, E> {
 
     await this.#settleAndDispatch("remote-change");
     if (this.#hasLocalChanges()) {
+      if (this.#hasOnlyMigrationChanges()) {
+        return this.#operationGate.runCloud(async (): Promise<SyncActionResult> => {
+          if (await this.#confirmEquivalentRemoteMigration()) {
+            return "unchanged";
+          }
+          await this.#recordConflict(toObservedRemoteVersion(observed));
+          return "conflict";
+        });
+      }
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
         await this.#recordConflict(toObservedRemoteVersion(observed));
         return "conflict";
@@ -326,6 +382,33 @@ export class SyncCoordinator<T, E> {
 
   close(): void {
     this.#localStore.close();
+  }
+
+  /**
+   * Best-effort automatic publication for a pure local schema migration. It
+   * never settles UI state and therefore stops as soon as business edits exist.
+   */
+  async publishMigrationIfSafe(): Promise<SyncActionResult> {
+    this.#assertInitialized();
+    if (!this.#hasOnlyMigrationChanges()) {
+      return "unchanged";
+    }
+
+    return this.#operationGate.runCloud(async () => {
+      let observed = await this.#remoteRepository.readRevision();
+      observed = await this.#reconcilePendingUpload(observed);
+      if (!this.#hasOnlyMigrationChanges()) {
+        return "unchanged";
+      }
+      if ((observed?.revision ?? null) !== this.#local!.lastSyncedRemoteRevision) {
+        if (await this.#confirmEquivalentRemoteMigration()) {
+          return "unchanged";
+        }
+        await this.#recordConflict(toObservedRemoteVersion(observed));
+        return "conflict";
+      }
+      return this.#pushInsideGate(false);
+    });
   }
 
   async #saveCurrentInsideGate(): Promise<SyncActionResult> {
@@ -341,6 +424,14 @@ export class SyncCoordinator<T, E> {
       contentHash,
       localRevision: nextLocalRevision,
       localSavedAt: this.#now().toISOString(),
+      migration: local.migration
+        ? {
+            ...local.migration,
+            businessChanged:
+              local.migration.businessChanged
+              || contentHash !== local.migration.migratedContentHash,
+          }
+        : null,
     }));
     this.history.updateBaseline(payload);
     return "saved";
@@ -376,6 +467,12 @@ export class SyncCoordinator<T, E> {
       return "uploaded";
     } catch (error) {
       if (error instanceof RemoteModuleConflictError) {
+        if (
+          this.#hasOnlyMigrationChanges()
+          && await this.#confirmEquivalentRemoteMigration()
+        ) {
+          return "unchanged";
+        }
         await this.#recordConflict({
           revision: error.actualRevision,
           updatedAt: error.actualUpdatedAt,
@@ -400,6 +497,9 @@ export class SyncCoordinator<T, E> {
     }
 
     if ((observed?.revision ?? null) !== this.#local!.lastSyncedRemoteRevision) {
+      if (this.#hasOnlyMigrationChanges()) {
+        return observed;
+      }
       await this.#recordConflict(toObservedRemoteVersion(observed));
       throw new SyncConflictPendingError(observed?.revision ?? null);
     }
@@ -428,15 +528,18 @@ export class SyncCoordinator<T, E> {
       lastSyncedRemoteUpdatedAt: remote.updatedAt ?? pending.updatedAt,
       pendingUpload: null,
       conflict: null,
+      migration: null,
     }));
   }
 
   async #pullInsideGate(): Promise<SyncActionResult> {
     const remote = await this.#remoteRepository.pull();
-    const payload = this.#preparePayload(remote?.data ?? this.#definition.createEmpty());
-    const contentHash = await this.#hashPayload(payload);
+    const prepared = this.#preparePayloadWithMigration(
+      remote?.data ?? this.#definition.createEmpty(),
+    );
+    const contentHash = await this.#hashPayload(prepared.payload);
     await this.#writeLocal((_local, nextLocalRevision) => ({
-      payload,
+      payload: prepared.payload,
       contentHash,
       localRevision: nextLocalRevision,
       localSavedAt: this.#now().toISOString(),
@@ -445,8 +548,11 @@ export class SyncCoordinator<T, E> {
       lastSyncedRemoteUpdatedAt: remote?.updatedAt ?? null,
       pendingUpload: null,
       conflict: null,
+      migration: prepared.migrated
+        ? this.#createPersistedMigration(prepared, contentHash, false)
+        : null,
     }));
-    this.#history = this.#createHistory(payload);
+    this.#history = this.#createHistory(prepared.payload);
     this.#hooks.reload();
     return "reloaded";
   }
@@ -518,14 +624,136 @@ export class SyncCoordinator<T, E> {
   }
 
   #hasLocalChanges(): boolean {
-    return this.history.dirty || this.#local!.contentHash !== this.#local!.lastSyncedContentHash;
+    return this.#hasBusinessChanges() || this.#local!.migration !== null;
   }
 
-  #preparePayload(value: unknown): T {
+  #hasBusinessChanges(): boolean {
+    if (this.history.dirty) {
+      return true;
+    }
+    const migration = this.#local!.migration;
+    if (migration) {
+      return migration.businessChanged
+        || this.#local!.contentHash !== migration.migratedContentHash;
+    }
+    return this.#local!.contentHash !== this.#local!.lastSyncedContentHash;
+  }
+
+  #hasOnlyMigrationChanges(): boolean {
+    return this.#local!.migration !== null
+      && !this.#hasBusinessChanges()
+      && this.#local!.conflict === null;
+  }
+
+  #prepareCurrentPayload(value: unknown): T {
     const payload = structuredClone(this.#definition.validate(value));
     this.#definition.validate(structuredClone(payload));
     this.#getContentKey(payload);
     return payload;
+  }
+
+  #preparePayloadWithMigration(value: unknown): PreparedPayload<T> {
+    const policy = this.#definition.migration;
+    if (!policy) {
+      return {
+        payload: this.#prepareCurrentPayload(value),
+        migrated: false,
+        fromVersion: null,
+        toVersion: null,
+      };
+    }
+
+    let current = structuredClone(value);
+    const fromVersion = this.#readSchemaVersion(current);
+    if (fromVersion > policy.currentVersion) {
+      throw new UnsupportedModuleSchemaVersionError(
+        fromVersion,
+        policy.currentVersion,
+      );
+    }
+
+    let version = fromVersion;
+    while (version < policy.currentVersion) {
+      const migrated = policy.migrate(structuredClone(current), version);
+      current = structuredClone(migrated);
+      const nextVersion = this.#readSchemaVersion(current);
+      if (nextVersion !== version + 1) {
+        throw new ModuleMigrationError(
+          `Migration from schema version ${version} must produce version ${version + 1}.`,
+        );
+      }
+      version = nextVersion;
+    }
+
+    return {
+      payload: this.#prepareCurrentPayload(current),
+      migrated: fromVersion !== policy.currentVersion,
+      fromVersion,
+      toVersion: policy.currentVersion,
+    };
+  }
+
+  #readSchemaVersion(value: unknown): number {
+    const policy = this.#definition.migration!;
+    const version = policy.readVersion(structuredClone(value));
+    if (!Number.isSafeInteger(version) || version < 1) {
+      throw new ModuleMigrationError(
+        "ModuleMigrationPolicy.readVersion must return a positive safe integer.",
+      );
+    }
+    return version;
+  }
+
+  #createPersistedMigration(
+    prepared: PreparedPayload<T>,
+    migratedContentHash: string,
+    businessChanged: boolean,
+  ): PersistedMigration {
+    if (
+      !prepared.migrated
+      || prepared.fromVersion === null
+      || prepared.toVersion === null
+    ) {
+      throw new ModuleMigrationError("Cannot persist migration metadata for an unchanged payload.");
+    }
+    return {
+      fromVersion: prepared.fromVersion,
+      toVersion: prepared.toVersion,
+      migratedContentHash,
+      businessChanged,
+    };
+  }
+
+  async #confirmEquivalentRemoteMigration(): Promise<boolean> {
+    if (!this.#hasOnlyMigrationChanges()) {
+      return false;
+    }
+
+    const remote = await this.#remoteRepository.pull();
+    const prepared = this.#preparePayloadWithMigration(
+      remote?.data ?? this.#definition.createEmpty(),
+    );
+    // The cloud must already contain the current schema. If it is also old,
+    // another device has not actually published the format upgrade yet.
+    if (prepared.migrated) {
+      return false;
+    }
+    const remoteHash = await this.#hashPayload(prepared.payload);
+    if (remoteHash !== this.#local!.contentHash) {
+      return false;
+    }
+
+    await this.#writeLocal((local, nextLocalRevision) => ({
+      ...local,
+      localRevision: nextLocalRevision,
+      lastSyncedContentHash: local.contentHash,
+      lastSyncedRemoteRevision: remote?.revision ?? null,
+      lastSyncedRemoteUpdatedAt: remote?.updatedAt ?? null,
+      pendingUpload: null,
+      conflict: null,
+      migration: null,
+    }));
+    return true;
   }
 
   #getContentKey(payload: T): string {

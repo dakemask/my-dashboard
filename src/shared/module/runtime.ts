@@ -214,6 +214,10 @@ class DefaultModuleRuntime<TPayload, TEvent>
     return this.#enqueue((coordinator) => coordinator.handleObservedRemoteRevision(revision));
   }
 
+  publishMigrationIfSafe(): Promise<SyncActionResult> {
+    return this.#enqueue((coordinator) => coordinator.publishMigrationIfSafe());
+  }
+
   getSnapshot(): SyncCoordinatorSnapshot {
     return this.#requireReadyCoordinator().getSnapshot();
   }
@@ -457,6 +461,16 @@ export async function startModuleRuntime<TPayload, TEvent>(
     }
     if (environment.autoStartPolling !== false) {
       poller.start();
+    }
+    const snapshot = coordinator.getSnapshot();
+    if (
+      snapshot.migrationChangedSinceSync
+      && !snapshot.businessChangedSinceSync
+      && snapshot.conflict === null
+    ) {
+      pageWindow.setTimeout(() => {
+        void createdRuntime.publishMigrationIfSafe().catch(() => undefined);
+      }, 0);
     }
     return { status: "ready", initialPayload, runtime: createdRuntime };
   } catch (error) {

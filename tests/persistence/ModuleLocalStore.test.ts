@@ -26,6 +26,7 @@ function envelope(
     lastSyncedRemoteUpdatedAt: null,
     pendingUpload: null,
     conflict: null,
+    migration: null,
     ...overrides,
   };
 }
@@ -75,6 +76,7 @@ describe("ModuleLocalStore", () => {
       lastSyncedRemoteUpdatedAt: null,
       pendingUpload: null,
       conflict: null,
+      migration: null,
     };
 
     await store.initialize(record);
@@ -156,7 +158,7 @@ describe("ModuleLocalStore", () => {
     expect(await store.load()).toEqual(envelope("A", revisionA));
   });
 
-  it("retains pending upload and conflict information after reopening", async () => {
+  it("retains pending upload, conflict, and migration information after reopening", async () => {
     const moduleId = "resume-state";
     const firstRevision = "00000000-0000-4000-8000-000000000001";
     const stored = envelope("A", firstRevision, {
@@ -170,6 +172,12 @@ describe("ModuleLocalStore", () => {
         observedRemoteRevision: null,
         observedRemoteUpdatedAt: null,
         detectedAt: "2026-07-10T09:01:00.000Z",
+      },
+      migration: {
+        fromVersion: 1,
+        toVersion: 2,
+        migratedContentHash: "hash-A",
+        businessChanged: true,
       },
     });
     const beforeRefresh = new ModuleLocalStore<Payload>(moduleId, {

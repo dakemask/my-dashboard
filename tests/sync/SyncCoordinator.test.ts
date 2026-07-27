@@ -655,3 +655,256 @@ describe("SyncCoordinator", () => {
     });
   });
 });
+
+interface VersionOneData {
+  readonly schemaVersion: 1;
+  readonly value: string;
+}
+
+interface VersionTwoData {
+  readonly schemaVersion: 2;
+  readonly value: string;
+  readonly normalized: string;
+}
+
+class VersionedRemote implements RemoteModulePort<VersionTwoData> {
+  readonly moduleId: string;
+  revision: string | null = "cloud-v1";
+  updatedAt = "2026-07-10T00:00:00.000Z";
+  data: unknown = { schemaVersion: 1, value: "same" } satisfies VersionOneData;
+  pushCount = 0;
+
+  constructor(moduleId: string) {
+    this.moduleId = moduleId;
+  }
+
+  async readRevision(): Promise<RemoteRevisionSnapshot | null> {
+    return this.revision
+      ? {
+          revision: this.revision,
+          updatedAt: this.updatedAt,
+          managedFiles: ["data.json"],
+          commitSha: this.revision,
+        }
+      : null;
+  }
+
+  async pull(): Promise<RemoteModuleSnapshot<VersionTwoData> | null> {
+    const revision = await this.readRevision();
+    return revision
+      ? {
+          ...revision,
+          data: structuredClone(this.data) as VersionTwoData,
+          files: new Map(),
+        }
+      : null;
+  }
+
+  async push(
+    data: VersionTwoData,
+    options: RemoteModulePushOptions,
+  ): Promise<RemoteModulePushResult> {
+    this.pushCount += 1;
+    if (this.revision !== options.expectedRevision) {
+      throw new RemoteModuleConflictError(
+        options.expectedRevision,
+        this.revision,
+        this.updatedAt,
+      );
+    }
+    this.revision = options.nextRevision;
+    this.updatedAt = options.updatedAt ?? this.updatedAt;
+    this.data = structuredClone(data);
+    return {
+      ...(await this.readRevision())!,
+      status: "committed",
+    };
+  }
+
+  async overwrite(
+    data: VersionTwoData,
+    options: RemoteModuleOverwriteOptions,
+  ): Promise<RemoteModulePushResult> {
+    this.revision = options.nextRevision;
+    this.updatedAt = options.updatedAt ?? this.updatedAt;
+    this.data = structuredClone(data);
+    return {
+      ...(await this.readRevision())!,
+      status: "committed",
+    };
+  }
+}
+
+function versionedDefinition(
+  moduleId: string,
+): ModuleDefinition<VersionTwoData, TestEvent> {
+  return {
+    moduleId,
+    createEmpty: () => ({
+      schemaVersion: 2,
+      value: "empty",
+      normalized: "EMPTY",
+    }),
+    migration: {
+      currentVersion: 2,
+      readVersion(value: unknown): number {
+        return (value as { schemaVersion?: unknown }).schemaVersion as number;
+      },
+      migrate(value: unknown, fromVersion: number): unknown {
+        if (fromVersion !== 1) {
+          throw new TypeError("unsupported source schema");
+        }
+        const source = value as VersionOneData;
+        return {
+          schemaVersion: 2,
+          value: source.value,
+          normalized: source.value.toUpperCase(),
+        } satisfies VersionTwoData;
+      },
+    },
+    validate(value: unknown): VersionTwoData {
+      const candidate = value as Partial<VersionTwoData>;
+      if (
+        candidate?.schemaVersion !== 2
+        || typeof candidate.value !== "string"
+        || typeof candidate.normalized !== "string"
+      ) {
+        throw new TypeError("invalid current schema");
+      }
+      return candidate as VersionTwoData;
+    },
+    contentKey: jsonContentKey,
+    history: {
+      capacity: 10,
+      apply: (payload, event) => ({
+        ...payload,
+        value: event.value,
+        normalized: event.value.toUpperCase(),
+      }),
+      invert: (_event, before) => setValue(before.value),
+    },
+    encode: (data) => new Map([["data.json", JSON.stringify(data)]]),
+    decode: (files) => JSON.parse(files.get("data.json") ?? "null") as unknown,
+  };
+}
+
+async function createVersionedHarness(
+  moduleId: string,
+  options: {
+    readonly lastSyncedContentHash?: string;
+    readonly remote?: VersionedRemote;
+  } = {},
+) {
+  const indexedDB = new IDBFactory();
+  const localStore = new ModuleLocalStore<VersionTwoData>(moduleId, { indexedDB });
+  const oldPayload = {
+    schemaVersion: 1,
+    value: "same",
+  } satisfies VersionOneData;
+  const oldHash = await hashContentKey(jsonContentKey(oldPayload));
+  await localStore.initialize({
+    ...createModuleLocalEnvelope(
+      oldPayload as unknown as VersionTwoData,
+      oldHash,
+      "00000000-0000-4000-8000-000000000040",
+    ),
+    lastSyncedContentHash: options.lastSyncedContentHash ?? oldHash,
+    lastSyncedRemoteRevision: "cloud-v1",
+    lastSyncedRemoteUpdatedAt: "2026-07-10T00:00:00.000Z",
+  });
+  const remote = options.remote ?? new VersionedRemote(moduleId);
+  const coordinator = new SyncCoordinator({
+    definition: versionedDefinition(moduleId),
+    localStore,
+    remoteRepository: remote,
+    operationGate: new OperationGate(),
+    hooks: {
+      settle: () => null,
+      project: () => undefined,
+      reload: () => undefined,
+    },
+    now: () => new Date("2026-07-10T01:00:00.000Z"),
+    createUuid: () => "cloud-v2-from-this-device",
+  });
+  await coordinator.initialize();
+  return { coordinator, localStore, remote };
+}
+
+describe("SyncCoordinator schema migration", () => {
+  it("atomically migrates a synced local payload and publishes the current schema", async () => {
+    const { coordinator, localStore, remote } = await createVersionedHarness(
+      "module-schema-publish",
+    );
+
+    expect(coordinator.history.current).toEqual({
+      schemaVersion: 2,
+      value: "same",
+      normalized: "SAME",
+    });
+    expect(coordinator.getSnapshot()).toMatchObject({
+      localChangedSinceSync: true,
+      businessChangedSinceSync: false,
+      migrationChangedSinceSync: true,
+    });
+    await expect(localStore.load()).resolves.toMatchObject({
+      payload: { schemaVersion: 2 },
+      migration: {
+        fromVersion: 1,
+        toVersion: 2,
+        businessChanged: false,
+      },
+    });
+
+    await expect(
+      coordinator.handleObservedRemoteRevision(await remote.readRevision()),
+    ).resolves.toBe("uploaded");
+    expect(remote.pushCount).toBe(1);
+    expect(remote.data).toEqual({
+      schemaVersion: 2,
+      value: "same",
+      normalized: "SAME",
+    });
+    expect(coordinator.getSnapshot()).toMatchObject({
+      localChangedSinceSync: false,
+      businessChangedSinceSync: false,
+      migrationChangedSinceSync: false,
+    });
+  });
+
+  it("directly confirms sync when another device published equivalent migrated data", async () => {
+    const { coordinator, remote } = await createVersionedHarness(
+      "module-schema-equivalent",
+    );
+    remote.revision = "cloud-v2-from-other-device";
+    remote.data = {
+      schemaVersion: 2,
+      value: "same",
+      normalized: "SAME",
+    } satisfies VersionTwoData;
+
+    await expect(coordinator.publishMigrationIfSafe()).resolves.toBe("unchanged");
+    expect(remote.pushCount).toBe(0);
+    expect(coordinator.getSnapshot()).toMatchObject({
+      lastSyncedRemoteRevision: "cloud-v2-from-other-device",
+      localChangedSinceSync: false,
+      businessChangedSinceSync: false,
+      migrationChangedSinceSync: false,
+      conflict: null,
+    });
+  });
+
+  it("does not automatically publish when business changes predate the migration", async () => {
+    const { coordinator, remote } = await createVersionedHarness(
+      "module-schema-business-change",
+      { lastSyncedContentHash: "older-synced-content" },
+    );
+
+    expect(coordinator.getSnapshot()).toMatchObject({
+      localChangedSinceSync: true,
+      businessChangedSinceSync: true,
+      migrationChangedSinceSync: true,
+    });
+    await expect(coordinator.publishMigrationIfSafe()).resolves.toBe("unchanged");
+    expect(remote.pushCount).toBe(0);
+  });
+});

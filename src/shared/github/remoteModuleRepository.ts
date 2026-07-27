@@ -86,11 +86,14 @@ export class RemoteModuleRepository<T> {
     );
 
     const stableFiles = new Map([...files].sort(([left], [right]) => comparePaths(left, right)));
-    const data = this.#codec.validate(await this.#codec.decode(stableFiles));
+    const decoded = await this.#codec.decode(stableFiles);
+    const data = this.#codec.migration
+      ? decoded
+      : this.#codec.validate(decoded);
 
     return {
       ...toRevisionSnapshot(head.revision, head.snapshot.commitSha),
-      data,
+      data: data as T,
       files: stableFiles,
     };
   }

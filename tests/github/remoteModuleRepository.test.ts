@@ -101,6 +101,35 @@ describe("RemoteModuleRepository", () => {
     await expect(repository.pull()).rejects.toThrow("decoded payload rejected");
   });
 
+  it("returns legacy decoded data to a migration-aware runtime before current validation", async () => {
+    const github = new FakeGitHub();
+    github.seedModule("test-module", revision("r1", ["data.txt"]), { "data.txt": "legacy" });
+    const client = new GitHubGitDataClient({
+      owner: "alice",
+      token: "secret-token",
+      fetch: github.fetch,
+      onCredentialsInvalid: () => undefined,
+    });
+    const validate = vi.fn(() => {
+      throw new TypeError("current validator must run after migration");
+    });
+    const repository = new RemoteModuleRepository(client, {
+      ...codec,
+      migration: {
+        currentVersion: 2,
+        readVersion: () => 1,
+        migrate: (value: unknown) => value,
+      },
+      validate,
+      decode: () => ({ schemaVersion: 1 }),
+    });
+
+    await expect(repository.pull()).resolves.toMatchObject({
+      data: { schemaVersion: 1 },
+    });
+    expect(validate).not.toHaveBeenCalled();
+  });
+
   it("uses one commit, preserves unknown files, and deletes only removed managed files", async () => {
     const github = new FakeGitHub();
     github.seedModule("test-module", revision("r1", ["keep.json", "remove.json"]), {

@@ -56,8 +56,10 @@ interface DraftCommit {
 
 const EMPTY_SNAPSHOT: ModuleRuntimeSnapshot = {
   initialized: false,
-  sessionDirty: false,
-  localChangedSinceSync: false,
+      sessionDirty: false,
+      localChangedSinceSync: false,
+      businessChangedSinceSync: false,
+      migrationChangedSinceSync: false,
   localSavedAt: null,
   knownRemoteRevision: null,
   knownRemoteUpdatedAt: null,

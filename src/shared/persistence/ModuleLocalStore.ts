@@ -62,7 +62,8 @@ function validateRevision(revision: string, label: string): void {
 
 /**
  * One database and one atomically replaced record per module. There are no
- * business schema versions or cross-module transactions in this boundary.
+ * cross-module transactions in this boundary. Business migration rules stay in
+ * the module definition; this store only persists their runtime state.
  */
 export class ModuleLocalStore<T> {
   readonly moduleId: string;
@@ -276,5 +277,6 @@ function normalizeEnvelope<T>(stored: ModuleLocalEnvelope<T>): ModuleLocalEnvelo
           observedRemoteUpdatedAt: stored.conflict.observedRemoteUpdatedAt ?? null,
         }
       : null,
+    migration: stored.migration ?? null,
   };
 }

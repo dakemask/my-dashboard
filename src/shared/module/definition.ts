@@ -28,9 +28,27 @@ export function defineModule<TPayload, TEvent>(
       'History capacity must be a positive integer or "unlimited".',
     );
   }
+  const migration = definition.migration;
+  if (migration) {
+    if (
+      !Number.isSafeInteger(migration.currentVersion)
+      || migration.currentVersion < 1
+    ) {
+      throw new RangeError("Migration currentVersion must be a positive safe integer.");
+    }
+    if (
+      typeof migration.readVersion !== "function"
+      || typeof migration.migrate !== "function"
+    ) {
+      throw new TypeError(
+        "A migration policy with readVersion and migrate functions is required.",
+      );
+    }
+  }
   return Object.freeze({
     ...definition,
     history: Object.freeze({ ...history }),
+    ...(migration ? { migration: Object.freeze({ ...migration }) } : {}),
   });
 }
 

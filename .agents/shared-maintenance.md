@@ -17,6 +17,7 @@ Shared 为所有持久化模块提供统一平台能力：
 - 轮询、同步四象限和持久化冲突；
 - 本地操作阻塞、云端 spinner/遮罩和阻止页面。
 - 上传、拉取、版本状态、冲突确认和同步结果的统一 UI。
+- 模块业务 schema 迁移的统一执行、原子本地落盘和多设备发布协调。
 
 固定平台约定：
 
@@ -35,7 +36,7 @@ Shared 为所有持久化模块提供统一平台能力：
 
 ### 1.2 非职责
 
-Shared 不定义模块业务 payload、event、快捷键、页面布局、本地自动保存或保存重试；不提供业务 `schemaVersion`、旧格式迁移、自动冲突合并、退出登录或真实数据迁移。它也不替模块注册或清理业务 UI/键盘监听。模块必须通过公共门禁接口处理同步前的业务状态，Shared 不理解或猜测门禁内部规则。
+Shared 不定义模块业务 payload、event、快捷键、页面布局、本地自动保存或保存重试；不定义业务 `schemaVersion` 或具体旧格式迁移规则，不提供自动冲突合并、退出登录或真实数据迁移。它只执行模块声明的确定性逐版迁移并管理迁移同步状态，不理解或猜测字段语义。它也不替模块注册或清理业务 UI/键盘监听。模块必须通过公共门禁接口处理同步前的业务状态，Shared 不理解或猜测门禁内部规则。
 
 改变这些边界不是内部重构，必须先形成新的用户决策和公共契约。
 
@@ -121,8 +122,9 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 | `lastSyncedRemoteUpdatedAt` | 该云端 revision 的时间 |
 | `pendingUpload` | 尚未确认的上传意图，含本地 revision/hash、下一远端 revision 和时间 |
 | `conflict` | 观察到的远端 revision/时间和冲突发现时间 |
+| `migration` | 本机已迁移但云端尚未确认的起止版本、迁移后 hash 和业务变化标记 |
 
-数据库版本保持 v1。旧记录缺少 `localSavedAt`、`lastSyncedRemoteUpdatedAt` 或 conflict 的远端时间时，读取为 null，不升级数据库版本。业务 payload 没有 Shared 注入的 schemaVersion，也没有通用迁移分支。
+数据库版本保持 v1。旧记录缺少 `localSavedAt`、`lastSyncedRemoteUpdatedAt`、conflict 的远端时间或 `migration` 时，读取为 null，不升级数据库版本。业务 payload 没有 Shared 注入的 schemaVersion；迁移策略来自模块定义，Shared 只提供通用执行和同步分支。
 
 ### 3.3 远端模块格式
 
@@ -176,6 +178,16 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 双方变化形成冲突时，settle 后的当前完整 payload、content hash、localSavedAt 与 conflict 必须在同一次 CAS 中保存；成功后才把该 payload 标记为本地保存基线。这样刷新不会丢失冲突的本地一侧，但不会推进同步基线。
 
+初始化读取本机 payload 后，Runtime 先用模块 `migration.readVersion` 判断版本。旧
+版本逐级调用 `migrate`，每步必须恰好前进一版，最后才调用当前 `validate`、
+`contentKey`。迁移后的 payload、hash、local revision、保存时间和 migration 状态
+使用一次 CAS 落盘；任一步失败都不覆盖旧记录。旧 schema 的完整性由模块迁移函数
+对源结构负责，当前 schema 仍按存储 content hash 校验。
+
+迁移不推进同步基线。migration 状态记录迁移起止版本、迁移后 hash 以及迁移前后
+是否存在业务修改。普通保存若偏离迁移后 hash，会将业务修改标记永久置为 true，
+直到完成上传或冲突解决。
+
 ### 4.3 GitHub 单 commit 上传
 
 上传只用 Git Data API：
@@ -214,6 +226,13 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 | 是 | 是 | 保存当前本地一侧并建立 conflict |
 
 `localChanged` 同时考虑页面 history dirty 与已保存 payload 相对同步基线的变化。上传必要时先保存；普通 pull 先比较 revision，再在本地干净时替换完整 envelope。`local-wins` 基于最新远端头创建非强制 commit；`cloud-wins` 拉取完整模块并清空旧页面历史。
+
+`localChanged` 内部进一步区分 business 与 migration。只有 migration、没有 business
+或既有 conflict 时，Runtime 启动后自动尝试非强制上传，revision 轮询在远端仍未
+变化时继续重试。另一设备已先上传当前 schema 时，Runtime 拉取远端、按当前 schema
+校验并比较规范化 content hash；相同则使用一次本地 CAS 推进同步基线并清除
+migration/pending，直接确认同步。云端仍需迁移、hash 不同或包含业务修改时不得
+使用此快路径。
 
 所有完成路径必须一致推进 revision 与 updatedAt：上传确认、响应丢失恢复、拉取、冲突观察和同 revision 时间补齐都不能让版本号与时间来自不同远端观察。
 
@@ -267,7 +286,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 6. 冲突不自动选择方向或合并；
 7. gate 成功、失败或 presentation 中途异常都恢复 inert、spinner 和 overlay；
 8. 未知远端文件不删除，main ref 不 force-update；
-9. 损坏 payload 在 validate 边界停止，不猜测修复或迁移；
+9. 损坏 payload 在迁移或 validate 边界停止；只执行模块明确声明的逐版迁移，不猜测修复；
 10. runtime 启动失败逆序释放全部已取得资源；
 11. dispose 后没有 poller、Shared listener、lease、store 或 token 可达链继续存活；
 
@@ -279,7 +298,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 - runtime 属性/方法、启动四状态、SettleReason、ProjectionReason、SyncActionResult、snapshot 字段和 conflict 形态同样属于公共契约。
 - 内部目录、类和算法可以重构，但不能改变公共契约承诺的状态流、失败保证或资源清理。
 - `operationGate.css` 和 `ModuleSyncUi` 的公共 class/加载约定是页面接入契约；改变时必须同步修改所有持久化页面。
-- IndexedDB envelope 或远端文件格式变化必须单独决定兼容策略。当前没有业务 schemaVersion 或通用旧格式迁移，不得悄悄解释旧数据。
+- IndexedDB envelope 或远端文件格式变化必须单独决定兼容策略。业务 schemaVersion 和逐版迁移必须由模块显式声明，不得悄悄解释旧数据。
 - 修改公共边界时，源码、[持久化模块公共契约](./persistent-module-contract.md)、[接入指南](./new-persistent-module-guide.md)、受影响模块文档和测试必须在同一次任务更新。
 
 ### 6.2 验证范围
@@ -300,6 +319,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 - 每模块隔离、单记录 CAS、事务失败不推进、pending/conflict 跨刷新。
 - v1 旧记录缺失三个时间字段时读取为 null。
+- v1 旧记录缺失 migration 时读取为 null；迁移 CAS 失败不覆盖原 payload。
 - 冲突时 payload/hash/conflict 同事务保存并正确更新本地基线。
 
 #### GitHub
@@ -311,6 +331,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 #### 同步与轮询
 
 - 四象限、两个覆盖方向、pending 恢复、普通 pull 不制造假冲突。
+- 纯迁移自动上传、轮询重试、竞争设备等价确认，以及迁移伴随业务修改时保留冲突。
 - 保存/上传/拉取/冲突/时间补齐正确推进 revision 与 updatedAt。
 - 前后台间隔、visibility 重排、不重叠、AbortSignal、stop 等待和网络失败静默。
 

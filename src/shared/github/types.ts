@@ -42,9 +42,15 @@ export interface GitHubCreateTreeEntry {
 
 export interface RemoteModuleCodec<T> {
   readonly moduleId: string;
+  /** Present only when the module runtime must accept pre-validation legacy data. */
+  readonly migration?: unknown;
   validate(value: unknown): T;
   encode(data: T): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
-  decode(files: ReadonlyMap<string, string>): T | Promise<T>;
+  /**
+   * Parses managed files without assuming the current business schema. The
+   * runtime migrates and validates the returned value before exposing it.
+   */
+  decode(files: ReadonlyMap<string, string>): unknown | Promise<unknown>;
 }
 
 export interface RemoteModuleRevision {
@@ -57,7 +63,7 @@ export interface RemoteRevisionSnapshot extends RemoteModuleRevision {
   commitSha: string;
 }
 
-export interface RemoteModuleSnapshot<T> extends RemoteRevisionSnapshot {
+export interface RemoteModuleSnapshot<T = unknown> extends RemoteRevisionSnapshot {
   data: T;
   files: ReadonlyMap<string, string>;
 }

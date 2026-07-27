@@ -9,6 +9,15 @@ import type {
 import type { PersistedConflict, PendingUpload } from "../persistence";
 import type { ModuleHistoryPolicy } from "../history";
 
+export interface ModuleMigrationPolicy {
+  /** The schema version produced and accepted by the current module code. */
+  readonly currentVersion: number;
+  /** Reads a schema version without assuming that the payload already has the current shape. */
+  readVersion(value: unknown): number;
+  /** Migrates exactly one version forward. The runtime repeats it until currentVersion. */
+  migrate(value: unknown, fromVersion: number): unknown;
+}
+
 export interface ModuleDefinition<TPayload, TEvent>
   extends RemoteModuleCodec<TPayload> {
   createEmpty(): TPayload;
@@ -16,6 +25,8 @@ export interface ModuleDefinition<TPayload, TEvent>
   contentKey(payload: TPayload): string;
   /** Defines the module-owned, page-lifetime event history. */
   readonly history: ModuleHistoryPolicy<TPayload, TEvent>;
+  /** Optional module-owned business schema migration policy. */
+  readonly migration?: ModuleMigrationPolicy;
 }
 
 export interface RemoteModulePort<T> {
@@ -47,6 +58,8 @@ export interface SyncCoordinatorSnapshot {
   initialized: boolean;
   sessionDirty: boolean;
   localChangedSinceSync: boolean;
+  businessChangedSinceSync: boolean;
+  migrationChangedSinceSync: boolean;
   localSavedAt: string | null;
   knownRemoteRevision: string | null;
   knownRemoteUpdatedAt: string | null;
@@ -75,5 +88,24 @@ export class LocalDataIntegrityError extends Error {
   constructor() {
     super("The IndexedDB payload does not match its stored content hash.");
     this.name = "LocalDataIntegrityError";
+  }
+}
+
+export class UnsupportedModuleSchemaVersionError extends Error {
+  constructor(
+    readonly observedVersion: number,
+    readonly currentVersion: number,
+  ) {
+    super(
+      `Module payload schema version ${observedVersion} is newer than supported version ${currentVersion}.`,
+    );
+    this.name = "UnsupportedModuleSchemaVersionError";
+  }
+}
+
+export class ModuleMigrationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ModuleMigrationError";
   }
 }

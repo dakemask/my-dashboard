@@ -148,6 +148,58 @@ codec 只管理模块业务文件：
 - `decode(encode(payload))` 必须恢复等价 payload；
 - 删除、重命名和空目录等情况必须在文件映射中有明确结果。
 
+### 需要 schema 演进时
+
+只有确实需要长期演进格式的模块才添加业务版本。版本属于 payload/远端业务格式，
+不是 Shared envelope 字段。模块定义提供逐版迁移，例如：
+
+```ts
+interface NotesPayloadV1 {
+  readonly schemaVersion: 1;
+  readonly notes: readonly string[];
+}
+
+interface NotesPayload {
+  readonly schemaVersion: 2;
+  readonly notes: readonly Note[];
+}
+
+export const notesDefinition = defineJsonModule<NotesPayload, NotesEvent>({
+  moduleId: "notes",
+  createEmpty: () => ({ schemaVersion: 2, notes: [] }),
+  migration: {
+    currentVersion: 2,
+    readVersion(value) {
+      const version = (value as { schemaVersion?: unknown }).schemaVersion;
+      if (!Number.isSafeInteger(version)) throw new TypeError("Invalid notes schema.");
+      return version as number;
+    },
+    migrate(value, fromVersion) {
+      if (fromVersion !== 1) throw new TypeError("Unsupported notes schema.");
+      const old = validateNotesPayloadV1(value);
+      return {
+        schemaVersion: 2,
+        notes: old.notes.map((text, index) => ({ id: `legacy-${index}`, text })),
+      };
+    },
+  },
+  validate: validateNotesPayload,
+  history: notesHistory,
+  encode: (payload) => new Map([
+    ["notes.json", `${JSON.stringify(payload, null, 2)}\n`],
+  ]),
+  // 只解析原始文本；Runtime 会先迁移，再调用当前 validate。
+  decode: (files) => JSON.parse(files.get("notes.json") ?? ""),
+});
+```
+
+每个 `migrate(value, fromVersion)` 必须完整验证对应源版本并只前进一版。不要在一个
+函数中跳过中间版本，也不要让 `decode` 提前调用只接受当前版本的 validator。
+
+Runtime 会先原子迁移各设备的本地 IndexedDB，但不推进同步基线。纯迁移会自动
+竞争非强制上传；其他设备若发现云端已是当前 schema 且迁移后内容相同，会直接
+确认同步。迁移前已有业务修改或冲突时继续使用普通四象限和冲突流程。
+
 ## 第三步：实现实时交互边界
 
 在创建 runtime 之前准备完整 hooks。`settle` 处理公共命令到来时仍未结束的页面操作，`project` 处理完整 payload 到来后的页面重建。

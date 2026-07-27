@@ -11,6 +11,15 @@ export interface PersistedConflict {
   readonly detectedAt: string;
 }
 
+export interface PersistedMigration {
+  readonly fromVersion: number;
+  readonly toVersion: number;
+  /** Hash of the current-version payload immediately after migration. */
+  readonly migratedContentHash: string;
+  /** True when unsynchronized business edits existed before or after migration. */
+  readonly businessChanged: boolean;
+}
+
 /** The single record stored for one module. Business data is only `payload`. */
 export interface ModuleLocalEnvelope<T> {
   readonly payload: T;
@@ -22,6 +31,7 @@ export interface ModuleLocalEnvelope<T> {
   readonly lastSyncedRemoteUpdatedAt: string | null;
   readonly pendingUpload: PendingUpload | null;
   readonly conflict: PersistedConflict | null;
+  readonly migration: PersistedMigration | null;
 }
 
 export type ModuleLocalEnvelopeInput<T> = ModuleLocalEnvelope<T>;
@@ -48,5 +58,6 @@ export function createModuleLocalEnvelope<T>(
     lastSyncedRemoteUpdatedAt: null,
     pendingUpload: null,
     conflict: null,
+    migration: null,
   };
 }

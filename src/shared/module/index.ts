@@ -22,6 +22,7 @@ export type {
   SettleReason,
   SyncActionResult,
   SyncCoordinatorSnapshot as ModuleRuntimeSnapshot,
+  ModuleMigrationPolicy,
 } from "../sync";
 export type { PersistedConflict } from "../persistence";
 export {

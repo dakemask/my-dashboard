@@ -10,4 +10,5 @@ export {
   type ModuleLocalEnvelopeInput,
   type PendingUpload,
   type PersistedConflict,
+  type PersistedMigration,
 } from "./types";
