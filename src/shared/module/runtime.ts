@@ -1,4 +1,4 @@
-import { createAuthService, type AuthService } from "../auth";
+import type { AuthService } from "../auth";
 import { ModuleEditorLease, OperationGate } from "../concurrency";
 import {
   GitHubApiError,
@@ -7,9 +7,18 @@ import {
   type GitHubFetch,
   type RemoteRevisionSnapshot,
 } from "../github";
-import { ModuleLocalStore, type PersistedConflict } from "../persistence";
+import {
+  createModuleLocalEnvelope,
+  ModuleLocalStore,
+  type PersistedConflict,
+} from "../persistence";
+import {
+  createDashboardProfileStore,
+  type DashboardProfileStore,
+} from "../profiles";
 import {
   createRevisionPoller,
+  hashContentKey,
   SyncConflictPendingError,
   SyncCoordinator,
   type ConflictResolution,
@@ -19,6 +28,7 @@ import {
   type SettleReason,
   type SyncActionResult,
   type SyncCoordinatorSnapshot,
+  type RemoteModulePort,
 } from "../sync";
 import { DomOperationGatePresentation, renderModuleEditorBlockPage } from "../ui";
 
@@ -48,6 +58,7 @@ export interface StartModuleRuntimeOptions<TPayload, TEvent> {
 /** Platform/test injection. Business modules normally omit this entire argument. */
 export interface ModuleRuntimeEnvironment {
   readonly authService?: AuthService;
+  readonly profileStore?: DashboardProfileStore;
   readonly fetch?: GitHubFetch;
   readonly indexedDB?: IDBFactory;
   readonly lockManager?: LockManager | null;
@@ -62,6 +73,7 @@ export interface ModuleRuntimeEnvironment {
 }
 
 export interface ModuleRuntime<TPayload, TEvent> {
+  readonly mode: "local" | "account";
   readonly state: ModuleRuntimeState;
   readonly current: TPayload;
   readonly canUndo: boolean;
@@ -106,6 +118,7 @@ export class ModuleRuntimeBusyError extends Error {
 class DefaultModuleRuntime<TPayload, TEvent>
   implements ModuleRuntime<TPayload, TEvent> {
   #state: ModuleRuntimeState = "starting";
+  readonly mode: "local" | "account";
   #coordinator: SyncCoordinator<TPayload, TEvent> | null;
   #operationGate: OperationGate | null;
   #lease: ModuleEditorLease | null;
@@ -121,11 +134,13 @@ class DefaultModuleRuntime<TPayload, TEvent>
     coordinator: SyncCoordinator<TPayload, TEvent>,
     operationGate: OperationGate,
     lease: ModuleEditorLease,
+    mode: "local" | "account",
     onSnapshotChange?: (snapshot: SyncCoordinatorSnapshot) => void,
   ) {
     this.#coordinator = coordinator;
     this.#operationGate = operationGate;
     this.#lease = lease;
+    this.mode = mode;
     this.#onSnapshotChange = onSnapshotChange ?? null;
   }
 
@@ -158,12 +173,12 @@ class DefaultModuleRuntime<TPayload, TEvent>
   }
 
   attachLifecycle(options: {
-    poller: RevisionPoller;
-    unsubscribeAuth: () => void;
+    poller?: RevisionPoller;
+    unsubscribeAuth?: () => void;
     removePageHide: () => void;
   }): void {
-    this.#poller = options.poller;
-    this.#unsubscribeAuth = options.unsubscribeAuth;
+    this.#poller = options.poller ?? null;
+    this.#unsubscribeAuth = options.unsubscribeAuth ?? null;
     this.#removePageHide = options.removePageHide;
   }
 
@@ -348,15 +363,24 @@ export async function startModuleRuntime<TPayload, TEvent>(
     pageWindow.location.replace(new URL(import.meta.env.BASE_URL, pageWindow.location.href).href);
   };
 
-  const authService = environment.authService ?? createAuthService();
-  const session = authService.restore();
-  if (!session) {
+  const legacyAuthService = environment.authService;
+  const profileStore = legacyAuthService
+    ? null
+    : environment.profileStore ?? createDashboardProfileStore();
+  const profileContext = profileStore?.getActiveContext() ?? null;
+  const authService = legacyAuthService ?? null;
+  const session = authService?.restore()
+    ?? (profileContext?.mode === "account" ? profileContext.session : null);
+  if (legacyAuthService && !session) {
     notifyAuthenticationRequired();
     return { status: "authentication-required" };
   }
+  const mode: "local" | "account" = session ? "account" : "local";
+  const profileId = legacyAuthService ? undefined : profileContext!.profileId;
 
   const lease = new ModuleEditorLease(options.definition.moduleId, {
     lockManager: environment.lockManager,
+    profileId,
   });
   const leaseStatus = await lease.acquire();
   if (leaseStatus === "blocked" || leaseStatus === "unsupported") {
@@ -380,20 +404,48 @@ export async function startModuleRuntime<TPayload, TEvent>(
     const operationGate = new OperationGate(presentation);
     const localStore = new ModuleLocalStore<TPayload>(options.definition.moduleId, {
       indexedDB: environment.indexedDB,
+      profileId,
     });
     cleanupStack.push(() => localStore.close());
     cleanupStack.push(() => operationGate.whenIdle());
+    if (mode === "local" && await localStore.load() === null) {
+      const payload = options.definition.validate(options.definition.createEmpty());
+      const contentHash = await hashContentKey(options.definition.contentKey(payload));
+      const createdAt = (environment.now?.() ?? new Date()).toISOString();
+      await localStore.initialize({
+        ...createModuleLocalEnvelope(
+          payload,
+          contentHash,
+          environment.createUuid?.(),
+          options.definition.migration?.currentVersion ?? null,
+        ),
+        localSavedAt: createdAt,
+      });
+    }
 
     const request = environment.fetch ?? globalThis.fetch.bind(globalThis);
-    const client = new GitHubGitDataClient({
-      owner: session.repository.owner,
-      token: session.credentials.token,
-      fetch: request,
-      onCredentialsInvalid: () => authService.invalidate(),
-    });
-    const repository = new RemoteModuleRepository(client, options.definition, {
-      now: environment.now,
-    });
+    const repository: RemoteModulePort<TPayload> = session
+      ? new RemoteModuleRepository(
+          new GitHubGitDataClient({
+            owner: session.repository.owner,
+            token: session.credentials.token,
+            fetch: request,
+            onCredentialsInvalid: () => {
+              if (authService) {
+                authService.invalidate();
+              } else if (profileStore && profileId) {
+                profileStore.removeAccount(profileId);
+                void Promise.resolve().then(() => runtime?.dispose()).then(
+                  notifyAuthenticationRequired,
+                  notifyAuthenticationRequired,
+                ).catch(() => undefined);
+              }
+            },
+          }),
+          options.definition,
+          { now: environment.now },
+        )
+      : createLocalRemotePort(options.definition.moduleId);
     const coordinator = new SyncCoordinator({
       definition: options.definition,
       localStore,
@@ -412,6 +464,7 @@ export async function startModuleRuntime<TPayload, TEvent>(
       coordinator,
       operationGate,
       lease,
+      mode,
       options.hooks.onSnapshotChange,
     );
     runtime = createdRuntime;
@@ -419,27 +472,41 @@ export async function startModuleRuntime<TPayload, TEvent>(
     const initialPayload = await coordinator.initialize();
     createdRuntime.markReady();
 
-    const poller = createRevisionPoller({
-      document: pageDocument,
-      window: pageWindow,
-      random: environment.random,
-      readRevision: (signal) => repository.readRevision(signal),
-      onRevision: async (revision) => {
-        await createdRuntime.observeRemoteRevision(revision);
-      },
-      isAuthenticationError: (error) => error instanceof GitHubApiError && error.status === 401,
-      onAuthenticationError: () => authService.invalidate(),
-    });
-    cleanupStack.push(() => poller.stop());
-    const unsubscribeAuth = authService.subscribe((state) => {
-      if (state.status === "anonymous") {
-        void createdRuntime.dispose().then(
-          notifyAuthenticationRequired,
-          notifyAuthenticationRequired,
-        ).catch(() => undefined);
-      }
-    });
-    cleanupStack.push(unsubscribeAuth);
+    const poller = mode === "account"
+      ? createRevisionPoller({
+          document: pageDocument,
+          window: pageWindow,
+          random: environment.random,
+          readRevision: (signal) => repository.readRevision(signal),
+          onRevision: async (revision) => {
+            await createdRuntime.observeRemoteRevision(revision);
+          },
+          isAuthenticationError: (error) => error instanceof GitHubApiError && error.status === 401,
+          onAuthenticationError: () => {
+            if (authService) {
+              authService.invalidate();
+            } else if (profileStore && profileId) {
+              profileStore.removeAccount(profileId);
+              void createdRuntime.dispose().then(
+                notifyAuthenticationRequired,
+                notifyAuthenticationRequired,
+              ).catch(() => undefined);
+            }
+          },
+        })
+      : null;
+    if (poller) cleanupStack.push(() => poller.stop());
+    const unsubscribeAuth = authService
+      ? authService.subscribe((state) => {
+          if (state.status === "anonymous") {
+            void createdRuntime.dispose().then(
+              notifyAuthenticationRequired,
+              notifyAuthenticationRequired,
+            ).catch(() => undefined);
+          }
+        })
+      : undefined;
+    if (unsubscribeAuth) cleanupStack.push(unsubscribeAuth);
     const onPageHide = (): void => {
       void createdRuntime.dispose().catch(() => undefined);
     };
@@ -447,24 +514,25 @@ export async function startModuleRuntime<TPayload, TEvent>(
     const removePageHide = (): void => pageWindow.removeEventListener("pagehide", onPageHide);
     cleanupStack.push(removePageHide);
     createdRuntime.attachLifecycle({
-      poller,
-      unsubscribeAuth,
+      ...(poller ? { poller } : {}),
+      ...(unsubscribeAuth ? { unsubscribeAuth } : {}),
       removePageHide,
     });
     runtimeOwnsLifecycle = true;
     cleanupStack.length = 0;
 
-    if (authService.getState().status === "anonymous") {
+    if (authService?.getState().status === "anonymous") {
       await createdRuntime.dispose().catch(() => undefined);
       notifyAuthenticationRequired();
       return { status: "authentication-required" };
     }
-    if (environment.autoStartPolling !== false) {
+    if (poller && environment.autoStartPolling !== false) {
       poller.start();
     }
     const snapshot = coordinator.getSnapshot();
     if (
-      snapshot.migrationChangedSinceSync
+      mode === "account"
+      && snapshot.migrationChangedSinceSync
       && !snapshot.businessChangedSinceSync
       && snapshot.conflict === null
     ) {
@@ -479,12 +547,25 @@ export async function startModuleRuntime<TPayload, TEvent>(
     } else {
       await runCleanupStack(cleanupStack);
     }
-    if (authService.getState().status === "anonymous") {
+    if (authService?.getState().status === "anonymous") {
       notifyAuthenticationRequired();
       return { status: "authentication-required" };
     }
     throw error;
   }
+}
+
+function createLocalRemotePort<T>(moduleId: string): RemoteModulePort<T> {
+  const unavailable = (): never => {
+    throw new Error("Cloud synchronization is unavailable in local mode.");
+  };
+  return {
+    moduleId,
+    readRevision: async () => null,
+    pull: async () => null,
+    push: async () => unavailable(),
+    overwrite: async () => unavailable(),
+  };
 }
 
 async function runCleanupStack(stack: Array<() => void | Promise<void>>): Promise<void> {

@@ -34,8 +34,16 @@ button {
 }
 
 .home-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--line);
+}
+
+.home-heading {
+  min-width: 0;
 }
 
 .eyebrow {
@@ -56,6 +64,50 @@ h1 {
 .subtitle {
   margin: 14px 0 0;
   color: var(--muted);
+}
+
+.settings-button {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 44px;
+  justify-content: center;
+  margin-top: 20px;
+  width: 44px;
+}
+
+.settings-button:hover,
+.settings-button:focus-visible {
+  border-color: rgb(37 99 235 / 45%);
+  color: var(--accent);
+}
+
+.settings-button:focus-visible,
+.icon-button:focus-visible,
+.add-account-button:focus-visible,
+.account-option:focus-visible,
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.danger-button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 14%);
+  outline-offset: 2px;
+}
+
+.settings-button-icon {
+  height: 23px;
+  pointer-events: none;
+  width: 23px;
+}
+
+.home-mode {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 14px 0 0;
 }
 
 .module-section {
@@ -109,47 +161,148 @@ h1 {
   padding: 24px 0;
 }
 
-.login-shell {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-}
-
-.login-card {
-  width: min(440px, 100%);
-  padding: 32px;
+.account-settings-dialog,
+.first-account-dialog {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
-  box-shadow: 0 24px 70px rgba(24, 24, 27, 0.1);
+  box-shadow: 0 24px 70px rgb(24 24 27 / 16%);
+  color: var(--text);
+  max-width: min(480px, calc(100vw - 32px));
+  padding: 0;
+  width: 100%;
 }
 
-.login-card h1 {
-  font-size: clamp(28px, 7vw, 40px);
-  line-height: 1.1;
+.account-settings-dialog::backdrop,
+.first-account-dialog::backdrop {
+  backdrop-filter: blur(3px);
+  background: rgb(24 24 27 / 28%);
 }
 
-.login-description {
-  margin: 16px 0 0;
+.settings-dialog-header {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  padding: 18px 20px;
+}
+
+.settings-dialog-header h2,
+.first-account-dialog h2 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.icon-button {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
   color: var(--muted);
-  line-height: 1.6;
+  cursor: pointer;
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
 }
 
-.login-form {
+.icon-button:hover {
+  background: #f4f4f5;
+  color: var(--text);
+}
+
+.button-icon {
+  height: 20px;
+  pointer-events: none;
+  width: 20px;
+}
+
+.settings-dialog-content {
   display: grid;
   gap: 18px;
-  margin-top: 28px;
+  padding: 20px;
 }
 
-.login-field {
+.settings-intro,
+.first-account-dialog p {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.account-list {
   display: grid;
   gap: 8px;
-  font-size: 14px;
-  font-weight: 650;
 }
 
-.login-field input {
+.account-option {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font-weight: 650;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.account-option[data-active="true"] {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  cursor: default;
+}
+
+.account-option-status {
+  align-items: center;
+  color: var(--accent);
+  display: inline-flex;
+  font-size: 13px;
+  gap: 4px;
+}
+
+.add-account-button,
+.primary-button,
+.secondary-button,
+.danger-button {
+  align-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: center;
+  min-height: 42px;
+  padding: 9px 14px;
+}
+
+.add-account-button {
+  background: #fff;
+  border: 1px dashed #a1a1aa;
+  color: var(--text);
+  width: 100%;
+}
+
+.add-account-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.account-form {
+  display: grid;
+  gap: 16px;
+}
+
+.account-field {
+  display: grid;
+  font-size: 14px;
+  font-weight: 650;
+  gap: 8px;
+}
+
+.account-field input {
   width: 100%;
   padding: 12px 14px;
   color: var(--text);
@@ -159,30 +312,57 @@ h1 {
   outline: none;
 }
 
-.login-field input:focus {
+.account-field input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
-.login-form button {
-  min-height: 44px;
-  padding: 0 18px;
-  color: #fff;
-  background: var(--accent);
-  border-radius: 8px;
-  cursor: pointer;
-  font-weight: 700;
+.account-form-actions,
+.first-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  justify-content: flex-end;
 }
 
-.login-form button:disabled {
+.primary-button {
+  color: #fff;
+  background: var(--accent);
+}
+
+.secondary-button {
+  background: #fff;
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.danger-button {
+  background: #b42318;
+  color: #fff;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
   cursor: wait;
   opacity: 0.65;
 }
 
-.login-error {
-  margin: -4px 0 0;
+.account-form-error {
   color: #b91c1c;
   line-height: 1.5;
+  margin: 0;
+}
+
+.first-account-dialog {
+  padding: 22px;
+}
+
+.first-account-dialog p {
+  margin-top: 12px;
+}
+
+.first-account-actions {
+  margin-top: 22px;
 }
 
 @media (max-width: 640px) {
@@ -193,5 +373,14 @@ h1 {
   .module-link {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .settings-button {
+    margin-top: 8px;
+  }
+
+  .account-form-actions,
+  .first-account-actions {
+    display: grid;
   }
 }

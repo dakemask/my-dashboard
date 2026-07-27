@@ -8,7 +8,7 @@ Shared 的可观察行为以 [持久化模块公共契约](./persistent-module-c
 
 Shared 为所有持久化模块提供统一平台能力：
 
-- GitHub 登录、凭据恢复和失效处理；
+- 默认本地模式、多 GitHub 账户注册、选择、凭据恢复和失效处理；
 - 模块 runtime 门面和资源生命周期；
 - 当前完整 payload 与页面内可逆 event 历史；
 - 每模块独立的本机完整数据保存；
@@ -27,12 +27,13 @@ Shared 为所有持久化模块提供统一平台能力：
 | 分支 | `main` |
 | 模块远端根 | `data/<moduleId>/` |
 | 模块清单 | `data/<moduleId>/revision.json` |
-| 本地数据库 | `my-dashboard.module.<moduleId>` |
-| 编辑锁 | `my-dashboard.module.<moduleId>.editor` |
+| profile 注册表 | LocalStorage `my-dashboard.profiles.v1` |
+| 本地数据库 | `my-dashboard.profile.<profileId>.module.<moduleId>` |
+| 编辑锁 | `my-dashboard.module.<profileId>.<moduleId>.editor` |
 | 远端业务文件 | UTF-8 文本 |
 | clone 边界 | 原生 `structuredClone` |
 
-`moduleId` 必须匹配 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`。目标浏览器必须支持 ES2022、IndexedDB、Web Crypto、Web Locks、`structuredClone`、`inert` 和严格 CSP 所需能力。
+`moduleId` 必须匹配 `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`，`profileId` 必须匹配 `^[a-z0-9](?:[a-z0-9-]{0,63})$`。目标浏览器必须支持 ES2022、IndexedDB、Web Crypto、Web Locks、`structuredClone`、`inert` 和严格 CSP 所需能力。
 
 ### 1.2 非职责
 
@@ -51,7 +52,8 @@ Shared 不定义模块业务 payload、event、快捷键、页面布局、本地
 ```text
 src/shared/index.ts          业务模块唯一入口
 src/shared/module/           definition 辅助函数、runtime 门面和平台装配
-src/shared/auth/             登录验证、凭据存储和认证状态
+src/shared/auth/             GitHub 凭据验证和兼容单会话认证
+src/shared/profiles/         本地/账户模式、账户注册表和当前 profile
 src/shared/history/          current payload、event 历史和 JSON content key
 src/shared/persistence/      每模块 IndexedDB 记录及 CAS
 src/shared/concurrency/      OperationGate 与 Web Locks 编辑租约
@@ -71,17 +73,16 @@ src/shared/ui/               公共同步 UI、遮罩、spinner 和阻止页面
 
 `startModuleRuntime` 固定按以下顺序取得资源：
 
-1. 创建或注入 `AuthService` 并恢复会话；
-2. 无凭据时返回 `authentication-required`；
-3. 非等待地申请模块 Web Lock；
-4. blocked/unsupported 时只渲染公共阻止页面；
-5. 创建 `DomOperationGatePresentation` 和 `OperationGate`；
-6. 打开 `ModuleLocalStore`；
-7. 使用认证会话创建 GitHub client 与 `RemoteModuleRepository`；
-8. 创建并初始化 `SyncCoordinator`；
-9. 创建 revision poller；
-10. 注册认证失效和 `pagehide` 清理；
-11. 启动轮询并返回不暴露内部对象的 runtime。
+1. 读取当前 profile；无账户时得到本地模式，有账户时得到当前账户会话；
+2. 非等待地申请该 profile、该模块的 Web Lock；
+3. blocked/unsupported 时只渲染公共阻止页面；
+4. 创建 `DomOperationGatePresentation` 和 `OperationGate`；
+5. 打开该 profile 下的 `ModuleLocalStore`；本地模式首次使用时直接建立空记录；
+6. 账户模式使用账户会话创建 GitHub client 与 `RemoteModuleRepository`；本地模式使用无云端端口；
+7. 创建并初始化 `SyncCoordinator`；
+8. 账户模式创建 revision poller，本地模式不创建；
+9. 注册凭据失效和 `pagehide` 清理；
+10. 账户模式启动轮询并返回不暴露内部对象的 runtime。
 
 每取得一个资源就登记逆序清理。任一步失败都继续尝试全部已登记清理，并保留原始启动错误。
 
@@ -109,7 +110,7 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 
 ### 3.2 IndexedDB envelope
 
-每模块数据库 `my-dashboard.module.<moduleId>` 只有一个对象仓库和一条完整记录：
+每个 `profileId + moduleId` 数据库 `my-dashboard.profile.<profileId>.module.<moduleId>` 只有一个对象仓库和一条完整记录：
 
 | 字段 | 含义 |
 | --- | --- |
@@ -252,13 +253,13 @@ migration/pending，直接确认同步。云端仍需迁移、hash 不同或包�
 
 正常 pagehide 异步触发 dispose。SPA 宿主显式等待 dispose。HTTP 401 回调可能发生在当前 gate 命令内部，因此只能异步启动清理，不能在请求栈中等待自身命令。
 
-认证变为 anonymous 时停止轮询、等待当前命令和 gate、移除 Shared listener、关闭 store、释放 lease、清除 coordinator/client/token 可达引用，再返回首页登录边界。
+账户凭据收到明确 HTTP 401 时移除失效账户、停止轮询、等待当前命令和 gate、关闭 store、释放 lease、清除 coordinator/client/token 可达引用，再返回首页账户边界。本地模式没有凭据和轮询。
 
 ## 5. 安全与失败不变量
 
 ### 5.1 登录与凭据
 
-用户只输入 GitHub 用户名和 token；以下验证全部成功后才保存凭据：
+用户在首页设置中添加账户，只输入 GitHub 用户名和 token；以下验证全部成功后才保存凭据：
 
 1. `GET /user` 验证 token 身份；
 2. 返回 login 与输入用户名按 GitHub 大小写规则一致；
@@ -267,7 +268,9 @@ migration/pending，直接确认同步。云端仍需迁移、hash 不同或包�
 5. 权限同时具有 pull/read 与 push/write；
 6. `refs/heads/main` 存在且可读。
 
-验证不得创建测试文件或 commit。只有明确 HTTP 401 清除凭据；403、限流、离线或服务异常不得误清。产品不提供退出按钮。
+验证不得创建测试文件或 commit。只有明确 HTTP 401 移除失效账户；403、限流、离线或服务异常不得误清。产品不提供账户删除按钮。
+
+没有账户注册表时首页直接进入本地模式。添加首个账户时，若整个仪表盘的本地与云端均有业务数据，首页用一次弹窗让用户统一选择本地覆盖云端或云端覆盖本地；选择逐模块复用标准覆盖流程，全部成功并保存账户注册表后才清理临时本地 profile。添加后不再提供本地模式。后续账户只建立独立 profile，首次打开模块时按普通账户初始化从其云端拉取。
 
 token 只能存在于认证存储和发往 `https://api.github.com` 的 Authorization 请求头。它不得进入 DOM、URL、异常、日志、业务 payload/event、本机模块记录、Git commit、测试快照或模拟错误。
 
@@ -308,7 +311,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 #### runtime 与生命周期
 
-- ready/authentication-required/blocked/unsupported；启动失败逆序清理；401 异步失效；dispose 幂等。
+- local/account ready、兼容 authentication-required、blocked/unsupported；启动失败逆序清理；401 异步失效；dispose 幂等。
 - dispatch busy 边界、命令尾串行、snapshot 通知时机、观察者异常隔离和 dispose 后停止通知。
 - Shared 不注册 keydown，业务调用历史和保存方法仍工作。
 
@@ -320,7 +323,7 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 #### IndexedDB
 
-- 每模块隔离、单记录 CAS、事务失败不推进、pending/conflict 跨刷新。
+- profile 与模块双重隔离、单记录 CAS、事务失败不推进、pending/conflict 跨刷新。
 - v1 旧记录缺失三个时间字段时读取为 null。
 - v1 旧记录缺失 schemaVersion/migration 时读取为 null；版本化模块拒绝缺失版本，迁移 CAS 失败不覆盖原 payload。
 - 冲突时 payload/hash/conflict 同事务保存并正确更新本地基线。

@@ -3,6 +3,8 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthService, AuthState } from "../../src/shared/auth";
+import { createDashboardProfileStore } from "../../src/shared/profiles";
+import { ModuleLocalStore } from "../../src/shared/persistence";
 import {
   defineJsonModule,
   startModuleRuntime,
@@ -233,6 +235,46 @@ afterEach(() => {
 });
 
 describe("ModuleRuntime", () => {
+  it("starts in local mode without authentication or GitHub requests", async () => {
+    const github = new EmptyGitHub();
+    const indexedDB = new IDBFactory();
+    localStorage.clear();
+    const result = await startModuleRuntime(
+      {
+        definition: definition("local-runtime"),
+        appRoot: createRoot(),
+        hooks: {
+          settle: () => null,
+          project: vi.fn(),
+        },
+      },
+      {
+        profileStore: createDashboardProfileStore(localStorage),
+        fetch: github.fetch,
+        indexedDB,
+        lockManager: new FakeLockManager() as unknown as LockManager,
+        autoStartPolling: false,
+        reload: vi.fn(),
+        onAuthenticationRequired: vi.fn(),
+      },
+    );
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.runtime.mode).toBe("local");
+    expect(github.fetch).not.toHaveBeenCalled();
+    result.runtime.dispatch(setValue("local only"));
+    await expect(result.runtime.save()).resolves.toBe("saved");
+    await result.runtime.dispose();
+
+    const stored = new ModuleLocalStore<TestPayload>("local-runtime", {
+      indexedDB,
+      profileId: "local",
+    });
+    expect((await stored.load())?.payload).toEqual({ value: "local only" });
+    stored.close();
+  });
+
   it("starts from one public entry and settles an event before direct undo", async () => {
     const auth = new FakeAuthService();
     const github = new EmptyGitHub();

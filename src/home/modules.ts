@@ -19,3 +19,10 @@ export const dashboardModules: DashboardModule[] = [
     href: "modules/fragment-thoughts/",
   },
 ];
+
+export const persistentDashboardDefinitions = [
+  mindMapDefinition,
+  fragmentThoughtsDefinition,
+] as const;
+import { fragmentThoughtsDefinition } from "../fragment-thoughts/definition";
+import { mindMapDefinition } from "../mind-map/definition";

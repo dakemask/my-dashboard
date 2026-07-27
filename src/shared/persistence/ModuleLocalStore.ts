@@ -4,9 +4,11 @@ const DATABASE_PREFIX = "my-dashboard.module.";
 const OBJECT_STORE_NAME = "module";
 const RECORD_KEY = "state";
 const MODULE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,63})$/;
 
 export interface ModuleLocalStoreOptions {
   readonly indexedDB?: IDBFactory;
+  readonly profileId?: string;
 }
 
 export class LocalRevisionConflictError extends Error {
@@ -81,8 +83,15 @@ export class ModuleLocalStore<T> {
       throw new Error("IndexedDB is required for module persistence.");
     }
 
+    const profileId = options.profileId;
+    if (profileId !== undefined && !PROFILE_ID_PATTERN.test(profileId)) {
+      throw new TypeError(`Invalid profileId: ${profileId}`);
+    }
+
     this.moduleId = moduleId;
-    this.databaseName = `${DATABASE_PREFIX}${moduleId}`;
+    this.databaseName = profileId === undefined
+      ? `${DATABASE_PREFIX}${moduleId}`
+      : `my-dashboard.profile.${profileId}.module.${moduleId}`;
     this.#indexedDB = indexedDBFactory;
   }
 

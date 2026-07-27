@@ -15,6 +15,7 @@ export type ModuleSyncGateResult =
   | { readonly status: "blocked"; readonly message: string };
 
 export interface ModuleSyncUiRuntime {
+  readonly mode: "local" | "account";
   upload(): Promise<SyncActionResult>;
   pull(): Promise<SyncActionResult>;
   resolveConflict(strategy: ConflictResolution): Promise<SyncActionResult>;
@@ -53,6 +54,7 @@ export class ModuleSyncUi {
   readonly #state: HTMLElement;
   readonly #localVersion: HTMLElement;
   readonly #cloudVersion: HTMLElement;
+  readonly #actions: HTMLElement;
   readonly #uploadButton: HTMLButtonElement;
   readonly #pullButton: HTMLButtonElement;
   readonly #toast: HTMLElement;
@@ -144,6 +146,7 @@ export class ModuleSyncUi {
     this.#state = state;
     this.#localVersion = localVersion;
     this.#cloudVersion = cloudVersion;
+    this.#actions = actions;
     this.#uploadButton = uploadButton;
     this.#pullButton = pullButton;
     this.#toast = toast;
@@ -168,6 +171,7 @@ export class ModuleSyncUi {
   attachRuntime(runtime: ModuleSyncUiRuntime): void {
     this.#assertAlive();
     this.#runtime = runtime;
+    this.#region.dataset.mode = runtime.mode;
     this.#snapshot = runtime.getSnapshot();
     this.#render();
   }
@@ -362,6 +366,20 @@ export class ModuleSyncUi {
           ? "云端：时间未知"
           : "云端：尚无版本";
       this.#cloudVersion.title = snapshot.knownRemoteUpdatedAt ?? "";
+
+      if (this.#runtime?.mode === "local") {
+        this.#region.dataset.state = "local";
+        this.#state.textContent = this.#localSaveFailed && snapshot.sessionDirty
+          ? "本地内容尚未保存"
+          : "仅保存在本机";
+        this.#region.title = "当前为本地模式，数据只保存在此浏览器。";
+        this.#cloudVersion.hidden = true;
+        this.#actions.hidden = true;
+        this.#lastState = "local";
+        return;
+      }
+      this.#cloudVersion.hidden = false;
+      this.#actions.hidden = false;
 
       const state = snapshot.conflict
         ? "conflict"

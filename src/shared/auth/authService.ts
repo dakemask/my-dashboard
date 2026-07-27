@@ -50,18 +50,8 @@ export function createAuthService(options: AuthServiceOptions = {}): AuthService
     },
 
     async login(credentials: GitHubCredentials): Promise<AuthSession> {
-      const normalized = {
-        username: credentials.username.trim(),
-        token: credentials.token.trim(),
-      };
-
-      if (!normalized.username || !normalized.token) {
-        throw new AuthenticationError("请输入 GitHub 用户名和 token。");
-      }
-
-      await validateCredentials(normalized, repository, request);
-      credentialsStore.save(normalized);
-      const session = createSession(normalized, repository);
+      const session = await authenticateGitHubCredentials(credentials, request);
+      credentialsStore.save(session.credentials);
       publish({ status: "authenticated", session });
       return session;
     },
@@ -76,6 +66,21 @@ export function createAuthService(options: AuthServiceOptions = {}): AuthService
       return () => listeners.delete(listener);
     },
   };
+}
+
+export async function authenticateGitHubCredentials(
+  credentials: GitHubCredentials,
+  request: typeof fetch = fetch,
+): Promise<AuthSession> {
+  const normalized = {
+    username: credentials.username.trim(),
+    token: credentials.token.trim(),
+  };
+  if (!normalized.username || !normalized.token) {
+    throw new AuthenticationError("请输入 GitHub 用户名和 token。");
+  }
+  await validateCredentials(normalized, DASHBOARD_REPOSITORY_CONFIG, request);
+  return createSession(normalized, DASHBOARD_REPOSITORY_CONFIG);
 }
 
 async function validateCredentials(

@@ -9,7 +9,7 @@
 | 用户命令 | 用户此刻要完成的动作 | 一次命令 |
 | 实时状态 | 草稿、焦点、选择、拖拽、动画和页面呈现状态 | 当前标签页 |
 | 数据暂存 | 当前完整业务 payload 和可逆业务 event | 当前标签页 |
-| 本地数据 | 最近成功保存到当前设备的完整 payload | 跨刷新和浏览器重启 |
+| 本地数据 | 最近成功保存到当前设备、当前 profile 的完整 payload | 跨刷新和浏览器重启 |
 | 云端数据 | 用于跨设备同步的完整 payload | 跨设备 |
 
 数据按下面的方向流动：
@@ -108,7 +108,9 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 
 ## 3. 初始化与页面结束
 
-模块页面用 `startModuleRuntime({ definition, appRoot, hooks })` 启动。SDK 负责恢复统一登录、取得该模块的单标签编辑权、读取本地数据、在首次使用时读取云端或建立空数据、在需要时迁移并原子保存本地 payload、创建空历史、启动同步观察，并调用 `project(payload, "initialize")`。
+模块页面用 `startModuleRuntime({ definition, appRoot, hooks })` 启动。SDK 从首页账户注册表取得启动时固定的 profile：没有账户时使用 `local` profile；账户模式使用当前账户 profile。SDK 取得该 profile 下该模块的单标签编辑权、读取本地数据，在账户模式首次使用时读取云端、本地模式首次使用时建立空数据，在需要时迁移并原子保存本地 payload、创建空历史，并在账户模式启动同步观察，最后调用 `project(payload, "initialize")`。
+
+`runtime.mode` 为 `"local"` 或 `"account"`。账户切换只影响之后启动或刷新的页面；已经打开的 runtime 始终绑定启动时的 profile，不得中途改读其他账户的数据。本地 envelope、同步基线、pending、conflict 和编辑锁均按 `profileId + moduleId` 隔离。
 
 本地迁移不推进同步基线。Runtime 持久化迁移变化，并区分它与用户业务修改。只有
 纯迁移、没有既有冲突时，Runtime 才在启动后自动尝试非强制上传；临时失败后可由
@@ -120,7 +122,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | 状态 | 模块行为 |
 | --- | --- |
 | `ready` | 保存返回的 runtime，并进入可编辑页面 |
-| `authentication-required` | 交给统一登录边界处理，不建立模块自己的登录 |
+| `authentication-required` | 仅用于兼容认证注入边界；生产页面由首页账户设置管理账户 |
 | `blocked` | 同模块已有另一个编辑标签；显示 SDK 提供的阻止页面 |
 | `unsupported` | 浏览器缺少安全编辑锁；禁止编辑 |
 
@@ -146,7 +148,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | `runtime.resolveConflict("cloud-wins")` | 明确用云端完整 payload 覆盖本地 |
 | `runtime.pollNow()` | 立即执行一次与后台轮询相同的版本检查；不是“刷新当前页面” |
 
-上传、拉取和两个覆盖方向由 SDK 显示同一份全页 spinner 与模糊遮罩。模块页面使用 Shared 提供的 `ModuleSyncUi` 呈现上传、拉取、版本状态、冲突确认及同步结果，不复制同步 UI，也不直接访问 GitHub。
+上传、拉取和两个覆盖方向由 SDK 显示同一份全页 spinner 与模糊遮罩。模块页面使用 Shared 提供的 `ModuleSyncUi` 呈现保存和同步状态，不复制同步 UI，也不直接访问 GitHub。账户模式呈现上传、拉取、云端版本、冲突确认及同步结果；本地模式只呈现本机保存状态并隐藏云端操作。
 
 模块在创建 `ModuleSyncUi` 时必须提供 `guardAction(action)` 业务门禁。Shared 在用户主动上传或拉取前调用它：
 
@@ -198,7 +200,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | --- | --- |
 | 定义 | `defineModule`、`defineJsonModule`、`jsonContentKey`、`ModuleDefinition`、`ModuleMigrationPolicy`、history policy/capacity |
 | 启动 | `startModuleRuntime`、启动 options/result/state |
-| runtime | `current`、历史状态、`dispatch`、`undo`、`redo`、`save`、`upload`、`pull`、`resolveConflict`、`pollNow`、`getSnapshot`、`dispose` |
+| runtime | `mode`、`current`、历史状态、`dispatch`、`undo`、`redo`、`save`、`upload`、`pull`、`resolveConflict`、`pollNow`、`getSnapshot`、`dispose` |
 | hooks | `settle`、`project`、`onConflict`、`onSnapshotChange` |
 | 同步 UI | `ModuleSyncUi`、`ModuleSyncAction`、`ModuleSyncGateResult`；模块提供挂载点和业务门禁 |
 | 同步类型 | settle/project reason、同步结果、snapshot、conflict resolution 和 persisted conflict |

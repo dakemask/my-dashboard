@@ -13,19 +13,19 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `index.html`、`src/home/` | 首页、统一认证入口和模块导航 |
+| `index.html`、`src/home/` | 首页、账户设置、首次账户接入和模块导航 |
 | `modules/<module>/index.html` | 模块页面入口 |
 | `src/<module>/` | 模块的业务规则、页面状态和 UI |
 | `src/shared/` | 持久化模块共用的认证、本地保存、GitHub 同步、历史、编辑锁和公共操作 UI |
 | `tests/` | Shared 通用测试和各模块的 domain/codec 测试，开发完成后需要运行 `npm test`，进行简单的初步验证 |
 | `vite.config.ts` | 首页和模块页面的构建入口 |
 
-持久化模块把业务动作表示为 event，并维护完整 payload；Shared runtime 负责历史、本机保存和云端同步。
+持久化模块把业务动作表示为 event，并维护完整 payload；Shared runtime 负责历史、本机保存和云端同步。没有账户时默认使用本地模式；添加首个账户后进入账户模式，并可在多个 GitHub 账户间切换。
 
 数据路径：
 
-    模块 UI → 模块 event/payload → Shared runtime → IndexedDB
-                                             → GitHub API → my-dashboard-data
+    模块 UI → 模块 event/payload → Shared runtime → 当前 profile 的 IndexedDB
+                                             → 账户模式：GitHub API → my-dashboard-data
 
 模块负责自身业务和页面交互，Shared 负责平台能力。业务模块只通过 `src/shared` 根入口使用 Shared。
 

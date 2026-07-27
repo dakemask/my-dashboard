@@ -66,6 +66,29 @@ describe("ModuleEditorLease", () => {
     await later.release();
   });
 
+  it("allows the same module to be edited under different profiles", async () => {
+    const manager = new FakeLockManager();
+    const locks = manager as unknown as LockManager;
+    const local = new ModuleEditorLease("mind-maps", {
+      lockManager: locks,
+      profileId: "local",
+    });
+    const account = new ModuleEditorLease("mind-maps", {
+      lockManager: locks,
+      profileId: "github-octocat",
+    });
+
+    await expect(local.acquire()).resolves.toBe("acquired");
+    await expect(account.acquire()).resolves.toBe("acquired");
+    expect(manager.requests.map((request) => request.name)).toEqual([
+      "my-dashboard.module.local.mind-maps.editor",
+      "my-dashboard.module.github-octocat.mind-maps.editor",
+    ]);
+
+    await local.release();
+    await account.release();
+  });
+
   it("forbids editing when Web Locks are unavailable", async () => {
     const lease = new ModuleEditorLease("mind-maps", { lockManager: null });
     await expect(lease.acquire()).resolves.toBe("unsupported");

@@ -286,7 +286,7 @@ try {
 
 `controller.attachRuntime` 内部同时把 runtime 交给 `ModuleSyncUi`，避免入口建立第二套同步接线。
 
-`blocked`、`unsupported` 和 `authentication-required` 已由公共边界处理，模块不建立第二套登录、锁或阻止页。初始化的 `project` 发生在 `startModuleRuntime` 返回之前，因此不能依赖尚未 attach 的 runtime。
+`blocked`、`unsupported` 和兼容认证状态已由公共边界处理，模块不建立第二套账户、锁或阻止页。没有账户时 runtime 自动以本地模式启动；账户模式由首页当前账户决定。初始化的 `project` 发生在 `startModuleRuntime` 返回之前，因此不能依赖尚未 attach 的 runtime。
 
 普通独立页面由 SDK 监听 `pagehide`。如果宿主会在页面不关闭时卸载模块，模块还要移除自己的监听并等待 `runtime.dispose()`。
 
@@ -306,7 +306,7 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 业务按钮、菜单和快捷键由模块绑定；上传、拉取按钮及其确认和反馈由 `ModuleSyncUi` 绑定。模块应处理业务命令的忙碌状态，防止把 `ModuleRuntimeBusyError` 当作数据错误，并在卸载时清理所有监听和 dispose 同步 UI。
 
-模块把 `onSnapshotChange` 收到的 snapshot 转发给 `ModuleSyncUi`。公共同步 UI 至少区分：
+模块把 `onSnapshotChange` 收到的 snapshot 转发给 `ModuleSyncUi`。本地模式下公共 UI 只显示本机保存状态；账户模式至少区分：
 
 - 页面尚未本地保存；
 - 已本地保存但尚未上传；
@@ -320,7 +320,7 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 完成页面后：
 
-1. 在首页模块注册表添加入口；
+1. 在首页模块注册表添加入口，并把持久化模块 definition 加入首次账户接入使用的定义清单；
 2. 在 Vite 多页面构建输入中添加模块 HTML；
 3. 为模块的 domain 和 codec 建立自动测试；
 4. 如果模块确实需要长期维护文档，在 `.agents/` 建立一份模块文档。

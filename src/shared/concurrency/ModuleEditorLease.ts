@@ -9,9 +9,11 @@ export type ModuleEditorLeaseStatus =
 export interface ModuleEditorLeaseOptions {
   /** `undefined` auto-detects navigator.locks; `null` explicitly disables it. */
   readonly lockManager?: LockManager | null;
+  readonly profileId?: string;
 }
 
 const MODULE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,63})$/;
 const LOCK_PREFIX = "my-dashboard.module.";
 const LOCK_SUFFIX = ".editor";
 
@@ -31,8 +33,15 @@ export class ModuleEditorLease {
       throw new TypeError(`Invalid moduleId: ${moduleId}`);
     }
 
+    const profileId = options.profileId;
+    if (profileId !== undefined && !PROFILE_ID_PATTERN.test(profileId)) {
+      throw new TypeError(`Invalid profileId: ${profileId}`);
+    }
+
     this.moduleId = moduleId;
-    this.lockName = `${LOCK_PREFIX}${moduleId}${LOCK_SUFFIX}`;
+    this.lockName = profileId === undefined
+      ? `${LOCK_PREFIX}${moduleId}${LOCK_SUFFIX}`
+      : `${LOCK_PREFIX}${profileId}.${moduleId}${LOCK_SUFFIX}`;
     this.#lockManager =
       options.lockManager === undefined
         ? (globalThis.navigator?.locks ?? null)

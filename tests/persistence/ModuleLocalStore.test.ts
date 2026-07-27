@@ -56,6 +56,27 @@ describe("ModuleLocalStore", () => {
     expect((await beta.load())?.payload.value).toBe("beta");
   });
 
+  it("isolates the same module across profile namespaces", async () => {
+    const local = new ModuleLocalStore<Payload>("notes", {
+      indexedDB: factory,
+      profileId: "local",
+    });
+    const account = new ModuleLocalStore<Payload>("notes", {
+      indexedDB: factory,
+      profileId: "github-octocat",
+    });
+
+    await local.initialize(envelope("local", "00000000-0000-4000-8000-000000000031"));
+    await account.initialize(envelope("account", "00000000-0000-4000-8000-000000000032"));
+
+    expect(local.databaseName).toBe("my-dashboard.profile.local.module.notes");
+    expect(account.databaseName).toBe(
+      "my-dashboard.profile.github-octocat.module.notes",
+    );
+    expect((await local.load())?.payload.value).toBe("local");
+    expect((await account.load())?.payload.value).toBe("account");
+  });
+
   it("stores non-JSON structured-clone payloads without retaining caller aliases", async () => {
     interface RichPayload {
       readonly createdAt: Date;
