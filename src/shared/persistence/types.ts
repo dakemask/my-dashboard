@@ -23,6 +23,8 @@ export interface PersistedMigration {
 /** The single record stored for one module. Business data is only `payload`. */
 export interface ModuleLocalEnvelope<T> {
   readonly payload: T;
+  /** Business format version for payload; null only for modules without migration policy. */
+  readonly schemaVersion: number | null;
   readonly contentHash: string;
   readonly localRevision: string;
   readonly localSavedAt: string | null;
@@ -47,9 +49,11 @@ export function createModuleLocalEnvelope<T>(
   payload: T,
   contentHash: string,
   localRevision = createLocalRevision(),
+  schemaVersion: number | null = null,
 ): ModuleLocalEnvelope<T> {
   return {
     payload,
+    schemaVersion,
     contentHash,
     localRevision,
     localSavedAt: null,

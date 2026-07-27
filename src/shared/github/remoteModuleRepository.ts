@@ -101,6 +101,7 @@ export class RemoteModuleRepository<T> {
   async push(data: T, options: RemoteModulePushOptions): Promise<RemoteModulePushResult> {
     validateRevisionToken(options.expectedRevision, "expectedRevision", true);
     validateRevisionToken(options.nextRevision, "nextRevision", false);
+    validateSchemaVersion(options.schemaVersion);
 
     const encoded = await this.#codec.encode(data);
     const desiredFiles = validateEncodedFiles(encoded);
@@ -113,6 +114,7 @@ export class RemoteModuleRepository<T> {
     const nextRevision: RemoteModuleRevision = {
       revision: options.nextRevision,
       updatedAt,
+      schemaVersion: options.schemaVersion ?? null,
       managedFiles: [...desiredFiles.keys()].sort(comparePaths),
     };
 
@@ -225,7 +227,15 @@ export class RemoteModuleRepository<T> {
         sha: await this.#client.createBlob(text),
       })),
     );
-    const revisionText = `${JSON.stringify(revision, null, 2)}\n`;
+    const revisionDocument = {
+      revision: revision.revision,
+      updatedAt: revision.updatedAt,
+      ...(revision.schemaVersion === null
+        ? {}
+        : { schemaVersion: revision.schemaVersion }),
+      managedFiles: revision.managedFiles,
+    };
+    const revisionText = `${JSON.stringify(revisionDocument, null, 2)}\n`;
     const revisionBlobSha = await this.#client.createBlob(revisionText);
     const desiredPaths = new Set(desiredFiles.keys());
     const deletedEntries: GitHubCreateTreeEntry[] = (head.revision?.managedFiles ?? [])
@@ -423,8 +433,29 @@ function parseRemoteRevision(text: string): RemoteModuleRevision {
   return {
     revision: record.revision,
     updatedAt: record.updatedAt,
+    schemaVersion: record.schemaVersion === undefined
+      ? null
+      : validateParsedSchemaVersion(record.schemaVersion),
     managedFiles: [...record.managedFiles],
   };
+}
+
+function validateSchemaVersion(value: number | undefined): void {
+  if (
+    value !== undefined
+    && (!Number.isSafeInteger(value) || value < 1)
+  ) {
+    throw new TypeError("schemaVersion must be a positive safe integer.");
+  }
+}
+
+function validateParsedSchemaVersion(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new RemoteModuleFormatError(
+      "revision.json schemaVersion must be a positive safe integer.",
+    );
+  }
+  return value as number;
 }
 
 function validateRevisionToken(value: string | null, name: string, nullable: boolean): void {
@@ -460,6 +491,7 @@ function toRevisionSnapshot(revision: RemoteModuleRevision, commitSha: string): 
   return {
     revision: revision.revision,
     updatedAt: revision.updatedAt,
+    schemaVersion: revision.schemaVersion,
     managedFiles: [...revision.managedFiles],
     commitSha,
   };

@@ -4,6 +4,7 @@ export { SyncCoordinator } from "./SyncCoordinator";
 export {
   LocalDataIntegrityError,
   ModuleMigrationError,
+  MissingModuleSchemaVersionError,
   SyncConflictPendingError,
   SyncCoordinatorNotInitializedError,
   UnsupportedModuleSchemaVersionError,

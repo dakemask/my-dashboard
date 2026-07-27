@@ -12,8 +12,6 @@ import type { ModuleHistoryPolicy } from "../history";
 export interface ModuleMigrationPolicy {
   /** The schema version produced and accepted by the current module code. */
   readonly currentVersion: number;
-  /** Reads a schema version without assuming that the payload already has the current shape. */
-  readVersion(value: unknown): number;
   /** Migrates exactly one version forward. The runtime repeats it until currentVersion. */
   migrate(value: unknown, fromVersion: number): unknown;
 }
@@ -107,5 +105,12 @@ export class ModuleMigrationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ModuleMigrationError";
+  }
+}
+
+export class MissingModuleSchemaVersionError extends Error {
+  constructor(readonly source: "local" | "remote") {
+    super(`The ${source} module data does not declare a schema version.`);
+    this.name = "MissingModuleSchemaVersionError";
   }
 }

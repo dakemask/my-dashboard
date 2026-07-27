@@ -15,6 +15,7 @@ import {
   createModuleLocalEnvelope,
 } from "../../src/shared/persistence";
 import {
+  MissingModuleSchemaVersionError,
   SyncConflictPendingError,
   SyncCoordinator,
   hashContentKey,
@@ -657,12 +658,10 @@ describe("SyncCoordinator", () => {
 });
 
 interface VersionOneData {
-  readonly schemaVersion: 1;
   readonly value: string;
 }
 
 interface VersionTwoData {
-  readonly schemaVersion: 2;
   readonly value: string;
   readonly normalized: string;
 }
@@ -670,8 +669,9 @@ interface VersionTwoData {
 class VersionedRemote implements RemoteModulePort<VersionTwoData> {
   readonly moduleId: string;
   revision: string | null = "cloud-v1";
+  schemaVersion: number | null = 1;
   updatedAt = "2026-07-10T00:00:00.000Z";
-  data: unknown = { schemaVersion: 1, value: "same" } satisfies VersionOneData;
+  data: unknown = { value: "same" } satisfies VersionOneData;
   pushCount = 0;
 
   constructor(moduleId: string) {
@@ -683,6 +683,7 @@ class VersionedRemote implements RemoteModulePort<VersionTwoData> {
       ? {
           revision: this.revision,
           updatedAt: this.updatedAt,
+          schemaVersion: this.schemaVersion,
           managedFiles: ["data.json"],
           commitSha: this.revision,
         }
@@ -713,6 +714,7 @@ class VersionedRemote implements RemoteModulePort<VersionTwoData> {
       );
     }
     this.revision = options.nextRevision;
+    this.schemaVersion = options.schemaVersion ?? this.schemaVersion;
     this.updatedAt = options.updatedAt ?? this.updatedAt;
     this.data = structuredClone(data);
     return {
@@ -726,6 +728,7 @@ class VersionedRemote implements RemoteModulePort<VersionTwoData> {
     options: RemoteModuleOverwriteOptions,
   ): Promise<RemoteModulePushResult> {
     this.revision = options.nextRevision;
+    this.schemaVersion = options.schemaVersion ?? this.schemaVersion;
     this.updatedAt = options.updatedAt ?? this.updatedAt;
     this.data = structuredClone(data);
     return {
@@ -741,22 +744,17 @@ function versionedDefinition(
   return {
     moduleId,
     createEmpty: () => ({
-      schemaVersion: 2,
       value: "empty",
       normalized: "EMPTY",
     }),
     migration: {
       currentVersion: 2,
-      readVersion(value: unknown): number {
-        return (value as { schemaVersion?: unknown }).schemaVersion as number;
-      },
       migrate(value: unknown, fromVersion: number): unknown {
         if (fromVersion !== 1) {
           throw new TypeError("unsupported source schema");
         }
         const source = value as VersionOneData;
         return {
-          schemaVersion: 2,
           value: source.value,
           normalized: source.value.toUpperCase(),
         } satisfies VersionTwoData;
@@ -765,8 +763,7 @@ function versionedDefinition(
     validate(value: unknown): VersionTwoData {
       const candidate = value as Partial<VersionTwoData>;
       if (
-        candidate?.schemaVersion !== 2
-        || typeof candidate.value !== "string"
+        typeof candidate?.value !== "string"
         || typeof candidate.normalized !== "string"
       ) {
         throw new TypeError("invalid current schema");
@@ -798,7 +795,6 @@ async function createVersionedHarness(
   const indexedDB = new IDBFactory();
   const localStore = new ModuleLocalStore<VersionTwoData>(moduleId, { indexedDB });
   const oldPayload = {
-    schemaVersion: 1,
     value: "same",
   } satisfies VersionOneData;
   const oldHash = await hashContentKey(jsonContentKey(oldPayload));
@@ -807,6 +803,7 @@ async function createVersionedHarness(
       oldPayload as unknown as VersionTwoData,
       oldHash,
       "00000000-0000-4000-8000-000000000040",
+      1,
     ),
     lastSyncedContentHash: options.lastSyncedContentHash ?? oldHash,
     lastSyncedRemoteRevision: "cloud-v1",
@@ -831,13 +828,65 @@ async function createVersionedHarness(
 }
 
 describe("SyncCoordinator schema migration", () => {
+  it("strictly rejects a versioned module whose local envelope has no schemaVersion", async () => {
+    const moduleId = "module-schema-missing";
+    const localStore = new ModuleLocalStore<VersionTwoData>(moduleId, {
+      indexedDB: new IDBFactory(),
+    });
+    const payload = { value: "same" } as VersionTwoData;
+    const contentHash = await hashContentKey(jsonContentKey(payload));
+    await localStore.initialize(createModuleLocalEnvelope(
+      payload,
+      contentHash,
+      "00000000-0000-4000-8000-000000000041",
+    ));
+    const coordinator = new SyncCoordinator({
+      definition: versionedDefinition(moduleId),
+      localStore,
+      remoteRepository: new VersionedRemote(moduleId),
+      operationGate: new OperationGate(),
+      hooks: {
+        settle: () => null,
+        project: () => undefined,
+        reload: () => undefined,
+      },
+    });
+
+    await expect(coordinator.initialize()).rejects.toBeInstanceOf(
+      MissingModuleSchemaVersionError,
+    );
+  });
+
+  it("strictly rejects a versioned module whose remote manifest has no schemaVersion", async () => {
+    const moduleId = "module-remote-schema-missing";
+    const remote = new VersionedRemote(moduleId);
+    remote.schemaVersion = null;
+    const coordinator = new SyncCoordinator({
+      definition: versionedDefinition(moduleId),
+      localStore: new ModuleLocalStore<VersionTwoData>(moduleId, {
+        indexedDB: new IDBFactory(),
+      }),
+      remoteRepository: remote,
+      operationGate: new OperationGate(),
+      hooks: {
+        settle: () => null,
+        project: () => undefined,
+        reload: () => undefined,
+      },
+    });
+
+    await expect(coordinator.initialize()).rejects.toMatchObject({
+      name: "MissingModuleSchemaVersionError",
+      source: "remote",
+    });
+  });
+
   it("atomically migrates a synced local payload and publishes the current schema", async () => {
     const { coordinator, localStore, remote } = await createVersionedHarness(
       "module-schema-publish",
     );
 
     expect(coordinator.history.current).toEqual({
-      schemaVersion: 2,
       value: "same",
       normalized: "SAME",
     });
@@ -847,7 +896,8 @@ describe("SyncCoordinator schema migration", () => {
       migrationChangedSinceSync: true,
     });
     await expect(localStore.load()).resolves.toMatchObject({
-      payload: { schemaVersion: 2 },
+      schemaVersion: 2,
+      payload: { value: "same" },
       migration: {
         fromVersion: 1,
         toVersion: 2,
@@ -860,7 +910,6 @@ describe("SyncCoordinator schema migration", () => {
     ).resolves.toBe("uploaded");
     expect(remote.pushCount).toBe(1);
     expect(remote.data).toEqual({
-      schemaVersion: 2,
       value: "same",
       normalized: "SAME",
     });
@@ -876,8 +925,8 @@ describe("SyncCoordinator schema migration", () => {
       "module-schema-equivalent",
     );
     remote.revision = "cloud-v2-from-other-device";
+    remote.schemaVersion = 2;
     remote.data = {
-      schemaVersion: 2,
       value: "same",
       normalized: "SAME",
     } satisfies VersionTwoData;

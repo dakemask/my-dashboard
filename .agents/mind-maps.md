@@ -63,7 +63,7 @@ Mind Map 让用户在一个资料库中管理多张脑图，并在自由画布�
 - 当前脑图、资料库选择、画布选择、焦点、悬停、草稿、pointer、拖放、移动、resize、框选、连线和平移属于页面实时状态。
 - 每张脑图 viewport 只在当前页面会话中按 map ID 记忆。
 - 侧栏开关、最近脑图和展开文件夹是尽力而为的本机 UI 偏好。
-- event 历史、revision、版本时间、pending 和 conflict 是 SDK/系统状态，不是 Mind Map 业务实体。
+- event 历史、schemaVersion、revision、版本时间、pending 和 conflict 是 SDK/系统状态，不是 Mind Map 业务实体。
 
 ### 格式边界
 
@@ -229,6 +229,11 @@ Canvas / Tree 用户命令
 
 本模块的 `moduleId` 为 `mind-maps`。整个资料库使用一个 payload、一个本机保存边界、一个同步/冲突边界和一条历史；远端根为 `data/mind-maps/`。
 
+当前业务格式版本为 v1。版本号由 Shared 保存在本地 IndexedDB envelope 和云端
+`revision.json.schemaVersion`，不进入 `MindMapPayload`、event、content key 或每张
+脑图业务文件。缺失版本号时启动停止，不自动解释为 v1；首次接入由用户手动标记
+云端 v1，并清理各设备旧本地数据。
+
 ### Event
 
 | Event | 用户动作 | 提交时机 | 对 payload 的影响 | inverse 所需信息 |
@@ -287,5 +292,5 @@ undo/redo 完成后，controller 比较 before/after 完整 payload：画布 eve
 - 每张脑图编码为 `<逻辑路径>.json`；文件内容只有 `id`、`nodes`、`arrows`，使用稳定顺序、两个空格缩进和结尾换行。
 - map path 从文件相对路径恢复，不在文件内容重复。
 - 没有直接子文件夹或脑图的空叶文件夹编码为空的 `<folder>/.gitkeep`。
-- decode 接受合法 `.json` 和空 `.gitkeep`，从路径补齐全部祖先，再执行完整 payload 校验。
+- decode 接受合法 `.json` 和空 `.gitkeep`，从路径补齐全部祖先并返回原始 payload；Runtime 根据 schemaVersion 完成迁移后再执行完整校验。
 - codec 不生成 `revision.json`；远端清单和未知文件的处理由 Shared 完成。

@@ -7,7 +7,6 @@ import {
 } from "../../src/fragment-thoughts/domain";
 
 const payload = validateFragmentThoughtsPayload({
-  schemaVersion: 2,
   thoughts: [{
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     versions: [
@@ -25,6 +24,9 @@ const payload = validateFragmentThoughtsPayload({
     collapsedVersionIds: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
   }],
 });
+
+const decodeAndValidate = (files: ReadonlyMap<string, string>) =>
+  validateFragmentThoughtsPayload(decodeFragmentThoughtsPayload(files));
 
 describe("Fragment Thoughts remote codec", () => {
   it("writes one deterministic two-space JSON file with a trailing newline", () => {
@@ -59,8 +61,8 @@ describe("Fragment Thoughts remote codec", () => {
     );
   });
 
-  it("round-trips the complete schema v2 payload", () => {
-    expect(decodeFragmentThoughtsPayload(encodeFragmentThoughtsPayload(payload))).toEqual(
+  it("round-trips the complete payload", () => {
+    expect(decodeAndValidate(encodeFragmentThoughtsPayload(payload))).toEqual(
       payload,
     );
   });
@@ -80,16 +82,16 @@ describe("Fragment Thoughts remote codec", () => {
     expect(() => decodeFragmentThoughtsPayload(new Map([
       [FRAGMENT_THOUGHTS_FILE_PATH, "{"],
     ]))).toThrow(/not valid JSON/);
-    expect(() => decodeFragmentThoughtsPayload(new Map([
+    expect(() => decodeAndValidate(new Map([
       [FRAGMENT_THOUGHTS_FILE_PATH, JSON.stringify({ ...payload, extra: true })],
     ]))).toThrow(/properties/);
-    expect(() => decodeFragmentThoughtsPayload(new Map([
+    expect(() => decodeAndValidate(new Map([
       [FRAGMENT_THOUGHTS_FILE_PATH, JSON.stringify({
         schemaVersion: 1,
         thoughts: payload.thoughts,
       })],
-    ]))).toThrow(/schemaVersion/);
-    expect(() => decodeFragmentThoughtsPayload(new Map([
+    ]))).toThrow(/properties/);
+    expect(() => decodeAndValidate(new Map([
       [FRAGMENT_THOUGHTS_FILE_PATH, JSON.stringify({
         ...payload,
         thoughts: [{
@@ -98,9 +100,8 @@ describe("Fragment Thoughts remote codec", () => {
         }],
       })],
     ]))).toThrow(/does not exist/);
-    expect(() => decodeFragmentThoughtsPayload(new Map([
+    expect(() => decodeAndValidate(new Map([
       [FRAGMENT_THOUGHTS_FILE_PATH, JSON.stringify({
-        schemaVersion: 2,
         thoughts: [{
           ...payload.thoughts[0],
           versions: [{

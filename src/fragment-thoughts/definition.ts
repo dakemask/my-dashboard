@@ -16,6 +16,12 @@ export const fragmentThoughtsDefinition = defineJsonModule<
 >({
   moduleId: "fragment-thoughts",
   createEmpty: createEmptyFragmentThoughtsPayload,
+  migration: {
+    currentVersion: 1,
+    migrate: () => {
+      throw new TypeError("Fragment Thoughts has no schema migration below version 1.");
+    },
+  },
   validate: validateFragmentThoughtsPayload,
   history: {
     capacity: 100,

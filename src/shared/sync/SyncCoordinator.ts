@@ -15,6 +15,7 @@ import {
 import { hashContentKey } from "./contentHash";
 import {
   LocalDataIntegrityError,
+  MissingModuleSchemaVersionError,
   ModuleMigrationError,
   SyncConflictPendingError,
   SyncCoordinatorNotInitializedError,
@@ -41,6 +42,7 @@ interface SyncCoordinatorOptions<T, E> {
 interface ObservedRemoteVersion {
   readonly revision: string | null;
   readonly updatedAt: string | null;
+  readonly schemaVersion?: number | null;
 }
 
 interface PreparedPayload<T> {
@@ -131,7 +133,11 @@ export class SyncCoordinator<T, E> {
 
     let local = await this.#localStore.load();
     if (local) {
-      const prepared = this.#preparePayloadWithMigration(local.payload);
+      const prepared = this.#preparePayloadWithMigration(
+        local.payload,
+        local.schemaVersion,
+        "local",
+      );
       const contentHash = await this.#hashPayload(prepared.payload);
       if (!prepared.migrated && contentHash !== local.contentHash) {
         throw new LocalDataIntegrityError();
@@ -145,6 +151,7 @@ export class SyncCoordinator<T, E> {
         const next = {
           ...local,
           payload: prepared.payload,
+          schemaVersion: prepared.toVersion,
           contentHash,
           localRevision: createLocalRevision(),
           localSavedAt: this.#now().toISOString(),
@@ -159,10 +166,19 @@ export class SyncCoordinator<T, E> {
         const remote = await this.#remoteRepository.pull();
         const prepared = this.#preparePayloadWithMigration(
           remote?.data ?? this.#definition.createEmpty(),
+          remote
+            ? remote.schemaVersion ?? null
+            : this.#definition.migration?.currentVersion ?? null,
+          "remote",
         );
         const contentHash = await this.#hashPayload(prepared.payload);
         const initial = {
-          ...createModuleLocalEnvelope(prepared.payload, contentHash),
+          ...createModuleLocalEnvelope(
+            prepared.payload,
+            contentHash,
+            undefined,
+            prepared.toVersion,
+          ),
           localSavedAt: this.#now().toISOString(),
           lastSyncedContentHash: contentHash,
           lastSyncedRemoteRevision: remote?.revision ?? null,
@@ -236,6 +252,7 @@ export class SyncCoordinator<T, E> {
       }
 
       let observed = await this.#remoteRepository.readRevision();
+      this.#assertRemoteSchemaVersion(observed);
       observed = await this.#reconcilePendingUpload(observed);
 
       if (this.#local!.conflict) {
@@ -255,7 +272,10 @@ export class SyncCoordinator<T, E> {
 
       await this.#backfillSyncedRemoteUpdatedAt(observed);
 
-      if (this.#local!.contentHash === this.#local!.lastSyncedContentHash) {
+      if (
+        this.#local!.contentHash === this.#local!.lastSyncedContentHash
+        && this.#local!.migration === null
+      ) {
         return "unchanged";
       }
 
@@ -271,6 +291,7 @@ export class SyncCoordinator<T, E> {
       }
 
       let remote = await this.#remoteRepository.readRevision();
+      this.#assertRemoteSchemaVersion(remote);
       try {
         remote = await this.#reconcilePendingUpload(remote);
       } catch (error) {
@@ -316,6 +337,7 @@ export class SyncCoordinator<T, E> {
     observed: RemoteRevisionSnapshot | null,
   ): Promise<SyncActionResult> {
     this.#assertInitialized();
+    this.#assertRemoteSchemaVersion(observed);
     if (this.#operationGate.busy) {
       return "busy";
     }
@@ -396,6 +418,7 @@ export class SyncCoordinator<T, E> {
 
     return this.#operationGate.runCloud(async () => {
       let observed = await this.#remoteRepository.readRevision();
+      this.#assertRemoteSchemaVersion(observed);
       observed = await this.#reconcilePendingUpload(observed);
       if (!this.#hasOnlyMigrationChanges()) {
         return "unchanged";
@@ -455,11 +478,17 @@ export class SyncCoordinator<T, E> {
       const result = overwrite
         ? await this.#remoteRepository.overwrite(structuredClone(this.#local!.payload), {
             nextRevision: pending.nextRemoteRevision,
+            ...(this.#local!.schemaVersion === null
+              ? {}
+              : { schemaVersion: this.#local!.schemaVersion }),
             updatedAt: pending.updatedAt,
           })
         : await this.#remoteRepository.push(structuredClone(this.#local!.payload), {
             expectedRevision: this.#local!.lastSyncedRemoteRevision,
             nextRevision: pending.nextRemoteRevision,
+            ...(this.#local!.schemaVersion === null
+              ? {}
+              : { schemaVersion: this.#local!.schemaVersion }),
             updatedAt: pending.updatedAt,
           });
 
@@ -519,6 +548,8 @@ export class SyncCoordinator<T, E> {
     if (!pending) {
       return;
     }
+    const retainMigration = this.#local!.migration !== null
+      && (remote.schemaVersion ?? null) !== this.#local!.schemaVersion;
 
     await this.#writeLocal((local, nextLocalRevision) => ({
       ...local,
@@ -528,7 +559,7 @@ export class SyncCoordinator<T, E> {
       lastSyncedRemoteUpdatedAt: remote.updatedAt ?? pending.updatedAt,
       pendingUpload: null,
       conflict: null,
-      migration: null,
+      migration: retainMigration ? local.migration : null,
     }));
   }
 
@@ -536,10 +567,15 @@ export class SyncCoordinator<T, E> {
     const remote = await this.#remoteRepository.pull();
     const prepared = this.#preparePayloadWithMigration(
       remote?.data ?? this.#definition.createEmpty(),
+      remote
+        ? remote.schemaVersion ?? null
+        : this.#definition.migration?.currentVersion ?? null,
+      "remote",
     );
     const contentHash = await this.#hashPayload(prepared.payload);
     await this.#writeLocal((_local, nextLocalRevision) => ({
       payload: prepared.payload,
+      schemaVersion: prepared.toVersion,
       contentHash,
       localRevision: nextLocalRevision,
       localSavedAt: this.#now().toISOString(),
@@ -652,7 +688,33 @@ export class SyncCoordinator<T, E> {
     return payload;
   }
 
-  #preparePayloadWithMigration(value: unknown): PreparedPayload<T> {
+  #assertRemoteSchemaVersion(observed: RemoteRevisionSnapshot | null): void {
+    const policy = this.#definition.migration;
+    if (!policy || observed === null) {
+      return;
+    }
+    const version = observed.schemaVersion ?? null;
+    if (version === null) {
+      throw new MissingModuleSchemaVersionError("remote");
+    }
+    if (!Number.isSafeInteger(version) || version < 1) {
+      throw new ModuleMigrationError(
+        "Remote schemaVersion must be a positive safe integer.",
+      );
+    }
+    if (version > policy.currentVersion) {
+      throw new UnsupportedModuleSchemaVersionError(
+        version,
+        policy.currentVersion,
+      );
+    }
+  }
+
+  #preparePayloadWithMigration(
+    value: unknown,
+    sourceVersion: number | null,
+    source: "local" | "remote",
+  ): PreparedPayload<T> {
     const policy = this.#definition.migration;
     if (!policy) {
       return {
@@ -664,7 +726,15 @@ export class SyncCoordinator<T, E> {
     }
 
     let current = structuredClone(value);
-    const fromVersion = this.#readSchemaVersion(current);
+    if (sourceVersion === null) {
+      throw new MissingModuleSchemaVersionError(source);
+    }
+    if (!Number.isSafeInteger(sourceVersion) || sourceVersion < 1) {
+      throw new ModuleMigrationError(
+        "Stored schemaVersion must be a positive safe integer.",
+      );
+    }
+    const fromVersion = sourceVersion;
     if (fromVersion > policy.currentVersion) {
       throw new UnsupportedModuleSchemaVersionError(
         fromVersion,
@@ -676,13 +746,7 @@ export class SyncCoordinator<T, E> {
     while (version < policy.currentVersion) {
       const migrated = policy.migrate(structuredClone(current), version);
       current = structuredClone(migrated);
-      const nextVersion = this.#readSchemaVersion(current);
-      if (nextVersion !== version + 1) {
-        throw new ModuleMigrationError(
-          `Migration from schema version ${version} must produce version ${version + 1}.`,
-        );
-      }
-      version = nextVersion;
+      version += 1;
     }
 
     return {
@@ -691,17 +755,6 @@ export class SyncCoordinator<T, E> {
       fromVersion,
       toVersion: policy.currentVersion,
     };
-  }
-
-  #readSchemaVersion(value: unknown): number {
-    const policy = this.#definition.migration!;
-    const version = policy.readVersion(structuredClone(value));
-    if (!Number.isSafeInteger(version) || version < 1) {
-      throw new ModuleMigrationError(
-        "ModuleMigrationPolicy.readVersion must return a positive safe integer.",
-      );
-    }
-    return version;
   }
 
   #createPersistedMigration(
@@ -732,6 +785,10 @@ export class SyncCoordinator<T, E> {
     const remote = await this.#remoteRepository.pull();
     const prepared = this.#preparePayloadWithMigration(
       remote?.data ?? this.#definition.createEmpty(),
+      remote
+        ? remote.schemaVersion ?? null
+        : this.#definition.migration?.currentVersion ?? null,
+      "remote",
     );
     // The cloud must already contain the current schema. If it is also old,
     // another device has not actually published the format upgrade yet.
@@ -784,10 +841,14 @@ export class SyncCoordinator<T, E> {
 }
 
 function toObservedRemoteVersion(
-  snapshot: Pick<RemoteRevisionSnapshot, "revision" | "updatedAt"> | null,
+  snapshot: Pick<
+    RemoteRevisionSnapshot,
+    "revision" | "updatedAt" | "schemaVersion"
+  > | null,
 ): ObservedRemoteVersion {
   return {
     revision: snapshot?.revision ?? null,
     updatedAt: snapshot?.updatedAt ?? null,
+    schemaVersion: snapshot?.schemaVersion ?? null,
   };
 }

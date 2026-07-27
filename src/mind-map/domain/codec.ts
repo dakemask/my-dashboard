@@ -60,7 +60,7 @@ export function decodeMindMapPayload(files: ReadonlyMap<string, string>): MindMa
     maps.push(parseStoredMap(text, path, filePath));
   }
 
-  return validateMindMapPayload({ folders: [...folders], maps });
+  return { folders: [...folders], maps };
 }
 
 function parseStoredMap(text: string, path: string, filePath: string): MindMapDocument {

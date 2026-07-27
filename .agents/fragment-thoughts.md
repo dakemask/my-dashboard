@@ -14,7 +14,7 @@
 
 本模块不提供富文本、标签、分类、置顶、归档、历史版本恢复、自动合并或自动上传。正文没有模块人为设置的长度上限，页面也不截断正文；数据规模仍受浏览器、本机存储和远端仓库的实际能力限制。
 
-应用内不包含旧数据迁移逻辑。旧数据需要在应用外转换成本文定义的新版格式，再由用户手动替换私人数据仓库中的文件。
+当前格式作为外部 schema v1 接入 Shared 版本管理；尚无低于 v1 的应用内迁移逻辑。
 
 ## 2. 业务数据与规则
 
@@ -24,7 +24,6 @@
 
 ```ts
 interface FragmentThoughtsPayload {
-  readonly schemaVersion: 2;
   readonly thoughts: readonly FragmentThought[];
 }
 
@@ -41,7 +40,9 @@ interface FragmentThoughtVersion {
 }
 ```
 
-- `schemaVersion` 固定为 `2`。
+- 当前业务格式版本为 v1。版本号由 Shared 保存在本地 IndexedDB envelope 和云端
+  `revision.json.schemaVersion`，不进入业务 payload、event、content key 或
+  `thoughts.json`。
 - thought ID 和 version ID 均为 UUID，规范化为小写；两类 ID 共用整个 payload 的唯一性空间，任何实体之间都不能重号。
 - 每条想法至少有一个版本；`versions` 按旧到新排列，最后一项就是列表显示的当前正文和最后修改时间。
 - `collapsedVersionIds` 保存该想法中处于折叠状态的历史版本，只能引用自身已有版本、不得重复，并按 `versions` 的旧到新顺序规范化。
@@ -50,7 +51,9 @@ interface FragmentThoughtVersion {
 - 不同想法可以拥有相同正文；同一条想法的编辑器检测到正文没有实际变化时不会创建新版本。
 - payload 只接受定义中的字段；缺失或多余字段、空版本数组、非法或重复 ID、非法时间、非递增时间和全空白正文均无效。校验时会把 CRLF 或 CR 换行规范化为 LF。
 
-应用不兼容读取 schema v1。外部转换 v1 数据时把 `schemaVersion` 改为 `2`，并为每条 thought 增加 `collapsedVersionIds: []`；应用内不包含这段迁移逻辑。
+缺失 schemaVersion 时启动停止，不自动解释为 v1。首次接入由用户手动在云端
+`revision.json` 标记 v1、从 `thoughts.json` 删除旧的 payload 内版本字段，并清理
+各设备旧本地数据。
 
 payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thought ID 规范排序；页面始终依据每条想法末版的时间倒序展示。版本折叠状态进入 payload 并参与本地保存与云端同步；搜索词、草稿、焦点和历史面板选择仍是当前标签页的实时状态，不进入 payload。
 
@@ -175,8 +178,8 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 
 - 文件内容是完整 `FragmentThoughtsPayload`，使用两个空格缩进并以换行结尾；
 - 相同 payload 必须得到逐字节相同的文件内容；
-- decode 只接受恰好一个名为 `thoughts.json` 的受管文件；
-- 缺失文件、额外文件、损坏 JSON 或未通过完整 payload 校验的数据一律拒绝；
+- decode 只接受恰好一个名为 `thoughts.json` 的受管文件并解析原始 JSON；
+- 缺失文件、额外文件或损坏 JSON 由 codec 拒绝；Runtime 根据 schemaVersion 完成迁移后再执行完整 payload 校验；
 - codec 不读取或生成 Shared 的系统文件。
 
 模块自动测试只覆盖领域层和 codec：空数据、payload 与折叠引用不变量、五类 event 的 apply/invert 与输入不可变，以及 codec 的稳定编码、往返和非法输入。UI、搜索、保存重试和同步交互由用户依据交付时的验收清单验收。

@@ -13,6 +13,12 @@ import {
 export const mindMapDefinition = defineJsonModule<MindMapPayload, MindMapEvent>({
   moduleId: "mind-maps",
   createEmpty: createEmptyMindMapPayload,
+  migration: {
+    currentVersion: 1,
+    migrate: () => {
+      throw new TypeError("Mind Maps has no schema migration below version 1.");
+    },
+  },
   validate: validateMindMapPayload,
   history: {
     capacity: 100,

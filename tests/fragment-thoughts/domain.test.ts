@@ -39,7 +39,6 @@ function thought(
 
 function fixture(): FragmentThoughtsPayload {
   return validateFragmentThoughtsPayload({
-    schemaVersion: 2,
     thoughts: [thought()],
   });
 }
@@ -56,9 +55,8 @@ function roundTrip(
 }
 
 describe("Fragment Thoughts model", () => {
-  it("creates the schema v2 empty payload and normalizes only line endings", () => {
+  it("creates the empty payload and normalizes only line endings", () => {
     expect(createEmptyFragmentThoughtsPayload()).toEqual({
-      schemaVersion: 2,
       thoughts: [],
     });
     expect(normalizeFragmentThoughtContent("  第一行\r\n第二行\r  ")).toBe(
@@ -68,17 +66,14 @@ describe("Fragment Thoughts model", () => {
 
   it("rejects blank content, malformed UUIDs and non-canonical timestamps", () => {
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, [
         version(VERSION_1_ID, " \r\n\t ", "2026-07-24T01:00:00.000Z"),
       ])],
     })).toThrow(/blank/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought("not-a-uuid")],
     })).toThrow(/UUID/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, [
         version(VERSION_1_ID, "内容", "2026-07-24T09:00:00+08:00"),
       ])],
@@ -87,27 +82,23 @@ describe("Fragment Thoughts model", () => {
 
   it("requires exact fields, non-empty histories and strictly increasing times", () => {
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [],
       extra: true,
     })).toThrow(/properties/);
     expect(() => validateFragmentThoughtsPayload({
       schemaVersion: 1,
       thoughts: [],
-    })).toThrow(/schemaVersion/);
+    })).toThrow(/properties/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [{ id: THOUGHT_ID, versions: [], collapsedVersionIds: [] }],
     })).toThrow(/at least one version/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, [
         version(VERSION_1_ID, "新", "2026-07-24T02:00:00.000Z"),
         version(VERSION_2_ID, "旧", "2026-07-24T01:00:00.000Z"),
       ])],
     })).toThrow(/strictly increasing/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [{
         id: THOUGHT_ID,
         versions: [
@@ -119,11 +110,9 @@ describe("Fragment Thoughts model", () => {
 
   it("rejects duplicate thought and version identifiers across the payload", () => {
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(), thought()],
     })).toThrow(/Duplicate/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [
         thought(),
         thought(OTHER_THOUGHT_ID, [
@@ -139,7 +128,6 @@ describe("Fragment Thoughts model", () => {
       version(VERSION_2_ID, "第二版", "2026-07-24T02:00:00.000Z"),
     ];
     const normalized = validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(
         THOUGHT_ID,
         versions,
@@ -151,18 +139,15 @@ describe("Fragment Thoughts model", () => {
       VERSION_2_ID,
     ]);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, versions, [VERSION_1_ID, VERSION_1_ID])],
     })).toThrow(/Duplicate collapsed/);
     expect(() => validateFragmentThoughtsPayload({
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, versions, [VERSION_3_ID])],
     })).toThrow(/does not exist/);
   });
 
   it("returns a detached payload without modifying its input", () => {
     const input = {
-      schemaVersion: 2,
       thoughts: [thought(THOUGHT_ID, [
         version(VERSION_1_ID, "第一行\r\n第二行", "2026-07-24T01:00:00.000Z"),
       ])],
@@ -347,7 +332,6 @@ describe("Fragment Thoughts module definition and history", () => {
     expect(history.current.thoughts[0]?.versions).toHaveLength(2);
     history.undo();
     expect(history.current).toEqual({
-      schemaVersion: 2,
       thoughts: [insertedThought],
     });
     history.redo();

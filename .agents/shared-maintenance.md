@@ -114,6 +114,7 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 | 字段 | 含义 |
 | --- | --- |
 | `payload` | 最近成功保存的完整业务 payload |
+| `schemaVersion` | 模块业务格式版本；版本化模块必须是明确的正整数 |
 | `contentHash` | 该 payload 的内容 hash |
 | `localRevision` | 本地 CAS 令牌 |
 | `localSavedAt` | 当前本机版本保存时间 |
@@ -124,7 +125,7 @@ runtime ready 后先通知一次 snapshot；其后在 dispatch、历史命令、
 | `conflict` | 观察到的远端 revision/时间和冲突发现时间 |
 | `migration` | 本机已迁移但云端尚未确认的起止版本、迁移后 hash 和业务变化标记 |
 
-数据库版本保持 v1。旧记录缺少 `localSavedAt`、`lastSyncedRemoteUpdatedAt`、conflict 的远端时间或 `migration` 时，读取为 null，不升级数据库版本。业务 payload 没有 Shared 注入的 schemaVersion；迁移策略来自模块定义，Shared 只提供通用执行和同步分支。
+数据库版本保持 v1。旧记录缺少 `localSavedAt`、`lastSyncedRemoteUpdatedAt`、conflict 的远端时间、`schemaVersion` 或 `migration` 时，读取为 null，不升级数据库版本。业务 payload 没有 Shared 注入的 schemaVersion；迁移策略来自模块定义，Shared 只提供版本元数据、通用执行和同步分支。声明 migration 的模块遇到 null schemaVersion 必须停止，不能自动解释为 v1。
 
 ### 3.3 远端模块格式
 
@@ -139,6 +140,7 @@ data/<moduleId>/revision.json
 ```text
 revision: 非空字符串
 updatedAt: ISO 8601 时间
+schemaVersion: 版本化模块的正整数业务格式版本
 managedFiles: 按路径排序的相对路径数组
 ```
 
@@ -178,11 +180,12 @@ undo 应用保存的 inverse，并要求结果 key 等于 entry.beforeKey；redo
 
 双方变化形成冲突时，settle 后的当前完整 payload、content hash、localSavedAt 与 conflict 必须在同一次 CAS 中保存；成功后才把该 payload 标记为本地保存基线。这样刷新不会丢失冲突的本地一侧，但不会推进同步基线。
 
-初始化读取本机 payload 后，Runtime 先用模块 `migration.readVersion` 判断版本。旧
-版本逐级调用 `migrate`，每步必须恰好前进一版，最后才调用当前 `validate`、
-`contentKey`。迁移后的 payload、hash、local revision、保存时间和 migration 状态
-使用一次 CAS 落盘；任一步失败都不覆盖旧记录。旧 schema 的完整性由模块迁移函数
-对源结构负责，当前 schema 仍按存储 content hash 校验。
+初始化读取本机 payload 后，Runtime 从 envelope.schemaVersion 取得版本；远端拉取
+则从 `revision.json.schemaVersion` 取得版本。旧版本逐级调用 `migrate`，最后才调用
+当前 `validate`、`contentKey`。迁移后的 payload、schemaVersion、hash、local
+revision、保存时间和 migration 状态使用一次 CAS 落盘；任一步失败都不覆盖旧记录。
+版本化模块缺失显式版本时停止，不对历史数据作默认解释。旧 schema 的完整性由模块
+迁移函数对源结构负责，当前 schema 仍按存储 content hash 校验。
 
 迁移不推进同步基线。migration 状态记录迁移起止版本、迁移后 hash 以及迁移前后
 是否存在业务修改。普通保存若偏离迁移后 hash，会将业务修改标记永久置为 true，
@@ -241,7 +244,7 @@ migration/pending，直接确认同步。云端仍需迁移、hash 不同或包�
 - 页面可见：约 60 秒加 0–15 秒随机量；
 - 页面隐藏：约 5 分钟加 0–60 秒随机量；
 - visibilitychange 后重排下一次等待；
-- 每轮完整读取 revision 与 updatedAt；普通网络失败静默等待下一轮；
+- 每轮完整读取 revision、updatedAt 与 schemaVersion；普通网络失败静默等待下一轮；
 - 同一 poller 不重叠；gate busy 时协调器返回 busy；
 - stop 必须 abort 当前 signal、等待 in-flight 结束，并阻止停止后的回调。
 
@@ -319,13 +322,13 @@ token 只能存在于认证存储和发往 `https://api.github.com` 的 Authoriz
 
 - 每模块隔离、单记录 CAS、事务失败不推进、pending/conflict 跨刷新。
 - v1 旧记录缺失三个时间字段时读取为 null。
-- v1 旧记录缺失 migration 时读取为 null；迁移 CAS 失败不覆盖原 payload。
+- v1 旧记录缺失 schemaVersion/migration 时读取为 null；版本化模块拒绝缺失版本，迁移 CAS 失败不覆盖原 payload。
 - 冲突时 payload/hash/conflict 同事务保存并正确更新本地基线。
 
 #### GitHub
 
 - 全部注入 fake fetch，绝不连接真实仓库。
-- 单模块单 commit、未知文件保留、受管差集删除、非法路径拒绝和 decode 后 validate。
+- 单模块单 commit、revision schemaVersion、未知文件保留、受管差集删除、非法路径拒绝和 decode 后迁移/validate。
 - 同模块冲突、跨模块最多三次重试、响应丢失幂等、main ref no-store。
 
 #### 同步与轮询

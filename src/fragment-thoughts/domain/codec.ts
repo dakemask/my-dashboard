@@ -14,7 +14,7 @@ export function encodeFragmentThoughtsPayload(
 
 export function decodeFragmentThoughtsPayload(
   files: ReadonlyMap<string, string>,
-): FragmentThoughtsPayload {
+): unknown {
   if (!files || typeof files.entries !== "function") {
     throw new TypeError("Fragment Thoughts files must be a ReadonlyMap.");
   }
@@ -43,5 +43,5 @@ export function decodeFragmentThoughtsPayload(
   } catch {
     throw new TypeError(`Fragment Thoughts file is not valid JSON: ${filePath}`);
   }
-  return validateFragmentThoughtsPayload(value);
+  return value;
 }

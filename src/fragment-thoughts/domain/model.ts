@@ -4,14 +4,11 @@ import type {
   FragmentThoughtVersion,
 } from "./types";
 
-export const FRAGMENT_THOUGHTS_SCHEMA_VERSION = 2 as const;
-
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function createEmptyFragmentThoughtsPayload(): FragmentThoughtsPayload {
   return {
-    schemaVersion: FRAGMENT_THOUGHTS_SCHEMA_VERSION,
     thoughts: [],
   };
 }
@@ -94,14 +91,9 @@ export function validateFragmentThought(value: unknown): FragmentThought {
 export function validateFragmentThoughtsPayload(value: unknown): FragmentThoughtsPayload {
   const record = requireExactRecord(
     value,
-    ["schemaVersion", "thoughts"],
+    ["thoughts"],
     "Fragment Thoughts payload",
   );
-  if (record.schemaVersion !== FRAGMENT_THOUGHTS_SCHEMA_VERSION) {
-    throw new TypeError(
-      `Fragment Thoughts schemaVersion must be ${FRAGMENT_THOUGHTS_SCHEMA_VERSION}.`,
-    );
-  }
   if (!Array.isArray(record.thoughts)) {
     throw new TypeError("Fragment Thoughts payload thoughts must be an array.");
   }
@@ -114,7 +106,6 @@ export function validateFragmentThoughtsPayload(value: unknown): FragmentThought
   }
 
   return {
-    schemaVersion: FRAGMENT_THOUGHTS_SCHEMA_VERSION,
     thoughts: [...thoughts].sort(compareThoughtIds),
   };
 }

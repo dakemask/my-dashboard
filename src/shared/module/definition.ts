@@ -36,12 +36,9 @@ export function defineModule<TPayload, TEvent>(
     ) {
       throw new RangeError("Migration currentVersion must be a positive safe integer.");
     }
-    if (
-      typeof migration.readVersion !== "function"
-      || typeof migration.migrate !== "function"
-    ) {
+    if (typeof migration.migrate !== "function") {
       throw new TypeError(
-        "A migration policy with readVersion and migrate functions is required.",
+        "A migration policy with a migrate function is required.",
       );
     }
   }

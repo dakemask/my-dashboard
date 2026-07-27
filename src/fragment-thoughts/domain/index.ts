@@ -1,5 +1,4 @@
 export {
-  FRAGMENT_THOUGHTS_SCHEMA_VERSION,
   createEmptyFragmentThoughtsPayload,
   normalizeFragmentThoughtContent,
   validateFragmentThought,

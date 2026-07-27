@@ -37,20 +37,23 @@ payload 必须：
 
 ### 业务 schema 迁移
 
-需要演进持久化格式的模块在 payload 或远端业务格式中保存自己的 schema
-版本，并在模块定义中提供可选的 `migration` 策略：
+需要演进持久化格式的模块在模块定义中提供可选的 `migration` 策略。schema
+版本属于 Shared 管理的模块快照元数据：本地保存在 IndexedDB envelope，云端保存
+在 `revision.json.schemaVersion`，不进入业务 payload、event、content key 或受管
+业务文件。
 
 - `currentVersion` 是当前代码产生和接受的正整数版本；
-- `readVersion(value)` 在尚未按当前结构校验前读取业务版本；
-- `migrate(value, fromVersion)` 只迁移一个版本，结果必须是
-  `fromVersion + 1`；Runtime 会逐版调用直到当前版本；
+- `migrate(value, fromVersion)` 把 payload 迁移一个版本；Runtime 根据 envelope 或
+  `revision.json` 提供的来源版本逐版调用，直到 `currentVersion`；
 - 每一步迁移必须确定、无副作用、不修改输入，并完整校验其源版本；
 - `validate`、`contentKey` 和 `encode` 只处理迁移完成后的当前版本；
 - `decode` 只把远端文本解析为未知版本的原始值，不得提前只接受当前版本。
 
 Shared 不理解模块字段和迁移语义，只负责克隆、按序调用、最终校验、原子保存和
-同步状态。高于 `currentVersion` 的数据、无效版本、跳级结果或迁移异常必须停止，
-不得猜测修复，也不得覆盖原始本地记录。
+同步状态。版本化模块缺少明确 schemaVersion、高于 `currentVersion`、版本无效或
+迁移异常时必须停止，不得把缺失版本猜测为 v1，也不得覆盖原始本地记录。已有模块
+首次接入版本化时，由用户明确把当前云端数据标记为初始版本，并清理或显式转换旧
+本地数据。
 
 确实使用 JSON 兼容 payload 的模块使用 `defineJsonModule`。需要 `Map`、`Set`、`Date`、`ArrayBuffer`、类型化数组或其他可 structured-clone 数据的模块使用 `defineModule`，并自行提供稳定的 `contentKey`。函数、DOM 引用、`WeakMap` 等不能可靠持久化的值不得进入 payload。
 
@@ -63,7 +66,7 @@ Shared 不理解模块字段和迁移语义，只负责克隆、按序调用、�
 - 能完整反映业务语义的 `contentKey(payload)`；
 - event 历史策略；
 - payload 与远端受管文本文件之间的 `encode`/`decode`。
-- 如需格式演进，提供业务 `migration` 策略。
+- 如需格式演进，提供模块 `migration` 策略；版本元数据由 Shared 保存。
 
 相同业务内容必须产生相同 content key 和相同受管文件；任何需要保存或同步的业务变化都必须改变 content key。远端文件可以是 JSON、Markdown、YAML、CSV 或模块自定义的 UTF-8 文本格式。
 
@@ -206,7 +209,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 模块不能直接读写 IndexedDB、GitHub、token、revision、编辑锁或 Shared 内部组件；
 - 模块不能修改 `runtime.current` 来推进状态，只能 dispatch event；
 - 模块不能把系统状态混入 payload、event 或撤销队列；
-- 模块不得自行读写 Shared 的 migration 状态；业务 schema 版本和迁移规则仍由模块定义；
+- 模块不得自行读写 Shared 的 schemaVersion 或 migration 状态；当前版本和迁移规则仍由模块定义；
 - 模块使用 SDK 提供的单标签锁、操作阻塞、云端遮罩和同步 UI，不实现竞态降级方案或第二套同步 UI；
 - 失败提示不得包含 token、原始 GitHub 响应、请求头或任意序列化的捕获异常；
 

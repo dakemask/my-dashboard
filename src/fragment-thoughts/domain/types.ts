@@ -11,7 +11,6 @@ export interface FragmentThought {
 }
 
 export interface FragmentThoughtsPayload {
-  readonly schemaVersion: 2;
   readonly thoughts: readonly FragmentThought[];
 }
 

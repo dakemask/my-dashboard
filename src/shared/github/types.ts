@@ -56,6 +56,8 @@ export interface RemoteModuleCodec<T> {
 export interface RemoteModuleRevision {
   revision: string;
   updatedAt: string;
+  /** Business format version; absent only for modules that have not opted into versioning. */
+  schemaVersion?: number | null;
   managedFiles: readonly string[];
 }
 
@@ -71,12 +73,14 @@ export interface RemoteModuleSnapshot<T = unknown> extends RemoteRevisionSnapsho
 export interface RemoteModulePushOptions {
   expectedRevision: string | null;
   nextRevision: string;
+  schemaVersion?: number;
   updatedAt?: string;
   message?: string;
 }
 
 export interface RemoteModuleOverwriteOptions {
   nextRevision: string;
+  schemaVersion?: number;
   updatedAt?: string;
   message?: string;
 }

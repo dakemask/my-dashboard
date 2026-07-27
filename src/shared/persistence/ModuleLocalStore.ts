@@ -269,6 +269,7 @@ export class ModuleLocalStore<T> {
 function normalizeEnvelope<T>(stored: ModuleLocalEnvelope<T>): ModuleLocalEnvelope<T> {
   return {
     ...stored,
+    schemaVersion: stored.schemaVersion ?? null,
     localSavedAt: stored.localSavedAt ?? null,
     lastSyncedRemoteUpdatedAt: stored.lastSyncedRemoteUpdatedAt ?? null,
     conflict: stored.conflict

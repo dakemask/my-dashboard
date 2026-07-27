@@ -18,6 +18,7 @@ function envelope(
 ): ModuleLocalEnvelope<Payload> {
   return {
     payload: { value },
+    schemaVersion: null,
     contentHash: `hash-${value}`,
     localRevision,
     localSavedAt: null,
@@ -68,6 +69,7 @@ describe("ModuleLocalStore", () => {
     };
     const record: ModuleLocalEnvelope<RichPayload> = {
       payload,
+      schemaVersion: null,
       contentHash: "rich-hash",
       localRevision: "00000000-0000-4000-8000-000000000010",
       localSavedAt: null,
@@ -114,7 +116,7 @@ describe("ModuleLocalStore", () => {
     await store.compareAndSwap(firstRevision, next);
 
     expect(await store.load()).toEqual(next);
-    expect(await store.load()).not.toHaveProperty("schemaVersion");
+    expect(await store.load()).toHaveProperty("schemaVersion", null);
   });
 
   it("rejects a stale writer without changing the stored record", async () => {

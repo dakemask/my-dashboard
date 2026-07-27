@@ -150,37 +150,22 @@ codec 只管理模块业务文件：
 
 ### 需要 schema 演进时
 
-只有确实需要长期演进格式的模块才添加业务版本。版本属于 payload/远端业务格式，
-不是 Shared envelope 字段。模块定义提供逐版迁移，例如：
+只有确实需要长期演进格式的模块才声明迁移策略。版本不进入业务 payload；Shared
+把本地版本保存在 IndexedDB envelope，把云端版本保存在 `revision.json`。新模块
+从 v1 开始：
 
 ```ts
-interface NotesPayloadV1 {
-  readonly schemaVersion: 1;
-  readonly notes: readonly string[];
-}
-
 interface NotesPayload {
-  readonly schemaVersion: 2;
   readonly notes: readonly Note[];
 }
 
 export const notesDefinition = defineJsonModule<NotesPayload, NotesEvent>({
   moduleId: "notes",
-  createEmpty: () => ({ schemaVersion: 2, notes: [] }),
+  createEmpty: () => ({ notes: [] }),
   migration: {
-    currentVersion: 2,
-    readVersion(value) {
-      const version = (value as { schemaVersion?: unknown }).schemaVersion;
-      if (!Number.isSafeInteger(version)) throw new TypeError("Invalid notes schema.");
-      return version as number;
-    },
-    migrate(value, fromVersion) {
-      if (fromVersion !== 1) throw new TypeError("Unsupported notes schema.");
-      const old = validateNotesPayloadV1(value);
-      return {
-        schemaVersion: 2,
-        notes: old.notes.map((text, index) => ({ id: `legacy-${index}`, text })),
-      };
+    currentVersion: 1,
+    migrate(_value, _fromVersion) {
+      throw new TypeError("Notes has no schema migration below version 1.");
     },
   },
   validate: validateNotesPayload,
@@ -193,12 +178,17 @@ export const notesDefinition = defineJsonModule<NotesPayload, NotesEvent>({
 });
 ```
 
-每个 `migrate(value, fromVersion)` 必须完整验证对应源版本并只前进一版。不要在一个
-函数中跳过中间版本，也不要让 `decode` 提前调用只接受当前版本的 validator。
+以后升级 v1 → v2 时，把 `currentVersion` 改为 2，并让
+`migrate(value, 1)` 完整验证 v1 后返回 v2 payload。每次调用只前进一版，不要让
+`decode` 提前调用只接受当前版本的 validator。
 
 Runtime 会先原子迁移各设备的本地 IndexedDB，但不推进同步基线。纯迁移会自动
 竞争非强制上传；其他设备若发现云端已是当前 schema 且迁移后内容相同，会直接
 确认同步。迁移前已有业务修改或冲突时继续使用普通四象限和冲突流程。
+
+已有模块首次接入时必须明确转换：在云端 `revision.json` 写入当前版本，并处理每台
+设备的旧 IndexedDB。版本化模块缺少 schemaVersion 时 Runtime 会停止，不会自动
+当作 v1。
 
 ## 第三步：实现实时交互边界
 

@@ -41,13 +41,15 @@ describe("Mind Map remote codec", () => {
   });
 
   it("round-trips the complete normalized payload", () => {
-    expect(decodeMindMapPayload(encodeMindMapPayload(payload))).toEqual(payload);
+    expect(
+      validateMindMapPayload(decodeMindMapPayload(encodeMindMapPayload(payload))),
+    ).toEqual(payload);
   });
 
   it("reconstructs every parent folder from managed file paths", () => {
-    const decoded = decodeMindMapPayload(new Map([
+    const decoded = validateMindMapPayload(decodeMindMapPayload(new Map([
       ["甲/乙/图.json", JSON.stringify({ id: "m", nodes: [], arrows: [] })],
-    ]));
+    ])));
     expect(decoded.folders).toEqual(["甲", "甲/乙"]);
     expect(decoded.maps[0]?.path).toBe("甲/乙/图");
   });
@@ -55,13 +57,13 @@ describe("Mind Map remote codec", () => {
   it("rejects malformed, unknown and non-normalized managed content", () => {
     expect(() => decodeMindMapPayload(new Map([["note.txt", ""]]))).toThrow(/Unsupported/);
     expect(() => decodeMindMapPayload(new Map([["Folder/.gitkeep", "not empty"]]))).toThrow(/empty/);
-    expect(() => decodeMindMapPayload(new Map([[
+    expect(() => validateMindMapPayload(decodeMindMapPayload(new Map([[
       "Map.json",
       JSON.stringify({ id: "m", nodes: [], arrows: [], extra: true }),
-    ]]))).toThrow(/properties/);
-    expect(() => decodeMindMapPayload(new Map([[
+    ]])))).toThrow(/properties/);
+    expect(() => validateMindMapPayload(decodeMindMapPayload(new Map([[
       " Map.json",
       JSON.stringify({ id: "m", nodes: [], arrows: [] }),
-    ]]))).toThrow(/normalized/);
+    ]])))).toThrow(/normalized/);
   });
 });

@@ -117,15 +117,14 @@ describe("RemoteModuleRepository", () => {
       ...codec,
       migration: {
         currentVersion: 2,
-        readVersion: () => 1,
         migrate: (value: unknown) => value,
       },
       validate,
-      decode: () => ({ schemaVersion: 1 }),
+      decode: () => ({ legacy: true }),
     });
 
     await expect(repository.pull()).resolves.toMatchObject({
-      data: { schemaVersion: 1 },
+      data: { legacy: true },
     });
     expect(validate).not.toHaveBeenCalled();
   });
@@ -144,7 +143,12 @@ describe("RemoteModuleRepository", () => {
 
     const result = await repository.push(
       { files: new Map([["keep.json", "new"], ["new.json", "created"]]) },
-      { expectedRevision: "r1", nextRevision: "r2", updatedAt: "2026-07-10T10:00:00.000Z" },
+      {
+        expectedRevision: "r1",
+        nextRevision: "r2",
+        schemaVersion: 1,
+        updatedAt: "2026-07-10T10:00:00.000Z",
+      },
     );
 
     expect(result).toMatchObject({ status: "committed", revision: "r2" });
@@ -157,6 +161,7 @@ describe("RemoteModuleRepository", () => {
     expect(JSON.parse(github.readHeadFile("data/test-module/revision.json")!)).toEqual({
       revision: "r2",
       updatedAt: "2026-07-10T10:00:00.000Z",
+      schemaVersion: 1,
       managedFiles: ["keep.json", "new.json"],
     });
     expect(github.lastPatchBody).toEqual({ sha: result.commitSha, force: false });
