@@ -62,7 +62,9 @@ npm test
 npm run build
 ```
 
-实际页面的呈现和交互体验由用户验收。Agent 可在对话中给出验收清单。没有用户或文档内容的允许，Agent 禁止进行其他验收，也禁止自行编写其他测试文件。
+一般来说，实际页面的呈现和交互体验由用户验收。Agent 可在对话中给出验收清单。
+
+没有用户或文档内容的允许，Agent 禁止进行其他验收，也禁止自行增添其他测试文件或修改现有测试文件。对于需要测试的场景，Agent 可通过自定义工具 `airuma_custom.custom_request_user_input` 向用户进行申请。
 
 ## 最高级规则
 
@@ -75,4 +77,5 @@ npm run build
 本节记录在日常开发中稳定触发、会造成重复失败的问题；以及一些其他的开发规范。
 
 - Vite 和 Vitest 需要启动 esbuild 子进程；不要在受限 sandbox 中运行 `npm test` 或 `npm run build`，直接申请沙箱外权限执行。
-- 适合用图标表达的按钮（尤其是工具栏、重复操作和空间紧凑的常见动作）必须使用图标。图标统一使用字节跳动 IconPark 的 `@icon-park/svg`，由 TypeScript 引用并通过 Vite 直接编译进构建产物；禁止依赖运行时图标 CDN 或远程图标资源。纯图标按钮必须同时提供准确的 `aria-label` 和 `title`，不能牺牲可访问性或让含义依赖猜测。
+- 适合用图标表达的按钮（尤其是工具栏、重复操作和空间紧凑的常见动作）必须使用图标。图标统一使用字节跳动 IconPark 的 `@icon-park/svg`，由 TypeScript 引用并通过 Vite 直接编译进构建产物。纯图标按钮必须同时提供准确的 `aria-label` 和 `title`。
+- 随时使用自定义工具 `airuma_custom.custom_request_user_input` 与用户进行交流，向用户确认选择，以防止潜在的误解。
