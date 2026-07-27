@@ -62,6 +62,29 @@ describe("RemoteModuleRepository", () => {
     expect(onCredentialsInvalid).toHaveBeenCalledOnce();
   });
 
+  it("invokes an injected fetch function without using the client as its receiver", async () => {
+    const github = new FakeGitHub();
+    let fetchReceiver: unknown = "not called";
+    const request: GitHubFetch = function (
+      this: unknown,
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) {
+      fetchReceiver = this;
+      return github.fetch(input, init);
+    };
+    const client = new GitHubGitDataClient({
+      owner: "alice",
+      token: "secret-token",
+      fetch: request,
+      onCredentialsInvalid: () => undefined,
+    });
+
+    await client.getBranchSnapshot();
+
+    expect(fetchReceiver).toBeUndefined();
+  });
+
   it("pulls the manifest and every managed blob from one commit snapshot", async () => {
     const github = new FakeGitHub();
     github.seedModule("test-module", revision("r1", ["a.json", "nested/b.json"]), {

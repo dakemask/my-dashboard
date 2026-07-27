@@ -74,7 +74,8 @@ export class GitHubGitDataClient {
     }
 
     this.coordinates = Object.freeze({ owner, repository, branch });
-    this.#fetch = options.fetch;
+    const request = options.fetch;
+    this.#fetch = (input, init) => request(input, init);
     this.#token = options.token;
     this.#onCredentialsInvalid = options.onCredentialsInvalid;
   }

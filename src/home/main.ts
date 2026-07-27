@@ -15,6 +15,7 @@ import {
 import { queryRequired } from "../shared/dom";
 import {
   bindFirstAccount,
+  AccountSetupError,
   clearLocalProfile,
   inspectFirstAccount,
   type FirstAccountDirection,
@@ -263,6 +264,8 @@ function renderAddAccountForm(
     ).catch((caught: unknown) => {
       error.textContent = caught instanceof AuthenticationError
         ? caught.message
+        : caught instanceof AccountSetupError
+          ? `${caught.message} 本地数据和已有账户均未修改。`
         : caught instanceof AccountSetupCancelledError
           ? "已取消添加账户，本地数据没有被修改。"
           : "添加账户失败，本地数据和已有账户均未修改。";
