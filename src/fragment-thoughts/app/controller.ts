@@ -152,7 +152,8 @@ export class FragmentThoughtsController {
       this.#editing.draft = target.value;
       this.#editing.error = null;
       target.setAttribute("aria-invalid", "false");
-      const error = target.parentElement?.querySelector<HTMLElement>(".ft-field-error");
+      const error = target.closest(".ft-thought-card")
+        ?.querySelector<HTMLElement>(".ft-field-error");
       if (error) {
         error.textContent = "";
         error.hidden = true;
@@ -718,6 +719,7 @@ export class FragmentThoughtsController {
       this.#payload.thoughts.length === 0
         ? "还没有想法。先记录第一条吧。"
         : "没有找到匹配的想法。",
+      this.#payload.thoughts.map((thought) => thought.id),
     );
     this.#shell.setSearchStatus(
       query.length === 0

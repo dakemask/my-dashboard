@@ -48,6 +48,21 @@ export interface ThoughtHistoryView {
   readonly versions: readonly ThoughtHistoryVersionView[];
 }
 
+interface ThoughtCardElements {
+  readonly card: HTMLElement;
+  readonly editorLabel: HTMLLabelElement;
+  readonly editor: HTMLTextAreaElement;
+  readonly highlight: HTMLElement;
+  readonly error: HTMLElement;
+  readonly historyMatch: HTMLButtonElement;
+  readonly modified: HTMLTimeElement;
+  readonly remove: HTMLButtonElement;
+  readonly edit: HTMLButtonElement;
+  readonly history: HTMLButtonElement;
+  readonly cancel: HTMLButtonElement;
+  readonly save: HTMLButtonElement;
+}
+
 export interface FragmentThoughtsShellElements {
   readonly root: HTMLElement;
   readonly homeLink: HTMLAnchorElement;
@@ -88,6 +103,7 @@ export class FragmentThoughtsShell {
   #historyCloseTimer: number | null = null;
   #historyReturnFocus: HTMLElement | null = null;
   #mobileHistoryQuery: MediaQueryList | null = null;
+  readonly #thoughtCards = new Map<string, ThoughtCardElements>();
   readonly #onMobileHistoryChange = (event: MediaQueryListEvent): void => {
     if (this.elements.root.classList.contains("history-open")) {
       this.#setHistoryBackgroundInert(event.matches);
@@ -432,17 +448,24 @@ export class FragmentThoughtsShell {
   renderThoughts(
     thoughts: readonly ThoughtCardView[],
     emptyMessage?: string,
+    availableThoughtIds: readonly string[] = thoughts.map((thought) => thought.id),
   ): void {
     const document = this.elements.thoughtList.ownerDocument;
-    const cards = thoughts.map((thought) =>
-      createThoughtCard(document, thought),
-    );
-    this.elements.thoughtList.replaceChildren(...cards);
-    for (const editor of this.elements.thoughtList.querySelectorAll<HTMLTextAreaElement>(
-      ".ft-edit-input",
-    )) {
-      resizeTextarea(editor, 1);
+    const available = new Set(availableThoughtIds);
+    for (const thoughtId of this.#thoughtCards.keys()) {
+      if (!available.has(thoughtId)) this.#thoughtCards.delete(thoughtId);
     }
+    const cards = thoughts.map((thought) => {
+      let elements = this.#thoughtCards.get(thought.id);
+      if (!elements) {
+        elements = createThoughtCard(document, thought.id);
+        this.#thoughtCards.set(thought.id, elements);
+      }
+      updateThoughtCard(elements, thought);
+      resizeTextarea(elements.editor, 1);
+      return elements.card;
+    });
+    this.elements.thoughtList.replaceChildren(...cards);
     this.elements.listEmpty.textContent =
       emptyMessage ?? "还没有想法。先记录第一条吧。";
     this.elements.listEmpty.hidden = thoughts.length !== 0;
@@ -673,132 +696,170 @@ export function formatTimestamp(value: string): string {
 
 function createThoughtCard(
   document: Document,
-  thought: ThoughtCardView,
-): HTMLElement {
+  thoughtId: string,
+): ThoughtCardElements {
   const card = document.createElement("article");
   card.className = "ft-thought-card";
-  card.dataset.thoughtId = thought.id;
-  card.classList.toggle("is-editing", thought.editing === true);
-  card.classList.toggle("history-selected", thought.historyOpen === true);
+  card.dataset.thoughtId = thoughtId;
 
-  let error: HTMLElement | null = null;
-  if (thought.editing) {
-    const editorLabel = document.createElement("label");
-    editorLabel.className = "ft-visually-hidden";
-    const editorId = `fragment-thought-edit-${safeDomId(thought.id)}`;
-    editorLabel.htmlFor = editorId;
-    editorLabel.textContent = "编辑想法内容";
-    const editor = document.createElement("textarea");
-    editor.id = editorId;
-    editor.className = "ft-edit-input";
-    editor.value = thought.editDraft ?? thought.content;
-    editor.rows = 1;
-    editor.dataset.role = "edit-input";
-    editor.dataset.thoughtId = thought.id;
-    editor.setAttribute("aria-invalid", String(Boolean(thought.editError)));
-    editor.addEventListener("input", () => resizeTextarea(editor, 1));
+  const editorLabel = document.createElement("label");
+  editorLabel.className = "ft-visually-hidden";
+  const editorId = `fragment-thought-edit-${safeDomId(thoughtId)}`;
+  editorLabel.htmlFor = editorId;
+  const textRegion = document.createElement("div");
+  textRegion.className = "ft-thought-text-region";
+  const highlight = document.createElement("div");
+  highlight.className = "ft-thought-highlight";
+  highlight.setAttribute("aria-hidden", "true");
+  const editor = document.createElement("textarea");
+  editor.id = editorId;
+  editor.className = "ft-edit-input";
+  editor.rows = 1;
+  editor.dataset.role = "edit-input";
+  editor.dataset.thoughtId = thoughtId;
+  editor.addEventListener("input", () => resizeTextarea(editor, 1));
+  textRegion.append(highlight, editor);
 
-    error = document.createElement("p");
-    error.className = "ft-field-error";
-    error.setAttribute("role", "alert");
-    error.textContent = thought.editError ?? "";
-    error.hidden = !thought.editError;
-    card.append(editorLabel, editor, error);
-  } else {
-    const content = document.createElement("p");
-    content.className = "ft-thought-content";
-    appendHighlightedText(
-      content,
-      thought.content,
-      thought.highlightQuery ?? "",
-    );
+  const error = document.createElement("p");
+  error.id = `${editorId}-error`;
+  error.className = "ft-field-error";
+  error.setAttribute("role", "alert");
+  editor.setAttribute("aria-describedby", error.id);
 
-    if ((thought.historyMatchCount ?? 0) > 0) {
-      const historyMatch = createActionButton(
-        document,
-        `历史命中 ${thought.historyMatchCount} 版`,
-        "open-history-match",
-        thought.id,
-        "ft-history-match",
-        HistoryIcon,
-      );
-      historyMatch.title = "打开历史并查看匹配内容";
-      card.append(content, historyMatch);
-    } else {
-      card.append(content);
-    }
-  }
+  const historyMatch = createActionButton(
+    document,
+    "历史命中",
+    "open-history-match",
+    thoughtId,
+    "ft-history-match",
+    HistoryIcon,
+  );
+  historyMatch.title = "打开历史并查看匹配内容";
 
   const footer = document.createElement("footer");
   footer.className = "ft-card-footer";
   const modified = document.createElement("time");
   modified.className = "ft-modified-time";
-  modified.dateTime = thought.modifiedAt;
-  modified.title = thought.modifiedAt;
-  modified.textContent = `上次修改：${formatTimestamp(thought.modifiedAt)}`;
-
   const actions = document.createElement("div");
   actions.className = "ft-card-actions";
-  if (thought.editing) {
-    actions.classList.add("ft-edit-actions");
-    const cancel = createActionButton(
-      document,
-      "取消",
-      "cancel-edit",
-      thought.id,
-      "ft-card-button",
-      CloseSmall,
-      true,
-      "取消这次编辑",
-    );
-    const save = createActionButton(
-      document,
-      "保存修改",
-      "save-edit",
-      thought.id,
-      "ft-card-button ft-card-button-primary",
-      Save,
-    );
-    actions.append(cancel, save);
-  } else {
-    const remove = createActionButton(
-      document,
-      "删除",
-      "delete-thought",
-      thought.id,
-      "ft-card-button ft-card-button-danger",
-      Delete,
-      true,
-      "删除这条想法",
-    );
-    const edit = createActionButton(
-      document,
-      "编辑",
-      "edit-thought",
-      thought.id,
-      "ft-card-button",
-      Edit,
-      true,
-      "编辑这条想法",
-    );
-    const history = createActionButton(
-      document,
-      "历史",
-      "toggle-history",
-      thought.id,
-      "ft-card-button",
-      HistoryIcon,
-      true,
-      "查看这条想法的修改记录",
-    );
-    remove.disabled = thought.mutationsDisabled === true;
-    edit.disabled = thought.mutationsDisabled === true;
-    history.setAttribute("aria-pressed", String(thought.historyOpen === true));
-    actions.append(remove, edit, history);
-  }
+  const remove = createActionButton(
+    document,
+    "删除",
+    "delete-thought",
+    thoughtId,
+    "ft-card-button ft-card-button-danger",
+    Delete,
+    true,
+    "删除这条想法",
+  );
+  const edit = createActionButton(
+    document,
+    "编辑",
+    "edit-thought",
+    thoughtId,
+    "ft-card-button",
+    Edit,
+    true,
+    "编辑这条想法",
+  );
+  const history = createActionButton(
+    document,
+    "历史",
+    "toggle-history",
+    thoughtId,
+    "ft-card-button",
+    HistoryIcon,
+    true,
+    "查看这条想法的修改记录",
+  );
+  const cancel = createActionButton(
+    document,
+    "取消",
+    "cancel-edit",
+    thoughtId,
+    "ft-card-button",
+    CloseSmall,
+    true,
+    "取消这次编辑",
+  );
+  const save = createActionButton(
+    document,
+    "保存修改",
+    "save-edit",
+    thoughtId,
+    "ft-card-button ft-card-button-primary",
+    Save,
+    true,
+    "保存这次编辑",
+  );
+  actions.append(remove, edit, history, cancel, save);
   footer.append(modified, actions);
-  card.append(footer);
-  return card;
+  card.append(editorLabel, textRegion, error, historyMatch, footer);
+  return {
+    card,
+    editorLabel,
+    editor,
+    highlight,
+    error,
+    historyMatch,
+    modified,
+    remove,
+    edit,
+    history,
+    cancel,
+    save,
+  };
+}
+
+function updateThoughtCard(
+  elements: ThoughtCardElements,
+  thought: ThoughtCardView,
+): void {
+  const editing = thought.editing === true;
+  const editorValue = editing ? thought.editDraft ?? thought.content : thought.content;
+  elements.card.classList.toggle("is-editing", editing);
+  elements.card.classList.toggle("history-selected", thought.historyOpen === true);
+  elements.editorLabel.textContent = editing ? "编辑想法内容" : "想法内容";
+  if (elements.editor.value !== editorValue) elements.editor.value = editorValue;
+  elements.editor.readOnly = !editing;
+  elements.editor.tabIndex = editing ? 0 : -1;
+  elements.editor.setAttribute("aria-invalid", String(Boolean(thought.editError)));
+
+  elements.highlight.replaceChildren();
+  appendHighlightedText(
+    elements.highlight,
+    thought.content,
+    thought.highlightQuery ?? "",
+  );
+  const showHighlight =
+    !editing && elements.highlight.querySelector("mark") !== null;
+  elements.highlight.hidden = !showHighlight;
+  elements.card.classList.toggle("has-highlight-mirror", showHighlight);
+
+  elements.error.textContent = thought.editError ?? "";
+  elements.error.hidden = !thought.editError;
+
+  const historyMatchCount = thought.historyMatchCount ?? 0;
+  elements.historyMatch.hidden = editing || historyMatchCount === 0;
+  elements.historyMatch.setAttribute(
+    "aria-label",
+    `历史命中 ${historyMatchCount} 版`,
+  );
+  const historyMatchLabel = elements.historyMatch.querySelector(".ft-button-label");
+  if (historyMatchLabel) historyMatchLabel.textContent = `历史命中 ${historyMatchCount} 版`;
+
+  elements.modified.dateTime = thought.modifiedAt;
+  elements.modified.title = thought.modifiedAt;
+  elements.modified.textContent = `上次修改：${formatTimestamp(thought.modifiedAt)}`;
+
+  elements.remove.hidden = editing;
+  elements.edit.hidden = editing;
+  elements.history.hidden = editing;
+  elements.cancel.hidden = !editing;
+  elements.save.hidden = !editing;
+  elements.remove.disabled = thought.mutationsDisabled === true;
+  elements.edit.disabled = thought.mutationsDisabled === true;
+  elements.history.setAttribute("aria-pressed", String(thought.historyOpen === true));
 }
 
 function createHistoryVersion(

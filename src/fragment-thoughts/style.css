@@ -583,7 +583,7 @@ button:disabled {
     var(--ft-shadow-soft);
 }
 
-.ft-thought-content,
+.ft-thought-highlight,
 .ft-history-content,
 .ft-edit-input {
   margin: 0;
@@ -593,6 +593,24 @@ button:disabled {
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.ft-thought-text-region {
+  position: relative;
+  min-width: 0;
+}
+
+.ft-thought-highlight {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ft-thought-card.has-highlight-mirror .ft-edit-input {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 mark {
@@ -639,6 +657,25 @@ mark {
   font-weight: 680;
 }
 
+.ft-card-actions {
+  display: grid;
+  grid-template-columns: repeat(3, var(--ft-control-compact));
+}
+
+.ft-card-actions [data-action="delete-thought"] {
+  grid-column: 1;
+}
+
+.ft-card-actions [data-action="edit-thought"],
+.ft-card-actions [data-action="cancel-edit"] {
+  grid-column: 2;
+}
+
+.ft-card-actions [data-action="toggle-history"],
+.ft-card-actions [data-action="save-edit"] {
+  grid-column: 3;
+}
+
 .ft-card-button.ft-icon-only {
   width: var(--ft-control-compact);
   padding-inline: 0;
@@ -672,6 +709,8 @@ mark {
 }
 
 .ft-edit-input {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   min-height: 1.65em;
@@ -684,6 +723,11 @@ mark {
   resize: none;
   field-sizing: content;
   caret-color: var(--ft-accent);
+}
+
+.ft-edit-input[readonly] {
+  cursor: text;
+  caret-color: transparent;
 }
 
 .ft-edit-input:focus {

@@ -378,6 +378,17 @@ export class LibraryTreeView {
     const editor = this.#container.ownerDocument.createElement("div");
     editor.className = "library-inline-editor";
     editor.classList.toggle("is-rename", draft.kind === "rename");
+    const renamedSelection = draft.kind === "rename" ? draft.selection : null;
+    const selected = sameSelection(this.#state?.selection ?? null, renamedSelection);
+    const current = renamedSelection?.kind === "map"
+      && this.#state?.currentMapId === renamedSelection.mapId;
+    const dirty = renamedSelection?.kind === "folder"
+      ? this.#state?.dirtyFolderPaths.has(renamedSelection.path) === true
+      : renamedSelection?.kind === "map"
+        && this.#state?.dirtyMapIds.has(renamedSelection.mapId) === true;
+    editor.classList.toggle("selected", selected);
+    editor.classList.toggle("current", current);
+    editor.classList.toggle("dirty", dirty);
     const spacer = this.#container.ownerDocument.createElement("span");
     spacer.className = "folder-arrow folder-arrow-spacer";
     const icon = this.#container.ownerDocument.createElement("span");
@@ -435,7 +446,9 @@ export class LibraryTreeView {
       this.#attemptDraftCommit();
     });
     input.addEventListener("blur", () => this.#attemptDraftCommit());
-    editor.append(spacer, icon, input, cancel, error);
+    editor.append(spacer, icon, input);
+    if (dirty) editor.append(this.#createDirtyMarker());
+    editor.append(cancel, error);
     this.#draftInput = input;
     this.#draftError = error;
     return editor;
@@ -569,6 +582,12 @@ export class LibraryTreeView {
       element.classList.remove("drop-target", "dragging");
     }
   }
+}
+
+function sameSelection(left: LibrarySelection, right: LibrarySelection): boolean {
+  if (!left || !right) return false;
+  if (left.kind === "folder") return right.kind === "folder" && left.path === right.path;
+  return right.kind === "map" && left.mapId === right.mapId;
 }
 
 function buildTree(payload: MindMapPayload): FolderTreeNode {
