@@ -462,10 +462,13 @@ export class FragmentThoughtsShell {
         this.#thoughtCards.set(thought.id, elements);
       }
       updateThoughtCard(elements, thought);
-      resizeTextarea(elements.editor, 1);
       return elements.card;
     });
     this.elements.thoughtList.replaceChildren(...cards);
+    for (const thought of thoughts) {
+      const elements = this.#thoughtCards.get(thought.id);
+      if (elements) resizeTextarea(elements.editor, 1);
+    }
     this.elements.listEmpty.textContent =
       emptyMessage ?? "还没有想法。先记录第一条吧。";
     this.elements.listEmpty.hidden = thoughts.length !== 0;
