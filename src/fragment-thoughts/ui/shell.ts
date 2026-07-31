@@ -233,6 +233,7 @@ export class FragmentThoughtsShell {
       "ft-button ft-button-primary",
       Save,
     );
+    composerSaveButton.type = "submit";
     composerSaveButton.dataset.action = "save-thought";
     composerActions.append(composerClearButton, composerSaveButton);
     composerForm.append(
