@@ -14,6 +14,7 @@ export default defineConfig({
         home: resolve(projectRoot, "index.html"),
         mindMap: resolve(projectRoot, "modules/mind-map/index.html"),
         fragmentThoughts: resolve(projectRoot, "modules/fragment-thoughts/index.html"),
+        todos: resolve(projectRoot, "modules/todos/index.html"),
       },
     },
   },

@@ -7,6 +7,12 @@ export interface DashboardModule {
 
 export const dashboardModules: DashboardModule[] = [
   {
+    id: "todos",
+    title: "待办",
+    description: "用递进任务、周期规则和加权进度管理复杂事项。",
+    href: "modules/todos/",
+  },
+  {
     id: "mind-map",
     title: "思维导图",
     description: "管理多级导图库，在自由画布中整理文字并建立连接。",
@@ -21,8 +27,10 @@ export const dashboardModules: DashboardModule[] = [
 ];
 
 export const persistentDashboardDefinitions = [
+  todosDefinition,
   mindMapDefinition,
   fragmentThoughtsDefinition,
 ] as const;
 import { fragmentThoughtsDefinition } from "../fragment-thoughts/definition";
 import { mindMapDefinition } from "../mind-map/definition";
+import { todosDefinition } from "../todos/definition";

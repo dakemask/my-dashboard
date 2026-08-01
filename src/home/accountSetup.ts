@@ -300,6 +300,7 @@ function eraseDefinition(
 }
 
 function moduleLabel(moduleId: string): string {
+  if (moduleId === "todos") return "待办";
   if (moduleId === "mind-maps") return "思维导图";
   if (moduleId === "fragment-thoughts") return "碎片想法";
   return `模块 ${moduleId}`;
