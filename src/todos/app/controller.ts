@@ -1088,22 +1088,74 @@ export class TodosController {
   ): HTMLElement {
     const groups = this.#shell.document.createElement("div");
     groups.className = "todo-editor-task-groups";
+    const lines = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    lines.classList.add("todo-editor-dependency-lines");
+    lines.setAttribute("aria-hidden", "true");
+    groups.append(lines);
     for (const group of dependencyGroups(children)) {
-      const chain = this.#shell.document.createElement("div");
-      chain.className = "todo-editor-task-chain";
-      group.forEach((task, index) => {
-        if (index > 0) {
-          const arrow = this.#shell.document.createElement("span");
-          arrow.className = "todo-editor-task-arrow";
-          arrow.setAttribute("aria-hidden", "true");
-          arrow.append(createTodoIcon(this.#shell.document, ArrowRight, 20));
-          chain.append(arrow);
-        }
-        chain.append(this.#editorTaskRow(task, selected, select, reorder));
-      });
-      groups.append(chain);
+      for (const task of group) groups.append(this.#editorTaskRow(task, selected, select, reorder));
     }
+    this.#window.requestAnimationFrame(() => this.#drawEditorDependencyLines(groups, children));
     return groups;
+  }
+
+  #drawEditorDependencyLines(groups: HTMLElement, children: readonly TodoTask[]): void {
+    if (!groups.isConnected) return;
+    const svg = groups.querySelector<SVGSVGElement>(".todo-editor-dependency-lines");
+    if (!svg) return;
+    const width = groups.scrollWidth;
+    const height = groups.scrollHeight;
+    svg.setAttribute("width", String(width));
+    svg.setAttribute("height", String(height));
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.replaceChildren();
+
+    const markerId = `todo-editor-arrow-${this.#createId()}`;
+    const defs = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    const marker = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "marker");
+    marker.setAttribute("id", markerId);
+    marker.setAttribute("markerWidth", "5.5");
+    marker.setAttribute("markerHeight", "5.5");
+    marker.setAttribute("refX", "5.1");
+    marker.setAttribute("refY", "2.75");
+    marker.setAttribute("orient", "auto");
+    const arrow = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "path");
+    arrow.setAttribute("d", "M0,0 L5.5,2.75 L0,5.5 Z");
+    arrow.setAttribute("fill", "#18221b");
+    marker.append(arrow);
+    defs.append(marker);
+    svg.append(defs);
+
+    const base = groups.getBoundingClientRect();
+    const rows = new Map(
+      [...groups.querySelectorAll<HTMLElement>(".todo-editor-task-row")]
+        .map((row) => [row.dataset.taskId!, row] as const),
+    );
+    for (const task of children) {
+      if (!task.predecessorId) continue;
+      const predecessor = rows.get(task.predecessorId);
+      const successor = rows.get(task.id);
+      if (!predecessor || !successor) continue;
+      const from = predecessor.getBoundingClientRect();
+      const to = successor.getBoundingClientRect();
+      const startX = from.right - base.left;
+      const startY = from.top - base.top + from.height * 0.68;
+      const endX = to.right - base.left + 2;
+      const endY = to.top - base.top + to.height * 0.32;
+      const controlReach = Math.max(8, Math.min(19, width - 8 - Math.max(startX, endX)));
+      const controlDrop = 9;
+      const path = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute(
+        "d",
+        `M${startX},${startY} C${startX + controlReach},${startY + controlDrop} ${endX + controlReach},${endY - controlDrop} ${endX},${endY}`,
+      );
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#18221b");
+      path.setAttribute("stroke-width", "1.5");
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("marker-end", `url(#${markerId})`);
+      svg.append(path);
+    }
   }
 
   #editorTaskRow(
@@ -1115,6 +1167,7 @@ export class TodosController {
     const row = this.#shell.document.createElement("button");
     row.type = "button";
     row.className = "todo-editor-task-row";
+    row.dataset.taskId = task.id;
     row.dataset.selected = String(selected() === task.id);
     row.draggable = true;
     row.append(createTodoIcon(this.#shell.document, Drag, 18));
