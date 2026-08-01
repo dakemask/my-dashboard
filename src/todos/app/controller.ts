@@ -99,6 +99,7 @@ export class TodosController {
   #activeDialog: HTMLDialogElement | null = null;
   #dialogBuildEvent: (() => TodosEvent | null) | null = null;
   #draggingTaskId: string | null = null;
+  readonly #graphScrollLeft = new Map<string, number>();
   #boundaryTimer: number | null = null;
   #disposed = false;
 
@@ -224,6 +225,10 @@ export class TodosController {
     const now = new Date();
     const instances = [...this.#payload.instances].sort((left, right) =>
       compareTodoInstances(left, right, now));
+    const instanceIds = new Set(instances.map((instance) => instance.id));
+    for (const instanceId of this.#graphScrollLeft.keys()) {
+      if (!instanceIds.has(instanceId)) this.#graphScrollLeft.delete(instanceId);
+    }
     if (instances.length === 0) {
       list.append(this.#empty("还没有待办。先创建第一项吧。"));
       return;
@@ -288,7 +293,10 @@ export class TodosController {
       content.append(this.#renderTaskChildren(instance, instance.root.children));
       canvas.append(svg, content);
       graph.append(canvas);
-      graph.addEventListener("scroll", () => this.#drawGraphLines(graph, instance));
+      graph.addEventListener("scroll", () => {
+        this.#graphScrollLeft.set(instance.id, graph.scrollLeft);
+        this.#drawGraphLines(graph, instance);
+      });
       this.#bindGraphNavigation(graph);
       article.append(graph);
     }
@@ -871,28 +879,37 @@ export class TodosController {
   ): Promise<{ reminderAt: string; deadlineAt: string | null } | null> {
     const dialog = this.#shell.document.createElement("dialog");
     dialog.className = "todo-date-dialog";
+    const panel = this.#shell.document.createElement("div");
+    panel.className = "todo-dialog-panel";
     const title = this.#shell.document.createElement("h2");
     title.textContent = role === "reminder" ? "设置提醒日期" : "设置截止日期";
-    const specificLabel = this.#shell.document.createElement("label");
-    specificLabel.textContent = "具体日期";
+    title.tabIndex = -1;
+    const specificField = this.#shell.document.createElement("div");
+    specificField.className = "todo-date-field";
+    const specificHeading = this.#shell.document.createElement("span");
+    specificHeading.textContent = "具体日期";
     const specific = this.#shell.document.createElement("input");
     specific.type = "text";
     specific.inputMode = "numeric";
     specific.maxLength = 12;
     specific.value = formatTodoDateInput(role === "reminder" ? instance.reminderAt : instance.deadlineAt);
     specific.placeholder = "YYYYMMDDHHmm 或负数";
-    specificLabel.append(specific);
+    specific.setAttribute("aria-label", "具体日期");
+    specificField.append(specificHeading, specific);
     const separator = this.#shell.document.createElement("span");
     separator.className = "todo-date-or";
     separator.textContent = "或";
-    const relativeLabel = this.#shell.document.createElement("label");
-    relativeLabel.textContent = role === "reminder" ? "距离截止日期的天数" : "距离提醒日期的天数";
+    const relativeField = this.#shell.document.createElement("div");
+    relativeField.className = "todo-date-field";
+    const relativeHeading = this.#shell.document.createElement("span");
+    relativeHeading.textContent = role === "reminder" ? "距离截止日期的天数" : "距离提醒日期的天数";
     const relative = this.#shell.document.createElement("input");
     relative.type = "number";
     relative.min = "0";
     relative.step = "1";
     relative.placeholder = "非负整数";
-    relativeLabel.append(relative);
+    relative.setAttribute("aria-label", relativeHeading.textContent);
+    relativeField.append(relativeHeading, relative);
     const error = this.#shell.document.createElement("p");
     error.className = "todo-editor-error";
     error.hidden = true;
@@ -902,7 +919,8 @@ export class TodosController {
     const confirm = textButton(this.#shell.document, "确认", "todos-button primary");
     const cancel = textButton(this.#shell.document, "取消", "todos-button subtle");
     actions.append(confirm, cancel);
-    dialog.append(title, specificLabel, separator, relativeLabel, error, actions);
+    panel.append(title, specificField, separator, relativeField, error, actions);
+    dialog.append(panel);
     this.#shell.elements.root.append(dialog);
     let mode: "specific" | "relative" = "specific";
     specific.addEventListener("input", () => {
@@ -911,8 +929,7 @@ export class TodosController {
     });
     relative.addEventListener("input", () => { mode = "relative"; });
     dialog.showModal();
-    specific.focus();
-    specific.select();
+    title.focus();
     return new Promise((resolve) => {
       const finish = (value: { reminderAt: string; deadlineAt: string | null } | null): void => {
         dialog.close();
@@ -1024,6 +1041,8 @@ export class TodosController {
   #confirm(titleText: string, messageText: string, confirmLabel: string): Promise<boolean> {
     const dialog = this.#shell.document.createElement("dialog");
     dialog.className = "todo-confirm-dialog";
+    const panel = this.#shell.document.createElement("div");
+    panel.className = "todo-dialog-panel";
     const title = this.#shell.document.createElement("h2");
     title.textContent = titleText;
     const message = this.#shell.document.createElement("p");
@@ -1033,7 +1052,8 @@ export class TodosController {
     const cancel = textButton(this.#shell.document, "取消", "todos-button subtle");
     const confirm = textButton(this.#shell.document, confirmLabel, "todos-button danger");
     actions.append(cancel, confirm);
-    dialog.append(title, message, actions);
+    panel.append(title, message, actions);
+    dialog.append(panel);
     this.#shell.elements.root.append(dialog);
     dialog.showModal();
     cancel.focus();
@@ -1090,7 +1110,6 @@ export class TodosController {
     dialog.showModal();
     this.#window.queueMicrotask(() => {
       focus.focus();
-      if (focus instanceof HTMLInputElement) focus.select();
     });
   }
 
@@ -1114,7 +1133,6 @@ export class TodosController {
     if (focus) {
       focus.setAttribute("aria-invalid", "true");
       focus.focus();
-      focus.select();
       focus.addEventListener("input", () => focus.removeAttribute("aria-invalid"), { once: true });
     }
   }
@@ -1302,7 +1320,10 @@ export class TodosController {
         const graph = this.#shell.elements.todoList.querySelector<HTMLElement>(
           `.todo-graph[data-instance-id="${instance.id}"]`,
         );
-        if (graph) this.#drawGraphLines(graph, instance);
+        if (graph) {
+          graph.scrollLeft = this.#graphScrollLeft.get(instance.id) ?? 0;
+          this.#drawGraphLines(graph, instance);
+        }
       }
     });
   }
