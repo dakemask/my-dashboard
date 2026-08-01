@@ -308,6 +308,8 @@ export class TodosController {
   #renderTaskSubtree(instance: TodoInstance, task: TodoTask): HTMLElement {
     const subtree = this.#shell.document.createElement("div");
     subtree.className = "todo-task-subtree";
+    subtree.dataset.taskId = task.id;
+    subtree.classList.toggle("has-children", task.children.length > 0);
     const card = this.#shell.document.createElement("div");
     card.className = "todo-task-node";
     card.dataset.taskId = task.id;
@@ -1258,6 +1260,10 @@ export class TodosController {
     svg.append(defs);
     const base = canvas.getBoundingClientRect();
     const node = (id: string) => canvas.querySelector<HTMLElement>(`.todo-task-node[data-task-id="${id}"]`);
+    const dependencyBox = (id: string): HTMLElement | null => {
+      const subtree = canvas.querySelector<HTMLElement>(`.todo-task-subtree[data-task-id="${id}"]`);
+      return subtree?.classList.contains("has-children") ? subtree : node(id);
+    };
     const point = (element: HTMLElement, side: "top" | "bottom" | "left" | "right") => {
       const rect = element.getBoundingClientRect();
       const x = side === "left" ? rect.left : side === "right" ? rect.right : rect.left + rect.width / 2;
@@ -1282,8 +1288,9 @@ export class TodosController {
         const parentNode = parent.id === instance.root.id ? null : node(parent.id);
         if (childNode && parentNode) addPath(point(parentNode, "bottom"), point(childNode, "top"), false);
         if (child.predecessorId) {
-          const predecessor = node(child.predecessorId);
-          if (predecessor && childNode) addPath(point(predecessor, "right"), point(childNode, "left"), true);
+          const predecessor = dependencyBox(child.predecessorId);
+          const successor = dependencyBox(child.id);
+          if (predecessor && successor) addPath(point(predecessor, "right"), point(successor, "left"), true);
         }
         visit(child);
       }

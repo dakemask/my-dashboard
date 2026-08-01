@@ -120,13 +120,14 @@ button { color: inherit; }
 .todo-graph-canvas { position: relative; width: max-content; min-width: 100%; padding: 18px 22px; }
 .todo-graph-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .todo-graph-content { position: relative; z-index: 1; }
-.todo-task-groups { display: flex; align-items: stretch; gap: 28px; width: max-content; }
-.todo-task-chain { display: flex; align-items: center; gap: 28px; padding: 14px; border: 1px dashed color-mix(in srgb, var(--status) 48%, #cbd5c9); border-radius: 9px; background: transparent; }
-.todo-task-subtree { display: grid; justify-items: center; gap: 38px; }
+.todo-task-groups { display: flex; align-items: center; gap: 52px; width: max-content; }
+.todo-task-chain { display: flex; align-items: center; gap: 52px; }
+.todo-task-subtree { display: grid; justify-items: start; gap: 34px; }
+.todo-task-subtree.has-children { padding: 20px; border: 1px solid color-mix(in srgb, var(--status) 58%, #aeb9b1); border-radius: 7px; }
 .todo-task-node { width: 188px; border: 1px solid var(--status); border-radius: 7px; background: #fff; overflow: hidden; }
 .todo-task-node-main { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 7px 10px 6px 12px; }
 .todo-task-open { min-width: 0; min-height: 38px; flex: 1; padding: 7px 2px; border: 0; background: transparent; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.todo-task-children { padding-top: 2px; }
+.todo-task-children { padding-top: 0; }
 
 .todos-rule-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 .todo-rule-card { display: flex; justify-content: space-between; align-items: center; gap: 18px; padding: 11px 13px; border: 1px solid #cfd9ce; border-radius: 8px; background: #fff; cursor: pointer; text-align: left; }
