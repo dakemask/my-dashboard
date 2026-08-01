@@ -118,7 +118,8 @@ button { color: inherit; }
 .todo-progress > span { position: absolute; inset: 0 auto 0 0; background: #27aa67; transition: width .2s ease; }
 .todo-card-summary > .todo-progress { height: 5px; }
 
-.todo-graph { overflow-x: auto; overflow-y: hidden; border: 1px solid color-mix(in srgb, var(--status) 58%, #cbd5c9); border-radius: 8px; background: #fafcf9; }
+.todo-graph { overflow-x: auto; overflow-y: hidden; border: 1px solid color-mix(in srgb, var(--status) 58%, #cbd5c9); border-radius: 8px; background: #fafcf9; cursor: grab; }
+.todo-graph.is-panning { cursor: grabbing; user-select: none; }
 .todo-graph-canvas { position: relative; width: max-content; min-width: 100%; padding: 18px 22px; }
 .todo-graph-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .todo-graph-content { position: relative; z-index: 1; }
@@ -126,7 +127,10 @@ button { color: inherit; }
 .todo-task-chain { display: flex; align-items: center; gap: 52px; }
 .todo-task-subtree { display: grid; justify-items: start; gap: 34px; }
 .todo-task-subtree.has-children { padding: 20px; border: 1px solid color-mix(in srgb, var(--status) 58%, #aeb9b1); border-radius: 7px; }
+.todo-task-subtree.is-dragging { opacity: .48; }
+.todo-task-subtree.is-drop-target { outline: 3px solid rgba(22, 138, 83, .3); outline-offset: 5px; }
 .todo-task-node { width: 188px; border: 1px solid var(--status); border-radius: 7px; background: #fff; overflow: hidden; }
+.todo-task-node[draggable="true"] { cursor: move; }
 .todo-task-node-main { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 7px 10px 6px 12px; }
 .todo-task-open { min-width: 0; min-height: 38px; flex: 1; padding: 7px 2px; border: 0; background: transparent; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .todo-task-children { padding-top: 0; }

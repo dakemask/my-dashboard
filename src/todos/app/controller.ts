@@ -289,6 +289,7 @@ export class TodosController {
       canvas.append(svg, content);
       graph.append(canvas);
       graph.addEventListener("scroll", () => this.#drawGraphLines(graph, instance));
+      this.#bindGraphNavigation(graph);
       article.append(graph);
     }
     return article;
@@ -317,6 +318,7 @@ export class TodosController {
     card.className = "todo-task-node";
     card.dataset.taskId = task.id;
     card.dataset.parentId = this.#findParentId(instance.root, task.id) ?? "";
+    card.draggable = true;
     const checkbox = this.#taskCheckbox(instance, task);
     const body = this.#shell.document.createElement("div");
     body.className = "todo-task-node-main";
@@ -327,6 +329,41 @@ export class TodosController {
     open.addEventListener("click", () => this.#openInstanceEditor(instance.id, task.id));
     body.append(checkbox, open);
     card.append(body, this.#progressBar(taskProgress(task)));
+    card.addEventListener("dragstart", (event) => {
+      this.#draggingTaskId = task.id;
+      subtree.classList.add("is-dragging");
+      event.dataTransfer?.setData("text/plain", task.id);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    });
+    card.addEventListener("dragend", () => {
+      this.#draggingTaskId = null;
+      subtree.classList.remove("is-dragging");
+      this.#clearGraphDropTargets();
+    });
+    card.addEventListener("dragover", (event) => {
+      const draggedId = this.#draggingTaskId ?? event.dataTransfer?.getData("text/plain");
+      if (!draggedId || draggedId === task.id) return;
+      const draggedParentId = this.#findParentId(instance.root, draggedId);
+      if (draggedParentId !== card.dataset.parentId) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      this.#clearGraphDropTargets();
+      subtree.classList.add("is-drop-target");
+    });
+    card.addEventListener("dragleave", (event) => {
+      if (!subtree.contains(event.relatedTarget as Node | null)) subtree.classList.remove("is-drop-target");
+    });
+    card.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const draggedId = event.dataTransfer?.getData("text/plain") || this.#draggingTaskId;
+      this.#draggingTaskId = null;
+      this.#clearGraphDropTargets();
+      if (draggedId) void this.#reorderGraphTask(instance.id, draggedId, task.id);
+    });
+    card.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (!this.#activeDialog) void this.#deleteGraphTask(instance.id, task.id);
+    });
     subtree.append(card);
     if (task.children.length > 0) {
       const nested = this.#shell.document.createElement("div");
@@ -1107,6 +1144,39 @@ export class TodosController {
     }
   }
 
+  async #reorderGraphTask(instanceId: string, draggedId: string, targetId: string): Promise<void> {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    if (!instance) return;
+    try {
+      const root = reorderDependencyGroup(instance.root, draggedId, targetId);
+      await this.#commit({
+        ...this.#payload,
+        instances: this.#payload.instances.map((item) => item.id === instanceId ? { ...item, root } : item),
+      }, null);
+    } catch (error) {
+      this.#shell.showMessage(safeMessage(error, "只能调整同一父任务下的任务组。"), "error");
+      this.#renderInstances();
+    }
+  }
+
+  async #deleteGraphTask(instanceId: string, taskId: string): Promise<void> {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    const task = instance ? findTask(instance.root, taskId) : null;
+    if (!instance || !task) return;
+    if (!await this.#confirm(
+      "删除子任务？",
+      `“${task.name}”及其全部子任务都会被删除。`,
+      "删除子任务",
+    )) return;
+    const root = deleteTaskAndReconnect(instance.root, taskId);
+    await this.#commit({
+      ...this.#payload,
+      instances: this.#payload.instances.map((item) => item.id === instanceId
+        ? { ...item, root, completedAt: isTaskComplete(root) ? new Date().toISOString() : null }
+        : item),
+    }, null);
+  }
+
   async #setExpanded(instance: TodoInstance, expanded: boolean): Promise<void> {
     await this.#commit({
       ...this.#payload,
@@ -1237,6 +1307,47 @@ export class TodosController {
     });
   }
 
+  #bindGraphNavigation(graph: HTMLElement): void {
+    graph.addEventListener("wheel", (event) => {
+      if (graph.scrollWidth <= graph.clientWidth) return;
+      const movement = event.deltaX + event.deltaY;
+      if (movement === 0) return;
+      event.preventDefault();
+      graph.scrollLeft += movement;
+    }, { passive: false });
+
+    let pointerId: number | null = null;
+    let startX = 0;
+    let startScrollLeft = 0;
+    graph.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || (event.target as Element).closest(".todo-task-node")) return;
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startScrollLeft = graph.scrollLeft;
+      graph.classList.add("is-panning");
+      graph.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    graph.addEventListener("pointermove", (event) => {
+      if (pointerId !== event.pointerId) return;
+      graph.scrollLeft = startScrollLeft - (event.clientX - startX);
+    });
+    const finishPan = (event: PointerEvent): void => {
+      if (pointerId !== event.pointerId) return;
+      if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
+      pointerId = null;
+      graph.classList.remove("is-panning");
+    };
+    graph.addEventListener("pointerup", finishPan);
+    graph.addEventListener("pointercancel", finishPan);
+  }
+
+  #clearGraphDropTargets(): void {
+    for (const target of this.#shell.elements.todoList.querySelectorAll(".todo-task-subtree.is-drop-target")) {
+      target.classList.remove("is-drop-target");
+    }
+  }
+
   #drawGraphLines(graph: HTMLElement, instance: TodoInstance): void {
     const svg = graph.querySelector<SVGSVGElement>(".todo-graph-lines");
     const canvas = graph.querySelector<HTMLElement>(".todo-graph-canvas");
@@ -1308,10 +1419,10 @@ export class TodosController {
     const visit = (parent: TodoTask): void => {
       const parentNode = parent.id === instance.root.id ? null : node(parent.id);
       if (parentNode) {
-        const childNodes = parent.children
-          .map((child) => node(child.id))
-          .filter((childNode): childNode is HTMLElement => childNode !== null);
-        addParentBus(parentNode, childNodes);
+        const childBoxes = parent.children
+          .map((child) => dependencyBox(child.id))
+          .filter((childBox): childBox is HTMLElement => childBox !== null);
+        addParentBus(parentNode, childBoxes);
       }
       for (const child of parent.children) {
         if (child.predecessorId) {
