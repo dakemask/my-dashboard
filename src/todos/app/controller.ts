@@ -241,6 +241,8 @@ export class TodosController {
 
     const header = this.#shell.document.createElement("div");
     header.className = "todo-card-header";
+    const summary = this.#shell.document.createElement("div");
+    summary.className = "todo-card-summary";
     const expand = this.#shell.document.createElement("button");
     expand.type = "button";
     expand.className = "todo-expand";
@@ -269,7 +271,8 @@ export class TodosController {
       : formatDisplayDate(instance.deadlineAt);
     if (instance.deadlineAt) date.dateTime = instance.deadlineAt;
     header.append(expand, checkbox, open, date);
-    article.append(header, this.#progressBar(taskProgress(instance.root)));
+    summary.append(header, this.#progressBar(taskProgress(instance.root)));
+    article.append(summary);
 
     if (instance.expanded && instance.root.children.length > 0) {
       const graph = this.#shell.document.createElement("div");
@@ -1282,11 +1285,35 @@ export class TodosController {
       if (arrowed) path.setAttribute("marker-end", `url(#todo-arrow-${instance.id})`);
       svg.append(path);
     };
+    const addParentBus = (
+      parentNode: HTMLElement,
+      childNodes: readonly HTMLElement[],
+    ): void => {
+      if (childNodes.length === 0) return;
+      const from = point(parentNode, "bottom");
+      const targets = childNodes.map((childNode) => point(childNode, "top"));
+      const firstChildY = Math.min(...targets.map((target) => target.y));
+      const busY = from.y + (firstChildY - from.y) / 2;
+      const left = Math.min(...targets.map((target) => target.x));
+      const right = Math.max(...targets.map((target) => target.x));
+      const path = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "path");
+      const branches = targets.map((target) => `M${target.x},${busY} V${target.y}`).join(" ");
+      path.setAttribute("d", `M${from.x},${from.y} V${busY} M${left},${busY} H${right} ${branches}`);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#9aa8a0");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke-linejoin", "round");
+      svg.append(path);
+    };
     const visit = (parent: TodoTask): void => {
+      const parentNode = parent.id === instance.root.id ? null : node(parent.id);
+      if (parentNode) {
+        const childNodes = parent.children
+          .map((child) => node(child.id))
+          .filter((childNode): childNode is HTMLElement => childNode !== null);
+        addParentBus(parentNode, childNodes);
+      }
       for (const child of parent.children) {
-        const childNode = node(child.id);
-        const parentNode = parent.id === instance.root.id ? null : node(parent.id);
-        if (childNode && parentNode) addPath(point(parentNode, "bottom"), point(childNode, "top"), false);
         if (child.predecessorId) {
           const predecessor = dependencyBox(child.predecessorId);
           const successor = dependencyBox(child.id);

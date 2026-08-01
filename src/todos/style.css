@@ -97,11 +97,13 @@ button { color: inherit; }
 .todos-button.danger { color: #8c2828; border-color: #e8bcbc; background: #fff3f3; }
 
 .todos-list { display: grid; gap: 10px; }
-.todo-card { --status: #4285d4; overflow: hidden; border: 1px solid var(--status); border-radius: 8px; background: #fff; }
+.todo-card { --status: #4285d4; display: grid; gap: 8px; }
 .todo-card[data-status="overdue"] { --status: #d94c4c; }
 .todo-card[data-status="reminded"] { --status: #d7a514; }
 .todo-card[data-status="pending"] { --status: #4285d4; }
-.todo-card[data-status="completed"] { --status: #939b96; background: #f5f6f5; }
+.todo-card[data-status="completed"] { --status: #939b96; }
+.todo-card-summary { overflow: hidden; border: 1px solid var(--status); border-radius: 8px; background: #fff; }
+.todo-card[data-status="completed"] .todo-card-summary { background: #f5f6f5; }
 
 .todo-card-header { min-height: 54px; gap: 10px; padding: 6px 10px; }
 .todo-expand { width: 30px; height: 30px; flex: 0 0 30px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; cursor: pointer; }
@@ -114,9 +116,9 @@ button { color: inherit; }
 
 .todo-progress { position: relative; height: 5px; overflow: hidden; background: #e6ebe7; }
 .todo-progress > span { position: absolute; inset: 0 auto 0 0; background: #27aa67; transition: width .2s ease; }
-.todo-card > .todo-progress { height: 5px; }
+.todo-card-summary > .todo-progress { height: 5px; }
 
-.todo-graph { overflow-x: auto; overflow-y: hidden; border-top: 1px solid color-mix(in srgb, var(--status) 30%, white); background: #fafcf9; }
+.todo-graph { overflow-x: auto; overflow-y: hidden; border: 1px solid color-mix(in srgb, var(--status) 58%, #cbd5c9); border-radius: 8px; background: #fafcf9; }
 .todo-graph-canvas { position: relative; width: max-content; min-width: 100%; padding: 18px 22px; }
 .todo-graph-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
 .todo-graph-content { position: relative; z-index: 1; }
