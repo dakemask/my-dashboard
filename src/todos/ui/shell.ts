@@ -13,7 +13,6 @@ export interface TodosShellElements {
   readonly retrySaveButton: HTMLButtonElement;
   readonly saveFailure: HTMLElement;
   readonly addTodoButton: HTMLButtonElement;
-  readonly addRuleButton: HTMLButtonElement;
   readonly openRulesButton: HTMLButtonElement;
   readonly todoList: HTMLElement;
   readonly ruleList: HTMLElement;
@@ -66,16 +65,14 @@ export class TodosShell {
     content.className = "todos-content";
     const commandBar = this.document.createElement("div");
     commandBar.className = "todos-command-bar";
-    const addTodoButton = textButton(this.document, "待办", "todos-button primary compact", AddOne);
+    const addTodoButton = textButton(this.document, "添加待办", "todos-button primary compact add-todo", AddOne);
     addTodoButton.title = "添加待办";
     addTodoButton.setAttribute("aria-label", "添加待办");
-    const addRuleButton = textButton(this.document, "周期待办", "todos-button secondary compact", AddOne);
-    addRuleButton.title = "添加周期待办";
-    addRuleButton.setAttribute("aria-label", "添加周期待办");
-    const openRulesButton = textButton(this.document, "周期规则", "todos-button subtle compact rules-toggle", Calendar);
-    openRulesButton.title = "打开周期规则";
+    const openRulesButton = textButton(this.document, "周期待办", "todos-button subtle compact rules-toggle", Calendar);
+    openRulesButton.title = "打开周期待办模版";
+    openRulesButton.setAttribute("aria-label", "打开周期待办模版");
     openRulesButton.setAttribute("aria-haspopup", "dialog");
-    commandBar.append(addTodoButton, addRuleButton, openRulesButton);
+    commandBar.append(addTodoButton, openRulesButton);
 
     const todoSection = sectionShell(this.document, "待办事项");
     const todoList = this.document.createElement("div");
@@ -95,7 +92,7 @@ export class TodosShell {
     appRoot.replaceChildren(root);
     this.elements = {
       root, homeLink, syncMount, retrySaveButton, saveFailure,
-      addTodoButton, addRuleButton, todoList, ruleList, toast, openRulesButton,
+      addTodoButton, todoList, ruleList, toast, openRulesButton,
     };
   }
 

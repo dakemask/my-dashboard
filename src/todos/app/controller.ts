@@ -100,6 +100,8 @@ export class TodosController {
   #dialogBuildEvent: (() => TodosEvent | null) | null = null;
   #draggingTaskId: string | null = null;
   readonly #graphScrollLeft = new Map<string, number>();
+  readonly #ruleGraphScrollLeft = new Map<string, number>();
+  readonly #collapsedRuleIds = new Set<string>();
   #boundaryTimer: number | null = null;
   #disposed = false;
 
@@ -147,7 +149,6 @@ export class TodosController {
   #bindUi(): void {
     const elements = this.#shell.elements;
     this.#listen(elements.addTodoButton, "click", () => this.#openNewTodo());
-    this.#listen(elements.addRuleButton, "click", () => this.#openNewRule());
     this.#listen(elements.openRulesButton, "click", () => this.#openRulesManager());
     this.#listen(elements.retrySaveButton, "click", () => void this.#retrySave());
     this.#listen(this.#window, "keydown", (event) => this.#onKeyDown(event as KeyboardEvent));
@@ -215,7 +216,6 @@ export class TodosController {
   #renderCommandState(): void {
     const blocked = this.#activeDialog !== null || this.#runtime === null;
     this.#shell.elements.addTodoButton.disabled = blocked;
-    this.#shell.elements.addRuleButton.disabled = blocked;
     this.#shell.elements.openRulesButton.disabled = this.#runtime === null;
   }
 
@@ -295,7 +295,7 @@ export class TodosController {
       graph.append(canvas);
       graph.addEventListener("scroll", () => {
         this.#graphScrollLeft.set(instance.id, graph.scrollLeft);
-        this.#drawGraphLines(graph, instance);
+        this.#drawGraphLines(graph, instance.root, instance.id);
       });
       this.#bindGraphNavigation(graph);
       article.append(graph);
@@ -415,43 +415,148 @@ export class TodosController {
   #renderRules(): void {
     const list = this.#shell.elements.ruleList;
     list.replaceChildren();
+    const ruleIds = new Set(this.#payload.rules.map((rule) => rule.id));
+    for (const ruleId of this.#collapsedRuleIds) {
+      if (!ruleIds.has(ruleId)) this.#collapsedRuleIds.delete(ruleId);
+    }
+    for (const ruleId of this.#ruleGraphScrollLeft.keys()) {
+      if (!ruleIds.has(ruleId)) this.#ruleGraphScrollLeft.delete(ruleId);
+    }
     if (this.#payload.rules.length === 0) {
-      list.append(this.#empty("还没有周期规则。"));
+      list.append(this.#empty("还没有周期待办模版。"));
       return;
     }
     for (const rule of this.#payload.rules) {
-      const button = this.#shell.document.createElement("button");
-      button.type = "button";
-      button.className = "todo-rule-card";
-      const copy = this.#shell.document.createElement("span");
+      list.append(this.#renderRulePreview(rule));
+    }
+    this.#scheduleRuleGraphLines();
+  }
+
+  #renderRulePreview(rule: TodoRecurrenceRule): HTMLElement {
+    const article = this.#shell.document.createElement("article");
+    article.className = "todo-rule-preview";
+    article.dataset.ruleId = rule.id;
+    const summary = this.#shell.document.createElement("div");
+    summary.className = "todo-card-summary";
+    const header = this.#shell.document.createElement("div");
+    header.className = "todo-card-header";
+    const collapsed = this.#collapsedRuleIds.has(rule.id);
+    const expand = this.#shell.document.createElement("button");
+    expand.type = "button";
+    expand.className = "todo-expand";
+    expand.append(createTodoIcon(this.#shell.document, collapsed ? Right : Down, 18));
+    expand.title = collapsed ? "展开模版子任务" : "收起模版子任务";
+    expand.setAttribute("aria-label", expand.title);
+    expand.setAttribute("aria-expanded", String(!collapsed));
+    expand.disabled = rule.template.children.length === 0;
+    expand.addEventListener("click", () => {
+      if (collapsed) this.#collapsedRuleIds.delete(rule.id);
+      else this.#collapsedRuleIds.add(rule.id);
+      this.#renderRules();
+    });
+    const open = this.#shell.document.createElement("button");
+    open.type = "button";
+    open.className = "todo-title-button";
+    open.setAttribute("aria-label", `编辑周期待办模版：${rule.template.name}`);
+    open.addEventListener("click", () => {
+      this.#closeDialogWithoutSave();
+      this.#openRuleEditor(rule.id);
+    });
       const name = this.#shell.document.createElement("strong");
       name.textContent = rule.template.name;
-      const cadence = this.#shell.document.createElement("span");
-      cadence.textContent = rule.cadence === "weekly" ? "每周一生成" : "每月一日生成";
-      copy.append(name, cadence);
-      const edit = this.#shell.document.createElement("span");
-      edit.textContent = "编辑";
-      button.append(copy, edit);
-      button.addEventListener("click", () => {
+    open.append(name);
+    const cadence = this.#shell.document.createElement("span");
+    cadence.className = "todo-date";
+    cadence.textContent = rule.cadence === "weekly" ? "每周一生成" : "每月一日生成";
+    header.append(expand, open, cadence);
+    summary.append(header, this.#progressBar(taskProgress(rule.template)));
+    article.append(summary);
+    if (!collapsed && rule.template.children.length > 0) {
+      const graph = this.#shell.document.createElement("div");
+      graph.className = "todo-graph todo-rule-graph";
+      graph.dataset.ruleId = rule.id;
+      const canvas = this.#shell.document.createElement("div");
+      canvas.className = "todo-graph-canvas";
+      const svg = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.classList.add("todo-graph-lines");
+      svg.setAttribute("aria-hidden", "true");
+      const content = this.#shell.document.createElement("div");
+      content.className = "todo-graph-content";
+      content.append(this.#renderRuleTaskChildren(rule, rule.template.children));
+      canvas.append(svg, content);
+      graph.append(canvas);
+      graph.addEventListener("scroll", () => {
+        this.#ruleGraphScrollLeft.set(rule.id, graph.scrollLeft);
+        this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
+      });
+      this.#bindGraphNavigation(graph);
+      article.append(graph);
+    }
+    return article;
+  }
+
+  #renderRuleTaskChildren(rule: TodoRecurrenceRule, children: readonly TodoTask[]): HTMLElement {
+    const row = this.#shell.document.createElement("div");
+    row.className = "todo-task-groups";
+    for (const group of dependencyGroups(children)) {
+      const chain = this.#shell.document.createElement("div");
+      chain.className = "todo-task-chain";
+      group.forEach((task) => chain.append(this.#renderRuleTaskSubtree(rule, task)));
+      row.append(chain);
+    }
+    return row;
+  }
+
+  #renderRuleTaskSubtree(rule: TodoRecurrenceRule, task: TodoTask): HTMLElement {
+    const subtree = this.#shell.document.createElement("div");
+    subtree.className = "todo-task-subtree";
+    subtree.dataset.taskId = task.id;
+    subtree.classList.toggle("has-children", task.children.length > 0);
+    const card = this.#shell.document.createElement("div");
+    card.className = "todo-task-node todo-rule-task-node";
+    card.dataset.taskId = task.id;
+    const body = this.#shell.document.createElement("div");
+    body.className = "todo-task-node-main";
+    const open = this.#shell.document.createElement("button");
+    open.type = "button";
+    open.className = "todo-task-open";
+    open.textContent = task.name;
+    open.addEventListener("click", () => {
         this.#closeDialogWithoutSave();
         this.#openRuleEditor(rule.id);
       });
-      list.append(button);
+    body.append(open);
+    card.append(body, this.#progressBar(taskProgress(task)));
+    subtree.append(card);
+    if (task.children.length > 0) {
+      const nested = this.#shell.document.createElement("div");
+      nested.className = "todo-task-children";
+      nested.append(this.#renderRuleTaskChildren(rule, task.children));
+      subtree.append(nested);
     }
+    return subtree;
   }
 
   #openRulesManager(): void {
     if (this.#activeDialog) return;
-    const dialog = this.#createEditorDialog("周期规则");
+    const dialog = this.#createEditorDialog("周期待办");
     dialog.classList.add("todo-rules-dialog");
     const body = dialog.querySelector<HTMLElement>(".todo-editor-body")!;
-    const description = this.#shell.document.createElement("p");
-    description.className = "todo-rules-description";
-    description.textContent = "选择规则进行编辑。周期规则只影响之后生成的待办。";
-    body.append(description, this.#shell.elements.ruleList);
+    const heading = this.#shell.document.createElement("div");
+    heading.className = "todo-rules-heading";
+    const title = this.#shell.document.createElement("h3");
+    title.textContent = "周期待办模版";
+    const add = textButton(this.#shell.document, "添加模版", "todos-button primary compact", AddOne);
+    add.addEventListener("click", () => {
+      this.#closeDialogWithoutSave();
+      this.#openNewRule();
+    });
+    heading.append(title, add);
+    body.append(heading, this.#shell.elements.ruleList);
     this.#renderRules();
     this.#dialogBuildEvent = null;
     this.#showDialog(dialog, dialog.querySelector<HTMLButtonElement>("header button")!);
+    this.#scheduleRuleGraphLines();
   }
 
   #openNewTodo(): void {
@@ -1322,7 +1427,21 @@ export class TodosController {
         );
         if (graph) {
           graph.scrollLeft = this.#graphScrollLeft.get(instance.id) ?? 0;
-          this.#drawGraphLines(graph, instance);
+          this.#drawGraphLines(graph, instance.root, instance.id);
+        }
+      }
+    });
+  }
+
+  #scheduleRuleGraphLines(): void {
+    this.#window.requestAnimationFrame(() => {
+      for (const rule of this.#payload.rules) {
+        const graph = this.#shell.elements.ruleList.querySelector<HTMLElement>(
+          `.todo-rule-graph[data-rule-id="${rule.id}"]`,
+        );
+        if (graph) {
+          graph.scrollLeft = this.#ruleGraphScrollLeft.get(rule.id) ?? 0;
+          this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
         }
       }
     });
@@ -1369,7 +1488,7 @@ export class TodosController {
     }
   }
 
-  #drawGraphLines(graph: HTMLElement, instance: TodoInstance): void {
+  #drawGraphLines(graph: HTMLElement, root: TodoTask, graphId: string): void {
     const svg = graph.querySelector<SVGSVGElement>(".todo-graph-lines");
     const canvas = graph.querySelector<HTMLElement>(".todo-graph-canvas");
     if (!svg || !canvas) return;
@@ -1381,7 +1500,7 @@ export class TodosController {
     svg.replaceChildren();
     const defs = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "defs");
     const marker = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "marker");
-    marker.setAttribute("id", `todo-arrow-${instance.id}`);
+    marker.setAttribute("id", `todo-arrow-${graphId}`);
     marker.setAttribute("markerWidth", "8");
     marker.setAttribute("markerHeight", "8");
     marker.setAttribute("refX", "7");
@@ -1414,7 +1533,7 @@ export class TodosController {
       path.setAttribute("fill", "none");
       path.setAttribute("stroke", arrowed ? "#168a53" : "#9aa8a0");
       path.setAttribute("stroke-width", "2");
-      if (arrowed) path.setAttribute("marker-end", `url(#todo-arrow-${instance.id})`);
+      if (arrowed) path.setAttribute("marker-end", `url(#todo-arrow-${graphId})`);
       svg.append(path);
     };
     const addParentBus = (
@@ -1438,7 +1557,7 @@ export class TodosController {
       svg.append(path);
     };
     const visit = (parent: TodoTask): void => {
-      const parentNode = parent.id === instance.root.id ? null : node(parent.id);
+      const parentNode = parent.id === root.id ? null : node(parent.id);
       if (parentNode) {
         const childBoxes = parent.children
           .map((child) => dependencyBox(child.id))
@@ -1454,7 +1573,7 @@ export class TodosController {
         visit(child);
       }
     };
-    visit(instance.root);
+    visit(root);
   }
 
   #findParentId(root: TodoTask, taskId: string): string | null {
