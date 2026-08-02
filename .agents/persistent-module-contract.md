@@ -112,6 +112,8 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 
 `runtime.mode` 为 `"local"` 或 `"account"`。账户切换只影响之后启动或刷新的页面；已经打开的 runtime 始终绑定启动时的 profile，不得中途改读其他账户的数据。本地 envelope、同步基线、pending、conflict 和编辑锁均按 `profileId + moduleId` 隔离。
 
+添加首个账户时，首页先用与 Runtime 相同的 payload 准备、迁移和当前 schema hash 校验，只读检查 catalog 中的全部持久化模块；全部 preflight 成功后才按统一方向逐模块建立账户 profile。失败必须清理未注册 profile 的临时本机库并保留 `local` profile。`local-wins` 已开始后跨模块远端写入不能事务回滚，页面只能提示用户保持同一方向重试，不得承诺云端未变化。
+
 本地迁移不推进同步基线。Runtime 持久化迁移变化，并区分它与用户业务修改。只有
 纯迁移、没有既有冲突时，Runtime 才在启动后自动尝试非强制上传；临时失败后可由
 后续 revision 轮询重试。存在同步前业务修改或既有冲突时不自动上传，等待用户按

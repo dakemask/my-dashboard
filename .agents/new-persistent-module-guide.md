@@ -325,7 +325,7 @@ controller 是业务 UI 与 runtime 之间的边界：
 
 完成页面后：
 
-1. 在首页模块注册表添加入口，并把持久化模块 definition 加入首次账户接入使用的定义清单；
+1. 在首页唯一的 `dashboardModuleCatalog` 中添加入口；持久化模块同时在该条目挂载 definition，首页导航和首次账户接入清单都由 catalog 派生，不再维护第二份模块清单；
 2. 在 Vite 多页面构建输入中添加模块 HTML；
 3. 为模块的 domain 和 codec 建立自动测试；
 4. 如果模块确实需要长期维护文档，在 `.agents/` 建立一份模块文档。

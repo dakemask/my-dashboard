@@ -75,33 +75,34 @@ h1 {
   cursor: pointer;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 44px;
+  height: 42px;
   justify-content: center;
   margin-top: 20px;
-  width: 44px;
+  width: 42px;
 }
 
-.settings-button:hover,
-.settings-button:focus-visible {
+.settings-button:hover {
   border-color: rgb(37 99 235 / 45%);
   color: var(--accent);
 }
 
 .settings-button:focus-visible,
+.module-link:focus-visible,
 .icon-button:focus-visible,
 .add-account-button:focus-visible,
 .account-option:focus-visible,
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
-.danger-button:focus-visible {
-  outline: 3px solid rgb(37 99 235 / 14%);
+.danger-button:focus-visible,
+.account-field input:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 20%);
   outline-offset: 2px;
 }
 
 .settings-button-icon {
-  height: 23px;
+  height: 20px;
   pointer-events: none;
-  width: 23px;
+  width: 20px;
 }
 
 .home-mode {
@@ -136,6 +137,10 @@ h1 {
   border-color: rgba(37, 99, 235, 0.45);
 }
 
+.module-link:focus-visible {
+  border-color: rgb(37 99 235 / 45%);
+}
+
 .module-title {
   display: block;
   margin: 0;
@@ -161,20 +166,20 @@ h1 {
   padding: 24px 0;
 }
 
-.account-settings-dialog,
-.first-account-dialog {
+.account-settings-dialog {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: 0 24px 70px rgb(24 24 27 / 16%);
   color: var(--text);
+  max-height: calc(100dvh - 32px);
   max-width: min(480px, calc(100vw - 32px));
+  overflow: auto;
   padding: 0;
   width: 100%;
 }
 
-.account-settings-dialog::backdrop,
-.first-account-dialog::backdrop {
+.account-settings-dialog::backdrop {
   backdrop-filter: blur(3px);
   background: rgb(24 24 27 / 28%);
 }
@@ -187,8 +192,7 @@ h1 {
   padding: 18px 20px;
 }
 
-.settings-dialog-header h2,
-.first-account-dialog h2 {
+.settings-dialog-header h2 {
   font-size: 20px;
   margin: 0;
 }
@@ -222,8 +226,7 @@ h1 {
   padding: 20px;
 }
 
-.settings-intro,
-.first-account-dialog p {
+.settings-intro {
   color: var(--muted);
   line-height: 1.6;
   margin: 0;
@@ -232,6 +235,13 @@ h1 {
 .account-list {
   display: grid;
   gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.account-list li {
+  margin: 0;
 }
 
 .account-option {
@@ -247,6 +257,7 @@ h1 {
   min-height: 48px;
   padding: 10px 12px;
   text-align: left;
+  width: 100%;
 }
 
 .account-option[data-active="true"] {
@@ -312,9 +323,8 @@ h1 {
   outline: none;
 }
 
-.account-field input:focus {
+.account-field input:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .account-form-actions,
@@ -341,10 +351,13 @@ h1 {
   color: #fff;
 }
 
-.primary-button:disabled,
-.secondary-button:disabled {
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.account-settings-dialog[aria-busy="true"] button:disabled {
   cursor: wait;
-  opacity: 0.65;
 }
 
 .account-form-error {
@@ -353,16 +366,51 @@ h1 {
   margin: 0;
 }
 
-.first-account-dialog {
-  padding: 22px;
+.direction-choice-hint {
+  color: #b42318;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: -6px 0 0;
 }
 
-.first-account-dialog p {
-  margin-top: 12px;
+.account-setup-progress {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  min-height: 82px;
 }
 
-.first-account-actions {
-  margin-top: 22px;
+.account-setup-progress p {
+  line-height: 1.5;
+  margin: 0;
+}
+
+.account-setup-spinner {
+  animation: account-setup-spin 0.8s linear infinite;
+  border: 3px solid rgb(37 99 235 / 18%);
+  border-radius: 999px;
+  border-top-color: var(--accent);
+  flex: 0 0 auto;
+  height: 22px;
+  width: 22px;
+}
+
+.account-settings-dialog[aria-busy="true"] .settings-dialog-content {
+  cursor: progress;
+}
+
+@keyframes account-setup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-setup-spinner {
+    animation: none;
+    border-top-color: rgb(37 99 235 / 18%);
+    box-shadow: inset 0 0 0 3px var(--accent);
+  }
 }
 
 @media (max-width: 640px) {

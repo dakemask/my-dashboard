@@ -2,7 +2,9 @@ import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AccountSetupError,
   bindFirstAccount,
+  clearAccountProfile,
   inspectFirstAccount,
 } from "../../src/home/accountSetup";
 import { fragmentThoughtsDefinition } from "../../src/fragment-thoughts/definition";
@@ -114,9 +116,10 @@ async function createVersionedRepositoryFetch() {
   });
 }
 
-function createWritableRepositoryFetch() {
+function createWritableRepositoryFetch(options: { failPatchNumber?: number } = {}) {
   let headCommit = "commit-1";
   let sequence = 1;
+  let patchCount = 0;
   const commits = new Map([["commit-1", "tree-1"]]);
   const trees = new Map<string, Array<{
     path: string;
@@ -172,6 +175,10 @@ function createWritableRepositoryFetch() {
       return Response.json({ sha });
     }
     if (method === "PATCH" && endpoint === "/git/refs/heads/main") {
+      patchCount += 1;
+      if (patchCount === options.failPatchNumber) {
+        return Response.json({ message: "injected failure" }, { status: 500 });
+      }
       headCommit = String(body.sha);
       return Response.json({ object: { sha: headCommit } });
     }
@@ -261,5 +268,143 @@ describe("first account setup", () => {
     await expect(
       bindFirstAccount(session, "github-octocat", "local-wins", request),
     ).resolves.toBeUndefined();
+  });
+
+  it("preflights every module and rejects a damaged current-schema hash before cloud writes", async () => {
+    const payload = fragmentThoughtsDefinition.validate({
+      thoughts: [{
+        id: "00000000-0000-4000-8000-000000000301",
+        versions: [{
+          id: "00000000-0000-4000-8000-000000000302",
+          content: "must stay local",
+          createdAt: "2026-07-27T14:00:00.000Z",
+        }],
+        collapsedVersionIds: [],
+      }],
+    });
+    const local = new ModuleLocalStore("fragment-thoughts", { profileId: "local" });
+    await local.initialize({
+      ...createModuleLocalEnvelope(
+        payload,
+        "damaged-content-hash",
+        "00000000-0000-4000-8000-000000000303",
+        1,
+      ),
+      localSavedAt: "2026-07-27T14:00:00.000Z",
+    });
+    local.close();
+    const request = createWritableRepositoryFetch();
+
+    const failure = await bindFirstAccount(
+      session,
+      "github-octocat",
+      "local-wins",
+      request,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AccountSetupError);
+    expect(failure).toMatchObject({
+      stage: "inspect",
+      moduleId: "fragment-thoughts",
+      remoteMayBePartiallyUpdated: false,
+    });
+    expect(String((failure as Error).message)).toContain("本机缓存未通过完整性校验");
+    expect(request.mock.calls.filter(([input, init]) =>
+      (init?.method ?? "GET") === "GET"
+      && String(input).includes("/git/ref/heads/main")
+    )).toHaveLength(3);
+    expect(request.mock.calls.some(([, init]) =>
+      ["POST", "PATCH"].includes(init?.method ?? "GET")
+    )).toBe(false);
+
+    const retainedLocal = new ModuleLocalStore("fragment-thoughts", {
+      profileId: "local",
+    });
+    expect((await retainedLocal.load())?.contentHash).toBe("damaged-content-hash");
+    retainedLocal.close();
+  });
+
+  it("never accepts the local source profile as a temporary account target", async () => {
+    const payload = fragmentThoughtsDefinition.createEmpty();
+    const hash = await hashContentKey(fragmentThoughtsDefinition.contentKey(payload));
+    const local = new ModuleLocalStore("fragment-thoughts", { profileId: "local" });
+    await local.initialize(createModuleLocalEnvelope(
+      payload,
+      hash,
+      "00000000-0000-4000-8000-000000000351",
+      1,
+    ));
+    local.close();
+    const request = createWritableRepositoryFetch();
+
+    await expect(
+      bindFirstAccount(session, "local", "cloud-wins", request),
+    ).rejects.toThrow("local source profile");
+    await expect(clearAccountProfile("local")).rejects.toThrow("local source profile");
+    expect(request).not.toHaveBeenCalled();
+
+    const retainedLocal = new ModuleLocalStore("fragment-thoughts", {
+      profileId: "local",
+    });
+    expect(await retainedLocal.load()).not.toBeNull();
+    retainedLocal.close();
+  });
+
+  it("cleans every temporary account database after a midway local-wins failure", async () => {
+    const payload = fragmentThoughtsDefinition.validate({
+      thoughts: [{
+        id: "00000000-0000-4000-8000-000000000401",
+        versions: [{
+          id: "00000000-0000-4000-8000-000000000402",
+          content: "keep the local source",
+          createdAt: "2026-07-27T15:00:00.000Z",
+        }],
+        collapsedVersionIds: [],
+      }],
+    });
+    const hash = await hashContentKey(fragmentThoughtsDefinition.contentKey(payload));
+    const local = new ModuleLocalStore("fragment-thoughts", { profileId: "local" });
+    await local.initialize({
+      ...createModuleLocalEnvelope(
+        payload,
+        hash,
+        "00000000-0000-4000-8000-000000000403",
+        1,
+      ),
+      localSavedAt: "2026-07-27T15:00:00.000Z",
+    });
+    local.close();
+    const request = createWritableRepositoryFetch({ failPatchNumber: 2 });
+
+    const failure = await bindFirstAccount(
+      session,
+      "github-octocat",
+      "local-wins",
+      request,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AccountSetupError);
+    expect(failure).toMatchObject({
+      stage: "local-wins",
+      moduleId: "mind-maps",
+      remoteMayBePartiallyUpdated: true,
+    });
+    expect(String((failure as Error).message)).toContain("不会自动回滚");
+    expect(String((failure as Error).message)).toContain("本地覆盖云端");
+    expect(request.mock.calls.filter(([, init]) => init?.method === "PATCH"))
+      .toHaveLength(2);
+
+    for (const moduleId of ["todos", "mind-maps", "fragment-thoughts"]) {
+      const temporary = new ModuleLocalStore(moduleId, {
+        profileId: "github-octocat",
+      });
+      expect(await temporary.load()).toBeNull();
+      temporary.close();
+    }
+    const retainedLocal = new ModuleLocalStore("fragment-thoughts", {
+      profileId: "local",
+    });
+    expect((await retainedLocal.load())?.payload).toEqual(payload);
+    retainedLocal.close();
   });
 });
