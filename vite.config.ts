@@ -7,16 +7,15 @@ const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1] ?? "my-dashb
 const base = process.env.BASE_PATH ?? (process.env.GITHUB_ACTIONS ? `/${repositoryName}/` : "/");
 const projectRoot = fileURLToPath(new URL(".", import.meta.url));
 
-function loadLocalHttpsOptions(): { key: Buffer; cert: Buffer } {
+function loadLocalHttpsOptions(): { key: Buffer; cert: Buffer } | undefined {
   const certPath = process.env.DASHBOARD_DEV_CERT
     ?? resolve(projectRoot, ".cert", "my-dashboard.pem");
   const keyPath = process.env.DASHBOARD_DEV_KEY
     ?? resolve(projectRoot, ".cert", "my-dashboard-key.pem");
 
   if (!existsSync(certPath) || !existsSync(keyPath)) {
-    throw new Error(
-      "本地 HTTPS 证书未找到。请先按 README.md 的“局域网 HTTPS 开发”说明生成 .cert/my-dashboard.pem 和 .cert/my-dashboard-key.pem。",
-    );
+    console.warn("未找到本地 HTTPS 证书，开发服务器将使用 HTTP。需要局域网 HTTPS 时请先运行 npm run setup:https。");
+    return undefined;
   }
 
   return {

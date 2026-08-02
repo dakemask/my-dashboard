@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +17,8 @@ const certPath = process.env.DASHBOARD_DEV_CERT
   ?? resolve(projectRoot, ".cert", "my-dashboard.pem");
 const keyPath = process.env.DASHBOARD_DEV_KEY
   ?? resolve(projectRoot, ".cert", "my-dashboard-key.pem");
+const phoneRootCertificatePath = process.env.DASHBOARD_DEV_ROOT_CA
+  ?? resolve(projectRoot, "certificates", "rootCA.pem");
 const metadataPath = `${certPath}.hosts.json`;
 
 const hosts = [
@@ -20,6 +30,7 @@ const hosts = [
 
 ensureMkcertAvailable();
 runMkcertInstall();
+copyRootCertificateForDevice();
 
 if (needsCertificateRefresh(hosts)) {
   generateCertificate(hosts);
@@ -68,6 +79,20 @@ function ensureMkcertAvailable() {
 
 function runMkcertInstall() {
   execFileSync("mkcert", ["-install"], { stdio: "inherit" });
+}
+
+function copyRootCertificateForDevice() {
+  const caRoot = execFileSync("mkcert", ["-CAROOT"], { encoding: "utf8" }).trim();
+  const sourcePath = resolve(caRoot, "rootCA.pem");
+  if (!existsSync(sourcePath)) {
+    throw new Error(`mkcert 根证书未找到：${sourcePath}`);
+  }
+
+  mkdirSync(dirname(phoneRootCertificatePath), { recursive: true });
+  if (resolve(sourcePath) !== resolve(phoneRootCertificatePath)) {
+    copyFileSync(sourcePath, phoneRootCertificatePath);
+  }
+  console.log(`手机端根证书已输出到：${phoneRootCertificatePath}`);
 }
 
 function needsCertificateRefresh(expectedHosts) {

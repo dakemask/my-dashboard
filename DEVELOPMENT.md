@@ -8,7 +8,19 @@ npm install
 
 ## 本地开发
 
-开发服务器使用 HTTPS。模块使用安全的单模块编辑锁和 Web Crypto，因此通过局域网访问时也需要 HTTPS。
+没有配置证书时，开发服务器会自动使用 HTTP，适合在电脑本机调试：
+
+```powershell
+npm run dev
+```
+
+电脑访问：
+
+```text
+http://localhost:5173
+```
+
+如果要通过局域网手机访问，模块使用的安全编辑锁和 Web Crypto 需要 HTTPS。先安装一次 [mkcert](https://github.com/FiloSottile/mkcert)。Windows 可以执行：
 
 先安装一次 [mkcert](https://github.com/FiloSottile/mkcert)。Windows 可以执行：
 
@@ -34,9 +46,9 @@ npm run dev
 https://<局域网IP>:5173
 ```
 
-首次使用时，将 `mkcert -CAROOT` 输出目录中的 `rootCA.pem` 安装并信任到手机。不要复制或上传 `rootCA-key.pem`。如果更换了局域网、导致本机 IP 变化，请重新运行 `npm run setup:https`。
+运行配置命令后，手机端根证书会输出到项目目录的 `certificates/rootCA.pem`，将它安装并信任到手机。不要复制或上传 `rootCA-key.pem`。如果更换了局域网、导致本机 IP 变化，请重新运行 `npm run setup:https`。
 
-证书和私钥保存在 `.cert/`，该目录不会提交到 Git。
+开发服务器证书和私钥保存在 `.cert/`，手机端根证书保存在 `certificates/`；这两个目录都不会提交到 Git。
 
 ## 预览生产构建
 
@@ -45,7 +57,7 @@ npm run build
 npm run preview
 ```
 
-`npm run preview` 使用与本地开发相同的 HTTPS 证书；如果证书不存在，请先运行 `npm run setup:https`。
+`npm run preview` 使用与本地开发相同的 HTTPS/HTTP 回退逻辑；没有证书时会使用 HTTP。
 
 ## 验证
 
