@@ -94,8 +94,8 @@ const POINTER_DRAG_THRESHOLD = 5;
 const TOUCH_DIRECTION_THRESHOLD = 8;
 const TOUCH_LONG_PRESS_DELAY_MS = 420;
 const TOUCH_CONTEXT_MENU_GUARD_MS = 2_000;
-const GRAPH_INERTIA_MIN_VELOCITY = 0.02;
-const GRAPH_INERTIA_DECAY_PER_FRAME = 0.94;
+const GRAPH_INERTIA_MIN_VELOCITY = 0.01;
+const GRAPH_INERTIA_DECAY_PER_FRAME = 0.965;
 
 interface TodoPointerDragConfig {
   readonly axis: TodoDragAxis;
@@ -1786,6 +1786,8 @@ export class TodosController {
     let lastScrollLeft = 0;
     let lastSampleTime = 0;
     let velocity = 0;
+    let removeTouchWindowListeners: (() => void) | null = null;
+    let finishPan: (event: PointerEvent, allowInertia: boolean) => void;
     graph.addEventListener("pointerdown", (event) => {
       if (!event.isPrimary || event.button !== 0) return;
       this.#stopGraphInertia();
@@ -1798,8 +1800,62 @@ export class TodosController {
         startY = event.clientY;
         startScrollLeft = graph.scrollLeft;
         lastScrollLeft = graph.scrollLeft;
-        lastSampleTime = event.timeStamp;
+        lastSampleTime = this.#window.performance.now();
         velocity = 0;
+        removeTouchWindowListeners?.();
+        const handleTouchMove = (moveEvent: Event): void => {
+          const touchMove = moveEvent as PointerEvent;
+          if (pointerId !== touchMove.pointerId || pointerType !== "touch") return;
+          const activeDrag = this.#pointerDrag;
+          if (activeDrag?.pointerId === touchMove.pointerId && activeDrag.active) return;
+          const deltaX = touchMove.clientX - startX;
+          const deltaY = touchMove.clientY - startY;
+          if (!isPanning) {
+            if (Math.hypot(deltaX, deltaY) < TOUCH_DIRECTION_THRESHOLD) return;
+            if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+              this.#cancelPendingTouchDrag(touchMove.pointerId);
+              pointerId = null;
+              pointerType = null;
+              removeTouchWindowListeners?.();
+              return;
+            }
+            this.#cancelPendingTouchDrag(touchMove.pointerId);
+            isPanning = true;
+            graph.classList.add("is-panning");
+            try {
+              graph.setPointerCapture(touchMove.pointerId);
+            } catch {
+              // The window listeners keep the pan alive when capture is unavailable.
+            }
+          }
+          touchMove.preventDefault();
+          graph.scrollLeft = startScrollLeft - deltaX;
+          const sampleTime = this.#window.performance.now();
+          const elapsed = Math.max(1, Math.min(80, sampleTime - lastSampleTime));
+          const instantVelocity = (graph.scrollLeft - lastScrollLeft) / elapsed;
+          velocity = Math.max(-3, Math.min(3, velocity * 0.58 + instantVelocity * 0.42));
+          lastScrollLeft = graph.scrollLeft;
+          lastSampleTime = sampleTime;
+        };
+        const handleTouchEnd = (endEvent: Event): void => {
+          const touchEnd = endEvent as PointerEvent;
+          if (pointerId !== touchEnd.pointerId || pointerType !== "touch") return;
+          finishPan(touchEnd, true);
+        };
+        const handleTouchCancel = (cancelEvent: Event): void => {
+          const touchCancel = cancelEvent as PointerEvent;
+          if (pointerId !== touchCancel.pointerId || pointerType !== "touch") return;
+          finishPan(touchCancel, false);
+        };
+        this.#window.addEventListener("pointermove", handleTouchMove, { passive: false });
+        this.#window.addEventListener("pointerup", handleTouchEnd);
+        this.#window.addEventListener("pointercancel", handleTouchCancel);
+        removeTouchWindowListeners = () => {
+          this.#window.removeEventListener("pointermove", handleTouchMove);
+          this.#window.removeEventListener("pointerup", handleTouchEnd);
+          this.#window.removeEventListener("pointercancel", handleTouchCancel);
+          removeTouchWindowListeners = null;
+        };
         return;
       }
       if ((event.target as Element).closest(".todo-task-node")) return;
@@ -1814,41 +1870,12 @@ export class TodosController {
     });
     graph.addEventListener("pointermove", (event) => {
       if (pointerId !== event.pointerId) return;
-      if (pointerType === "touch") {
-        const activeDrag = this.#pointerDrag;
-        if (activeDrag?.pointerId === event.pointerId && activeDrag.active) return;
-        const deltaX = event.clientX - startX;
-        const deltaY = event.clientY - startY;
-        if (!isPanning) {
-          if (Math.hypot(deltaX, deltaY) < TOUCH_DIRECTION_THRESHOLD) return;
-          if (Math.abs(deltaY) >= Math.abs(deltaX)) {
-            this.#cancelPendingTouchDrag(event.pointerId);
-            pointerId = null;
-            pointerType = null;
-            return;
-          }
-          this.#cancelPendingTouchDrag(event.pointerId);
-          isPanning = true;
-          graph.classList.add("is-panning");
-          try {
-            graph.setPointerCapture(event.pointerId);
-          } catch {
-            // Window-level pointer handling still cancels the drag candidate.
-          }
-        }
-        event.preventDefault();
-        graph.scrollLeft = startScrollLeft - deltaX;
-        const elapsed = Math.max(1, Math.min(80, event.timeStamp - lastSampleTime));
-        const instantVelocity = (graph.scrollLeft - lastScrollLeft) / elapsed;
-        velocity = Math.max(-3, Math.min(3, velocity * 0.58 + instantVelocity * 0.42));
-        lastScrollLeft = graph.scrollLeft;
-        lastSampleTime = event.timeStamp;
-        return;
-      }
+      if (pointerType === "touch") return;
       graph.scrollLeft = startScrollLeft - (event.clientX - startX);
     });
-    const finishPan = (event: PointerEvent, allowInertia: boolean): void => {
+    finishPan = (event: PointerEvent, allowInertia: boolean): void => {
       if (pointerId !== event.pointerId) return;
+      if (pointerType === "touch") removeTouchWindowListeners?.();
       const activeDrag = this.#pointerDrag;
       if (activeDrag?.pointerId === event.pointerId && activeDrag.active) {
         pointerId = null;
@@ -1857,7 +1884,7 @@ export class TodosController {
         return;
       }
       const completedTouchPan = pointerType === "touch" && isPanning;
-      const completedVelocity = event.timeStamp - lastSampleTime > 80 ? 0 : velocity;
+      const completedVelocity = this.#window.performance.now() - lastSampleTime > 80 ? 0 : velocity;
       pointerId = null;
       pointerType = null;
       isPanning = false;
@@ -1873,7 +1900,10 @@ export class TodosController {
     };
     graph.addEventListener("pointerup", (event) => finishPan(event, true));
     graph.addEventListener("pointercancel", (event) => finishPan(event, false));
-    graph.addEventListener("lostpointercapture", (event) => finishPan(event, false));
+    graph.addEventListener("lostpointercapture", (event) => {
+      if (pointerType === "touch") return;
+      finishPan(event, false);
+    });
   }
 
   #bindGraphPointerDrag(
