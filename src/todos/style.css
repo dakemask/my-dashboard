@@ -150,6 +150,8 @@ button:disabled, input:disabled, textarea:disabled { cursor: default; }
   box-shadow: 0 4px 14px color-mix(in srgb, var(--status) 10%, transparent);
   transition: border-color .16s ease, background-color .16s ease, box-shadow .16s ease;
 }
+.todo-card-summary,
+.todo-card-summary * { -webkit-tap-highlight-color: transparent; }
 .todo-card-summary:hover { box-shadow: 0 9px 24px color-mix(in srgb, var(--status) 17%, transparent); }
 .todo-card[data-status="completed"] .todo-card-summary { background: #f5f6f5; }
 
