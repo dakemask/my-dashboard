@@ -13,3 +13,11 @@ export {
   type ModuleSyncUiOptions,
   type ModuleSyncUiRuntime,
 } from "./ModuleSyncUi";
+export {
+  createIconOnlyButton,
+  createIconParkIcon,
+  type IconOnlyButtonOptions,
+  type IconParkClassNames,
+  type IconParkIconOptions,
+  type IconParkRenderer,
+} from "./iconPark";

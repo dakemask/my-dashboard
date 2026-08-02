@@ -51,23 +51,26 @@ Shared 不定义模块业务 payload、event、快捷键、页面布局、本地
 
 ```text
 src/shared/index.ts          业务模块唯一入口
-src/shared/module/           definition 辅助函数、runtime 门面和平台装配
+src/shared/identifiers.ts    module/profile ID 的单一格式规则
+src/shared/module/           definition、runtime 门面、命令生命周期、认证与平台装配
 src/shared/auth/             GitHub 凭据验证和兼容单会话认证
 src/shared/profiles/         本地/账户模式、账户注册表和当前 profile
 src/shared/history/          current payload、event 历史和 JSON content key
 src/shared/persistence/      每模块 IndexedDB 记录及 CAS
 src/shared/concurrency/      OperationGate 与 Web Locks 编辑租约
-src/shared/github/           Git Data API client 与远端模块仓库
-src/shared/sync/             SyncCoordinator、content hash 和 revision poller
-src/shared/ui/               公共同步 UI、遮罩、spinner 和阻止页面
+src/shared/github/           Git Data API client、manifest/path 规则与远端模块仓库
+src/shared/sync/             payload 准备、session state、SyncCoordinator、hash 和 poller
+src/shared/ui/               公共同步 UI、图标 helper、遮罩、spinner 和阻止页面
 ```
 
-- `module/runtime` 是组合根，拥有 auth subscription、lease、gate、store、repository、coordinator 和 poller。
-- `SyncCoordinator` 只依赖本地 store、远端 repository port、history、gate 和 hooks，不依赖业务 DOM。
-- `RemoteModuleRepository` 负责远端模块格式；`GitHubGitDataClient` 只负责 GitHub 请求。
+- `module/runtime.ts` 是兼容 facade；`startModuleRuntime` 是组合根，`DefaultModuleRuntime` 只负责命令尾、状态机、snapshot 通知和清理，认证边界由 one-shot 的 runtime authentication helper 管理。
+- `sync/modulePayload` 统一 clone、当前 payload 校验、content key/hash 和逐版 migration；`SyncSessionState` 独占 envelope、history、store 与 CAS 状态转移。
+- `SyncCoordinator` 只编排 gate、远端四象限和 hooks，不依赖业务 DOM，也不直接拼装本机 envelope。
+- `RemoteModuleRepository` 负责 Git ref-CAS 和单 commit 编排；manifest 编解码与路径碰撞规则使用独立纯模块，`GitHubGitDataClient` 只负责 GitHub 请求。
 - history、persistence、github、concurrency 和 sync 不得依赖任何具体业务模块。
-- `DomOperationGatePresentation` 只根据 gate 命令呈现阻塞状态；`ModuleSyncUi` 根据公开 snapshot 呈现同步状态，并通过 runtime 执行标准上传、拉取和覆盖流程。
+- `DomOperationGatePresentation` 只根据 gate 命令呈现阻塞状态；`ModuleSyncUi` facade 通过纯 action 和 view-model 层执行标准流程，再由 DOM view 呈现。
 - `ModuleSyncUi` 不直接依赖具体业务模块；模块通过 `guardAction` 返回 `ready` 或带安全说明的 `blocked`。
+- `createIconParkIcon` 和 `createIconOnlyButton` 是 Shared 唯一的通用展示 helper；它们只统一静态 SVG 与纯图标按钮属性，不扩展为通用按钮、toast、dialog 或页面设计系统。
 
 ### 2.2 runtime 装配顺序
 

@@ -1,4 +1,9 @@
-import { DASHBOARD_REPOSITORY_CONFIG, type DashboardRepositoryConfig } from "../config";
+import {
+  DASHBOARD_REPOSITORY_CONFIG,
+  GITHUB_API_BASE_URL,
+  type DashboardRepositoryConfig,
+} from "../config";
+import { createGitHubRequestHeaders } from "../github/requestHeaders";
 import { createCredentialsStore, type CredentialsStore } from "./credentialsStore";
 import {
   AuthenticationError,
@@ -88,14 +93,14 @@ async function validateCredentials(
   repository: DashboardRepositoryConfig,
   request: typeof fetch,
 ): Promise<void> {
-  const headers = createHeaders(credentials.token);
-  const user = await githubRequest<GitHubUserResponse>(request, "https://api.github.com/user", headers);
+  const headers = createGitHubRequestHeaders(credentials.token);
+  const user = await githubRequest<GitHubUserResponse>(request, `${GITHUB_API_BASE_URL}/user`, headers);
 
   if (user.login.toLowerCase() !== credentials.username.toLowerCase()) {
     throw new AuthenticationError("GitHub 用户名与 token 所属账号不一致。");
   }
 
-  const repositoryUrl = `https://api.github.com/repos/${encodeURIComponent(credentials.username)}/${encodeURIComponent(repository.repository)}`;
+  const repositoryUrl = `${GITHUB_API_BASE_URL}/repos/${encodeURIComponent(credentials.username)}/${encodeURIComponent(repository.repository)}`;
   const repo = await githubRequest<GitHubRepositoryResponse>(request, repositoryUrl, headers);
 
   if (repo.owner?.login?.toLowerCase() !== credentials.username.toLowerCase()) {
@@ -136,14 +141,6 @@ async function githubRequest<T>(request: typeof fetch, url: string, headers: Hea
   }
 
   return response.json() as Promise<T>;
-}
-
-function createHeaders(token: string): HeadersInit {
-  return {
-    Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${token}`,
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
 }
 
 function createSession(credentials: GitHubCredentials, repository: DashboardRepositoryConfig): AuthSession {

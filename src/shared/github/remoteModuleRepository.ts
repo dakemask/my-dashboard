@@ -2,7 +2,6 @@ import { GitHubGitDataClient } from "./client";
 import {
   GitHubApiError,
   GitHubRefUpdateRaceError,
-  MODULE_REVISION_FILE,
   RemoteModuleConflictError,
   RemoteModuleFormatError,
   RemoteModulePathError,
@@ -17,6 +16,25 @@ import {
   type RemoteModuleSnapshot,
   type RemoteRevisionSnapshot,
 } from "./types";
+import {
+  isIsoDate,
+  parseRemoteModuleManifest,
+  serializeRemoteModuleManifest,
+  toRemoteRevisionSnapshot,
+  validateRemoteSchemaVersion,
+  validateRevisionToken,
+} from "./remoteModuleManifest";
+import {
+  compareRemoteModulePaths,
+  getModuleRoot,
+  getRemoteModuleFilePath,
+  getRemoteModuleRevisionPath,
+  remoteModulePathsCollide,
+  validateEncodedFiles,
+  validateModuleId,
+} from "./remoteModulePaths";
+
+export { getModuleRoot, validateModuleId } from "./remoteModulePaths";
 
 interface LoadedHead {
   snapshot: GitHubTreeSnapshot;
@@ -31,7 +49,6 @@ interface RemoteModuleRepositoryOptions {
 }
 
 const DEFAULT_MAX_REF_RETRIES = 3;
-const MODULE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 export class RemoteModuleRepository<T> {
   readonly moduleId: string;
@@ -48,7 +65,7 @@ export class RemoteModuleRepository<T> {
     options: RemoteModuleRepositoryOptions = {},
   ) {
     this.moduleId = validateModuleId(codec.moduleId);
-    this.moduleRoot = `data/${this.moduleId}`;
+    this.moduleRoot = getModuleRoot(this.moduleId);
     this.#client = client;
     this.#codec = codec;
     this.#maxRefRetries = options.maxRefRetries ?? DEFAULT_MAX_REF_RETRIES;
@@ -61,7 +78,9 @@ export class RemoteModuleRepository<T> {
 
   async readRevision(signal?: AbortSignal): Promise<RemoteRevisionSnapshot | null> {
     const head = await this.#loadHead(signal);
-    return head.revision ? toRevisionSnapshot(head.revision, head.snapshot.commitSha) : null;
+    return head.revision
+      ? toRemoteRevisionSnapshot(head.revision, head.snapshot.commitSha)
+      : null;
   }
 
   async pull(): Promise<RemoteModuleSnapshot<T> | null> {
@@ -85,14 +104,16 @@ export class RemoteModuleRepository<T> {
       }),
     );
 
-    const stableFiles = new Map([...files].sort(([left], [right]) => comparePaths(left, right)));
+    const stableFiles = new Map(
+      [...files].sort(([left], [right]) => compareRemoteModulePaths(left, right)),
+    );
     const decoded = await this.#codec.decode(stableFiles);
     const data = this.#codec.migration
       ? decoded
       : this.#codec.validate(decoded);
 
     return {
-      ...toRevisionSnapshot(head.revision, head.snapshot.commitSha),
+      ...toRemoteRevisionSnapshot(head.revision, head.snapshot.commitSha),
       data: data as T,
       files: stableFiles,
     };
@@ -101,7 +122,7 @@ export class RemoteModuleRepository<T> {
   async push(data: T, options: RemoteModulePushOptions): Promise<RemoteModulePushResult> {
     validateRevisionToken(options.expectedRevision, "expectedRevision", true);
     validateRevisionToken(options.nextRevision, "nextRevision", false);
-    validateSchemaVersion(options.schemaVersion);
+    validateRemoteSchemaVersion(options.schemaVersion);
 
     const encoded = await this.#codec.encode(data);
     const desiredFiles = validateEncodedFiles(encoded);
@@ -115,7 +136,7 @@ export class RemoteModuleRepository<T> {
       revision: options.nextRevision,
       updatedAt,
       schemaVersion: options.schemaVersion ?? null,
-      managedFiles: [...desiredFiles.keys()].sort(comparePaths),
+      managedFiles: [...desiredFiles.keys()].sort(compareRemoteModulePaths),
     };
 
     for (let retryCount = 0; retryCount <= this.#maxRefRetries; retryCount += 1) {
@@ -124,7 +145,10 @@ export class RemoteModuleRepository<T> {
 
       if (actualRevision === options.nextRevision) {
         return {
-          ...toRevisionSnapshot(head.revision as RemoteModuleRevision, head.snapshot.commitSha),
+          ...toRemoteRevisionSnapshot(
+            head.revision as RemoteModuleRevision,
+            head.snapshot.commitSha,
+          ),
           status: "already-committed",
         };
       }
@@ -149,7 +173,7 @@ export class RemoteModuleRepository<T> {
       try {
         await this.#client.updateBranchHead(commitSha);
         return {
-          ...toRevisionSnapshot(nextRevision, commitSha),
+          ...toRemoteRevisionSnapshot(nextRevision, commitSha),
           status: "committed",
         };
       } catch (error) {
@@ -194,7 +218,10 @@ export class RemoteModuleRepository<T> {
 
     if (actualRevision === options.nextRevision) {
       return {
-        ...toRevisionSnapshot(latest.revision as RemoteModuleRevision, latest.snapshot.commitSha),
+        ...toRemoteRevisionSnapshot(
+          latest.revision as RemoteModuleRevision,
+          latest.snapshot.commitSha,
+        ),
         status: "already-committed",
       };
     }
@@ -227,15 +254,7 @@ export class RemoteModuleRepository<T> {
         sha: await this.#client.createBlob(text),
       })),
     );
-    const revisionDocument = {
-      revision: revision.revision,
-      updatedAt: revision.updatedAt,
-      ...(revision.schemaVersion === null
-        ? {}
-        : { schemaVersion: revision.schemaVersion }),
-      managedFiles: revision.managedFiles,
-    };
-    const revisionText = `${JSON.stringify(revisionDocument, null, 2)}\n`;
+    const revisionText = serializeRemoteModuleManifest(revision);
     const revisionBlobSha = await this.#client.createBlob(revisionText);
     const desiredPaths = new Set(desiredFiles.keys());
     const deletedEntries: GitHubCreateTreeEntry[] = (head.revision?.managedFiles ?? [])
@@ -258,7 +277,7 @@ export class RemoteModuleRepository<T> {
       ...blobEntries,
       ...deletedEntries,
       revisionEntry,
-    ].sort((left, right) => comparePaths(left.path, right.path));
+    ].sort((left, right) => compareRemoteModulePaths(left.path, right.path));
   }
 
   #assertUnknownFilesArePreserved(
@@ -275,7 +294,9 @@ export class RemoteModuleRepository<T> {
 
     for (const desiredPath of desiredFiles.keys()) {
       const fullDesiredPath = this.#fullPath(desiredPath);
-      const collision = unknownPaths.find((unknownPath) => pathsCollide(fullDesiredPath, unknownPath));
+      const collision = unknownPaths.find(
+        (unknownPath) => remoteModulePathsCollide(fullDesiredPath, unknownPath),
+      );
 
       if (collision) {
         throw new RemoteModulePathError(
@@ -298,8 +319,9 @@ export class RemoteModuleRepository<T> {
       return { snapshot, revision: null, blobByPath };
     }
 
-    const revision = parseRemoteRevision(await this.#client.readBlobText(revisionEntry.sha, signal));
-    validateManifestPaths(revision.managedFiles);
+    const revision = parseRemoteModuleManifest(
+      await this.#client.readBlobText(revisionEntry.sha, signal),
+    );
 
     for (const relativePath of revision.managedFiles) {
       if (!blobByPath.has(this.#fullPath(relativePath))) {
@@ -311,188 +333,14 @@ export class RemoteModuleRepository<T> {
   }
 
   #revisionPath(): string {
-    return `${this.moduleRoot}/${MODULE_REVISION_FILE}`;
+    return getRemoteModuleRevisionPath(this.moduleRoot);
   }
 
   #fullPath(relativePath: string): string {
-    return `${this.moduleRoot}/${relativePath}`;
+    return getRemoteModuleFilePath(this.moduleRoot, relativePath);
   }
-}
-
-export function getModuleRoot(moduleId: string): string {
-  return `data/${validateModuleId(moduleId)}`;
-}
-
-export function validateModuleId(moduleId: string): string {
-  if (!MODULE_ID_PATTERN.test(moduleId)) {
-    throw new RemoteModulePathError(
-      "moduleId must contain lowercase ASCII letters or digits separated by single hyphens.",
-    );
-  }
-
-  return moduleId;
-}
-
-function validateEncodedFiles(files: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
-  if (!(files instanceof Map) && typeof files?.entries !== "function") {
-    throw new RemoteModulePathError("The module encoder must return a ReadonlyMap of text files.");
-  }
-
-  const result = new Map<string, string>();
-
-  for (const [path, text] of files) {
-    validateRelativePath(path);
-
-    if (typeof text !== "string") {
-      throw new RemoteModulePathError(`Managed file content must be text: ${path}`);
-    }
-
-    result.set(path, text);
-  }
-
-  validatePathCollisions([...result.keys()]);
-  return result;
-}
-
-function validateManifestPaths(paths: readonly string[]): void {
-  for (const path of paths) {
-    validateRelativePath(path, RemoteModuleFormatError);
-  }
-
-  validatePathCollisions(paths, RemoteModuleFormatError);
-  const sorted = [...paths].sort(comparePaths);
-
-  if (paths.some((path, index) => path !== sorted[index])) {
-    throw new RemoteModuleFormatError("revision.json managedFiles must be sorted.");
-  }
-}
-
-function validateRelativePath(
-  path: string,
-  ErrorType: typeof RemoteModulePathError | typeof RemoteModuleFormatError = RemoteModulePathError,
-): void {
-  const invalid = typeof path !== "string" ||
-    path.length === 0 ||
-    path.startsWith("/") ||
-    path.endsWith("/") ||
-    path.includes("\\") ||
-    path.includes("//") ||
-    /[\u0000-\u001f\u007f]/.test(path) ||
-    path.split("/").some((part) => part === "." || part === ".." || part.length === 0) ||
-    path.toLocaleLowerCase("en-US") === MODULE_REVISION_FILE;
-
-  if (invalid) {
-    throw new ErrorType(`Invalid managed file path: ${String(path)}`);
-  }
-}
-
-function validatePathCollisions(
-  paths: readonly string[],
-  ErrorType: typeof RemoteModulePathError | typeof RemoteModuleFormatError = RemoteModulePathError,
-): void {
-  const canonical = [...paths]
-    .map((path) => ({ original: path, comparable: path.toLocaleLowerCase("en-US") }))
-    .sort((left, right) => comparePaths(left.comparable, right.comparable));
-
-  for (let index = 1; index < canonical.length; index += 1) {
-    const previous = canonical[index - 1];
-    const current = canonical[index];
-
-    if (previous && current && pathsCollide(previous.comparable, current.comparable)) {
-      throw new ErrorType(`Managed file paths collide: ${previous.original} and ${current.original}`);
-    }
-  }
-}
-
-function parseRemoteRevision(text: string): RemoteModuleRevision {
-  let value: unknown;
-
-  try {
-    value = JSON.parse(text) as unknown;
-  } catch {
-    throw new RemoteModuleFormatError("revision.json is not valid JSON.");
-  }
-
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new RemoteModuleFormatError("revision.json must contain an object.");
-  }
-
-  const record = value as Record<string, unknown>;
-
-  if (
-    typeof record.revision !== "string" ||
-    record.revision.length === 0 ||
-    typeof record.updatedAt !== "string" ||
-    !isIsoDate(record.updatedAt) ||
-    !Array.isArray(record.managedFiles) ||
-    !record.managedFiles.every((path): path is string => typeof path === "string")
-  ) {
-    throw new RemoteModuleFormatError("revision.json has an invalid shape.");
-  }
-
-  return {
-    revision: record.revision,
-    updatedAt: record.updatedAt,
-    schemaVersion: record.schemaVersion === undefined
-      ? null
-      : validateParsedSchemaVersion(record.schemaVersion),
-    managedFiles: [...record.managedFiles],
-  };
-}
-
-function validateSchemaVersion(value: number | undefined): void {
-  if (
-    value !== undefined
-    && (!Number.isSafeInteger(value) || value < 1)
-  ) {
-    throw new TypeError("schemaVersion must be a positive safe integer.");
-  }
-}
-
-function validateParsedSchemaVersion(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new RemoteModuleFormatError(
-      "revision.json schemaVersion must be a positive safe integer.",
-    );
-  }
-  return value as number;
-}
-
-function validateRevisionToken(value: string | null, name: string, nullable: boolean): void {
-  if ((nullable && value === null) || (typeof value === "string" && value.length > 0)) {
-    return;
-  }
-
-  throw new TypeError(`${name} must be ${nullable ? "null or " : ""}a non-empty string.`);
-}
-
-function isIsoDate(value: string): boolean {
-  const time = Date.parse(value);
-  return Number.isFinite(time) && new Date(time).toISOString() === value;
 }
 
 function isPotentialRefRace(error: unknown): boolean {
   return !(error instanceof GitHubApiError) || error.status === 409 || error.status === 422;
-}
-
-function pathsCollide(left: string, right: string): boolean {
-  const canonicalLeft = left.toLocaleLowerCase("en-US");
-  const canonicalRight = right.toLocaleLowerCase("en-US");
-  return canonicalLeft === canonicalRight ||
-    canonicalLeft.startsWith(`${canonicalRight}/`) ||
-    canonicalRight.startsWith(`${canonicalLeft}/`);
-}
-
-function comparePaths(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function toRevisionSnapshot(revision: RemoteModuleRevision, commitSha: string): RemoteRevisionSnapshot {
-  return {
-    revision: revision.revision,
-    updatedAt: revision.updatedAt,
-    schemaVersion: revision.schemaVersion,
-    managedFiles: [...revision.managedFiles],
-    commitSha,
-  };
 }

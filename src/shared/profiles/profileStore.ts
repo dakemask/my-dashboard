@@ -1,5 +1,6 @@
 import { DASHBOARD_REPOSITORY_CONFIG } from "../config";
 import type { AuthSession } from "../auth";
+import { isProfileId } from "../identifiers";
 import type {
   DashboardAccount,
   DashboardProfileContext,
@@ -8,7 +9,6 @@ import type {
 } from "./types";
 
 const PROFILE_STORAGE_KEY = "my-dashboard.profiles.v1";
-const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,63})$/;
 
 interface StoredProfileState {
   readonly accounts: readonly StoredDashboardAccount[];
@@ -221,7 +221,7 @@ function normalizeProfileId(value: unknown): string {
     throw new TypeError("A profile id is required.");
   }
   const normalized = value.trim().toLocaleLowerCase("en-US");
-  if (!PROFILE_ID_PATTERN.test(normalized)) {
+  if (!isProfileId(normalized)) {
     throw new TypeError("Invalid profile id.");
   }
   return normalized;

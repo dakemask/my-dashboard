@@ -1,6 +1,7 @@
 import { base64ToText } from "../base64";
+import { GITHUB_API_BASE_URL } from "../config";
+import { createGitHubRequestHeaders } from "./requestHeaders";
 import {
-  GITHUB_API_VERSION,
   GITHUB_DATA_BRANCH,
   GITHUB_DATA_REPOSITORY,
   GitHubApiError,
@@ -38,8 +39,6 @@ interface GitBlobResponse {
 interface GitObjectResponse {
   sha: string;
 }
-
-const GITHUB_API_BASE_URL = "https://api.github.com";
 
 /**
  * Minimal Git Data API client used by module persistence. `fetch` is mandatory so
@@ -171,15 +170,7 @@ export class GitHubGitDataClient {
   ): Promise<T> {
     const url = `${GITHUB_API_BASE_URL}${this.#repositoryPath()}${endpoint}`;
     const readsMutableBranchReference = method === "GET" && endpoint.startsWith("/git/ref/");
-    const headers: Record<string, string> = {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${this.#token}`,
-      "X-GitHub-Api-Version": GITHUB_API_VERSION,
-    };
-
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
-    }
+    const headers = createGitHubRequestHeaders(this.#token, body !== undefined);
 
     const response = await this.#fetch(url, {
       method,

@@ -26,7 +26,13 @@ export type {
 } from "../sync";
 export type { PersistedConflict } from "../persistence";
 export {
+  createIconOnlyButton,
+  createIconParkIcon,
   ModuleSyncUi,
+  type IconOnlyButtonOptions,
+  type IconParkClassNames,
+  type IconParkIconOptions,
+  type IconParkRenderer,
   type ModuleSyncAction,
   type ModuleSyncGateResult,
   type ModuleSyncUiOptions,

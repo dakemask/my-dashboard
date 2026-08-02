@@ -1,3 +1,5 @@
+import { isModuleId, isProfileId } from "../identifiers";
+
 export type ModuleEditorLeaseStatus =
   | "idle"
   | "acquiring"
@@ -12,8 +14,6 @@ export interface ModuleEditorLeaseOptions {
   readonly profileId?: string;
 }
 
-const MODULE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,63})$/;
 const LOCK_PREFIX = "my-dashboard.module.";
 const LOCK_SUFFIX = ".editor";
 
@@ -29,12 +29,12 @@ export class ModuleEditorLease {
   #requestError: unknown = null;
 
   constructor(moduleId: string, options: ModuleEditorLeaseOptions = {}) {
-    if (!MODULE_ID_PATTERN.test(moduleId)) {
+    if (!isModuleId(moduleId)) {
       throw new TypeError(`Invalid moduleId: ${moduleId}`);
     }
 
     const profileId = options.profileId;
-    if (profileId !== undefined && !PROFILE_ID_PATTERN.test(profileId)) {
+    if (profileId !== undefined && !isProfileId(profileId)) {
       throw new TypeError(`Invalid profileId: ${profileId}`);
     }
 

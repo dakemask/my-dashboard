@@ -1,10 +1,9 @@
+import { isModuleId, isProfileId } from "../identifiers";
 import type { ModuleLocalEnvelope } from "./types";
 
 const DATABASE_PREFIX = "my-dashboard.module.";
 const OBJECT_STORE_NAME = "module";
 const RECORD_KEY = "state";
-const MODULE_ID_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const PROFILE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,63})$/;
 
 export interface ModuleLocalStoreOptions {
   readonly indexedDB?: IDBFactory;
@@ -74,7 +73,7 @@ export class ModuleLocalStore<T> {
   #databasePromise: Promise<IDBDatabase> | null = null;
 
   constructor(moduleId: string, options: ModuleLocalStoreOptions = {}) {
-    if (!MODULE_ID_PATTERN.test(moduleId)) {
+    if (!isModuleId(moduleId)) {
       throw new TypeError(`Invalid moduleId: ${moduleId}`);
     }
 
@@ -84,7 +83,7 @@ export class ModuleLocalStore<T> {
     }
 
     const profileId = options.profileId;
-    if (profileId !== undefined && !PROFILE_ID_PATTERN.test(profileId)) {
+    if (profileId !== undefined && !isProfileId(profileId)) {
       throw new TypeError(`Invalid profileId: ${profileId}`);
     }
 

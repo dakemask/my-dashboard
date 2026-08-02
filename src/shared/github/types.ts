@@ -1,6 +1,8 @@
-export const GITHUB_DATA_REPOSITORY = "my-dashboard-data";
-export const GITHUB_DATA_BRANCH = "main";
-export const GITHUB_API_VERSION = "2022-11-28";
+import { DASHBOARD_REPOSITORY_CONFIG } from "../config";
+
+export { GITHUB_API_VERSION } from "../config";
+export const GITHUB_DATA_REPOSITORY = DASHBOARD_REPOSITORY_CONFIG.repository;
+export const GITHUB_DATA_BRANCH = DASHBOARD_REPOSITORY_CONFIG.branch;
 export const MODULE_REVISION_FILE = "revision.json";
 
 export type GitHubFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

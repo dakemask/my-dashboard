@@ -126,20 +126,20 @@
   font-size: 0.78rem;
   font-weight: 650;
   justify-content: center;
-  min-height: 2.1rem;
+  min-height: 2.625rem;
   padding: 0.35rem 0.7rem;
 }
 
 .shared-module-sync-button {
   padding: 0;
-  width: 2.1rem;
+  width: 2.625rem;
 }
 
 .shared-module-sync-icon {
   color: currentcolor;
-  height: 1.2rem;
+  height: 1.25rem;
   pointer-events: none;
-  width: 1.2rem;
+  width: 1.25rem;
 }
 
 .shared-module-sync-button:hover:not(:disabled),
@@ -154,7 +154,8 @@
   outline-offset: 2px;
 }
 
-.shared-module-sync-button:disabled {
+.shared-module-sync-button:disabled,
+.shared-module-sync-dialog-button:disabled {
   cursor: default;
   opacity: 0.48;
 }

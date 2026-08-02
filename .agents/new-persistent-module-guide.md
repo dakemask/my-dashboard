@@ -245,6 +245,11 @@ this.syncUi = new ModuleSyncUi({
 
 门禁可以按 `upload` / `pull` 处理模块实时状态，但不自行调用 runtime、显示覆盖确认或解释同步结果。实际命令开始后，runtime 仍会调用 `settle`。
 
+模块使用 IconPark 纯图标按钮时，从 Shared 根入口调用
+`createIconParkIcon` 或 `createIconOnlyButton`。后者统一设置 `type="button"`、
+`aria-label` 和 `title`；模块仍自行提供 class、颜色、尺寸层级和点击语义，不把
+业务按钮或通用 dialog 交给 Shared。
+
 ## 第四步：建立页面并启动 runtime
 
 模块 HTML 保持严格 CSP，并外链 Shared 的公共操作样式；不要在模块里复制 spinner 或遮罩：

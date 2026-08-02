@@ -203,6 +203,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 | runtime | `mode`、`current`、历史状态、`dispatch`、`undo`、`redo`、`save`、`upload`、`pull`、`resolveConflict`、`pollNow`、`getSnapshot`、`dispose` |
 | hooks | `settle`、`project`、`onConflict`、`onSnapshotChange` |
 | 同步 UI | `ModuleSyncUi`、`ModuleSyncAction`、`ModuleSyncGateResult`；模块提供挂载点和业务门禁 |
+| 图标 UI | `createIconParkIcon`、`createIconOnlyButton`、`IconParkRenderer`；统一 IconPark SVG 解析和纯图标按钮的可访问属性 |
 | 同步类型 | settle/project reason、同步结果、snapshot、conflict resolution 和 persisted conflict |
 | 使用错误 | `ModuleRuntimeBusyError`、`ModuleRuntimeUnavailableError` |
 
@@ -213,6 +214,7 @@ Shared 不注册 `Ctrl+Z`、`Ctrl+Y`、`Ctrl+S` 或其他业务快捷键。按�
 - 模块不能把系统状态混入 payload、event 或撤销队列；
 - 模块不得自行读写 Shared 的 schemaVersion 或 migration 状态；当前版本和迁移规则仍由模块定义；
 - 模块使用 SDK 提供的单标签锁、操作阻塞、云端遮罩和同步 UI，不实现竞态降级方案或第二套同步 UI；
+- 纯图标按钮优先使用 Shared 图标 helper，并提供准确且相同的 `aria-label` 与 `title`；按钮样式和业务语义仍由模块负责；
 - 失败提示不得包含 token、原始 GitHub 响应、请求头或任意序列化的捕获异常；
 
 持久化模块的自动测试聚焦 domain 和 codec，包括 payload 校验、event 的 apply/invert、远端编码往返和非法输入。

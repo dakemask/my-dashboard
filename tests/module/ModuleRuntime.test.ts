@@ -11,6 +11,7 @@ import {
   type ModuleRuntimeHooks,
 } from "../../src/shared";
 import type { ModuleRuntimeEnvironment } from "../../src/shared/module/runtime";
+import { RuntimeAuthentication } from "../../src/shared/module/runtimeAuthentication";
 
 interface TestPayload {
   readonly value: string;
@@ -530,6 +531,81 @@ describe("ModuleRuntime", () => {
     await vi.waitFor(() => expect(result.runtime.state).toBe("disposed"));
     expect(auth.getState().status).toBe("anonymous");
     expect(onAuthenticationRequired).toHaveBeenCalledOnce();
+  });
+
+  it("removes an invalid profile account once and releases startup resources", async () => {
+    localStorage.clear();
+    const profileStore = createDashboardProfileStore(localStorage);
+    profileStore.addAccount(session, "invalid-profile");
+    const github = new EmptyGitHub();
+    github.mode = "unauthorized";
+    const locks = new FakeLockManager();
+    const indexedDB = new IDBFactory();
+    const onAuthenticationRequired = vi.fn();
+
+    await expect(startModuleRuntime(
+      {
+        definition: definition("invalid-profile-test"),
+        appRoot: createRoot(),
+        hooks: { settle: () => null, project: () => undefined },
+      },
+      {
+        profileStore,
+        fetch: github.fetch,
+        indexedDB,
+        lockManager: locks as unknown as LockManager,
+        autoStartPolling: false,
+        onAuthenticationRequired,
+      },
+    )).rejects.toMatchObject({ status: 401 });
+    expect(profileStore.getState()).toMatchObject({
+      mode: "local",
+      accounts: [],
+      activeAccountId: null,
+    });
+    expect(onAuthenticationRequired).toHaveBeenCalledOnce();
+
+    github.mode = "ok";
+    const retry = await startModuleRuntime(
+      {
+        definition: definition("invalid-profile-test"),
+        appRoot: createRoot(),
+        hooks: { settle: () => null, project: () => undefined },
+      },
+      {
+        profileStore,
+        fetch: github.fetch,
+        indexedDB,
+        lockManager: locks as unknown as LockManager,
+        autoStartPolling: false,
+        onAuthenticationRequired,
+      },
+    );
+    expect(retry.status).toBe("ready");
+    if (retry.status === "ready") await retry.runtime.dispose();
+  });
+
+  it("deduplicates concurrent authentication invalidation and cleanup", async () => {
+    const auth = new FakeAuthService();
+    const invalidate = vi.spyOn(auth, "invalidate");
+    const dispose = vi.fn(async () => undefined);
+    const onAuthenticationRequired = vi.fn();
+    const authentication = new RuntimeAuthentication({
+      authService: auth,
+      profileStore: null,
+      profileId: undefined,
+      pageWindow: window,
+      onAuthenticationRequired,
+    });
+    authentication.attachRuntime(dispose);
+
+    authentication.invalidateCredentials();
+    authentication.invalidateCredentials();
+    authentication.requireAuthentication();
+
+    await vi.waitFor(() => expect(onAuthenticationRequired).toHaveBeenCalledOnce());
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("starts automatic polling and stops all future polls on dispose", async () => {
