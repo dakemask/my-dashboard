@@ -87,3 +87,26 @@ npm run build
 - 适合用图标表达的按钮（尤其是工具栏、重复操作和空间紧凑的常见动作）必须使用图标。图标统一使用字节跳动 IconPark 的 `@icon-park/svg`，由 TypeScript 引用并通过 Vite 直接编译进构建产物。纯图标按钮必须同时提供准确的 `aria-label` 和 `title`。
 - 所有 UI 的内联文字编辑必须“无感”：输入、校验失败等场景下，文字的字号、行高，以及编辑区域的宽高、内外边距等都应与只读态保持基本一致，不得发生布局跳动。实现时优先让同一输入控件在只读态与编辑态间切换。
 - 随时使用自定义工具 `airuma_custom.custom_request_user_input` 与用户进行交流，向用户确认选择，以防止潜在的误解。
+
+### 大文件的连续代码搬移
+
+拆分大文件时，如果需要移动的是连续且不改写内容的代码块，不要用 `apply_patch` 重复传输整段正文。先用 `rg -n` 根据唯一的首尾锚点确定一次包含首尾的行号，再使用 Vim 的 Ex 静默批处理模式在本地文件系统中完成范围写入和源范围删除；移动正文不得进入工具参数或输出。机械搬移完成后，再用 `apply_patch` 调整少量 `import`、`export` 和调用关系。
+
+Windows 当前环境使用 Git for Windows 自带的 `D:\Git\usr\bin\ex.exe`。命令模板如下；禁止使用 `write!` 覆盖已有目标文件，并且必须确认目标写入成功后才能删除源范围：
+
+```powershell
+& 'D:\Git\usr\bin\ex.exe' -Nu NONE -i NONE -n -es `
+  -c "let v:errmsg=''" `
+  -c '<start>,<end>write <target-file>' `
+  -c 'if !empty(v:errmsg) | cquit | endif' `
+  -c '<start>,<end>delete' `
+  -c "let v:errmsg=''" `
+  -c 'write' `
+  -c 'if !empty(v:errmsg) | cquit | endif' `
+  -c 'quit' `
+  -- '<source-file>'
+
+if ($LASTEXITCODE -ne 0) { throw '大文件范围搬移失败' }
+```
+
+Git for Windows 的 Ex 在受限 sandbox 中会因 MSYS signal pipe 权限失败。实际执行上述命令时不要先在 sandbox 内试跑，直接申请沙箱外权限并说明原因；这是纯终端批处理，不需要启动或控制 GUI。Ex 只负责文本范围的机械搬移，不会自动更新 TypeScript 依赖关系。
