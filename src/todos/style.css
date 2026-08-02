@@ -233,7 +233,11 @@ button:disabled, input:disabled, textarea:disabled { cursor: default; }
   user-select: none;
   -webkit-user-select: none;
   touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
+  -webkit-overflow-scrolling: touch;
   overscroll-behavior-inline: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
   transform-origin: top center;
   transition:
     border-color .16s ease,
@@ -287,7 +291,11 @@ button:disabled, input:disabled, textarea:disabled { cursor: default; }
 .todo-task-node:hover { box-shadow: 0 8px 20px color-mix(in srgb, var(--status) 18%, transparent); }
 .todo-task-node[data-draggable="true"],
 .todo-task-node[data-draggable="true"] * { cursor: pointer; }
-.todo-task-node[data-draggable="true"] { touch-action: none; }
+.todo-task-node[data-draggable="true"] {
+  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
+  -webkit-touch-callout: none;
+}
 .todo-task-node-main { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 7px 10px 6px 12px; }
 .todo-task-open { min-width: 0; height: 38px; flex: 1; display: flex; align-items: center; padding: 0 2px; border: 0; background: transparent; text-align: left; line-height: 21px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .todo-task-node[data-draggable="true"] .todo-checkbox:disabled { cursor: default; }

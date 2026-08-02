@@ -88,9 +88,18 @@ interface TodoFieldElements {
 }
 
 type TodoDragAxis = "horizontal" | "vertical";
+type TodoTouchDragActivation = "movement" | "long-press";
+
+const POINTER_DRAG_THRESHOLD = 5;
+const TOUCH_DIRECTION_THRESHOLD = 8;
+const TOUCH_LONG_PRESS_DELAY_MS = 420;
+const TOUCH_CONTEXT_MENU_GUARD_MS = 2_000;
+const GRAPH_INERTIA_MIN_VELOCITY = 0.02;
+const GRAPH_INERTIA_DECAY_PER_FRAME = 0.94;
 
 interface TodoPointerDragConfig {
   readonly axis: TodoDragAxis;
+  readonly touchActivation?: TodoTouchDragActivation;
   readonly source: HTMLElement;
   readonly captureTarget: HTMLElement;
   readonly members: readonly HTMLElement[];
@@ -103,6 +112,8 @@ interface TodoPointerDragConfig {
 
 interface TodoPointerDragSession extends TodoPointerDragConfig {
   readonly pointerId: number;
+  readonly pointerType: string;
+  readonly requiresLongPress: boolean;
   readonly startX: number;
   readonly startY: number;
   readonly originalElements: readonly HTMLElement[];
@@ -112,6 +123,7 @@ interface TodoPointerDragSession extends TodoPointerDragConfig {
   preview: HTMLElement | null;
   previewOffsetX: number;
   previewOffsetY: number;
+  longPressTimer: number | null;
   autoScrollFrame: number | null;
   animations: Animation[];
 }
@@ -130,6 +142,8 @@ export class TodosController {
   #dialogBuildEvent: (() => TodosEvent | null) | null = null;
   #draggingTaskId: string | null = null;
   #pointerDrag: TodoPointerDragSession | null = null;
+  #graphInertiaFrame: number | null = null;
+  #lastGraphTouchAt = Number.NEGATIVE_INFINITY;
   readonly #graphScrollLeft = new Map<string, number>();
   readonly #ruleGraphScrollLeft = new Map<string, number>();
   readonly #collapsedRuleIds = new Set<string>();
@@ -167,6 +181,7 @@ export class TodosController {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#finishPointerDrag(false);
+    this.#stopGraphInertia();
     if (this.#boundaryTimer !== null) this.#window.clearTimeout(this.#boundaryTimer);
     this.#activeDialog?.close();
     this.#activeDialog?.remove();
@@ -395,6 +410,7 @@ export class TodosController {
     this.#bindGraphPointerDrag(card, "instance", instance.id, groupId);
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      if (this.#isTouchContextMenu(event) || event.button !== 2) return;
       if (!this.#activeDialog) void this.#deleteGraphTask(instance.id, task.id);
     });
     subtree.append(card);
@@ -1756,16 +1772,40 @@ export class TodosController {
       if (graph.scrollWidth <= graph.clientWidth) return;
       const movement = event.deltaX + event.deltaY;
       if (movement === 0) return;
+      this.#stopGraphInertia();
       event.preventDefault();
       graph.scrollLeft += movement;
     }, { passive: false });
 
     let pointerId: number | null = null;
+    let pointerType: "mouse" | "touch" | null = null;
+    let isPanning = false;
     let startX = 0;
+    let startY = 0;
     let startScrollLeft = 0;
+    let lastScrollLeft = 0;
+    let lastSampleTime = 0;
+    let velocity = 0;
     graph.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || (event.target as Element).closest(".todo-task-node")) return;
+      if (!event.isPrimary || event.button !== 0) return;
+      this.#stopGraphInertia();
+      if (event.pointerType === "touch") {
+        this.#lastGraphTouchAt = Date.now();
+        pointerId = event.pointerId;
+        pointerType = "touch";
+        isPanning = false;
+        startX = event.clientX;
+        startY = event.clientY;
+        startScrollLeft = graph.scrollLeft;
+        lastScrollLeft = graph.scrollLeft;
+        lastSampleTime = event.timeStamp;
+        velocity = 0;
+        return;
+      }
+      if ((event.target as Element).closest(".todo-task-node")) return;
       pointerId = event.pointerId;
+      pointerType = "mouse";
+      isPanning = true;
       startX = event.clientX;
       startScrollLeft = graph.scrollLeft;
       graph.classList.add("is-panning");
@@ -1774,16 +1814,66 @@ export class TodosController {
     });
     graph.addEventListener("pointermove", (event) => {
       if (pointerId !== event.pointerId) return;
+      if (pointerType === "touch") {
+        const activeDrag = this.#pointerDrag;
+        if (activeDrag?.pointerId === event.pointerId && activeDrag.active) return;
+        const deltaX = event.clientX - startX;
+        const deltaY = event.clientY - startY;
+        if (!isPanning) {
+          if (Math.hypot(deltaX, deltaY) < TOUCH_DIRECTION_THRESHOLD) return;
+          if (Math.abs(deltaY) >= Math.abs(deltaX)) {
+            this.#cancelPendingTouchDrag(event.pointerId);
+            pointerId = null;
+            pointerType = null;
+            return;
+          }
+          this.#cancelPendingTouchDrag(event.pointerId);
+          isPanning = true;
+          graph.classList.add("is-panning");
+          try {
+            graph.setPointerCapture(event.pointerId);
+          } catch {
+            // Window-level pointer handling still cancels the drag candidate.
+          }
+        }
+        event.preventDefault();
+        graph.scrollLeft = startScrollLeft - deltaX;
+        const elapsed = Math.max(1, Math.min(80, event.timeStamp - lastSampleTime));
+        const instantVelocity = (graph.scrollLeft - lastScrollLeft) / elapsed;
+        velocity = Math.max(-3, Math.min(3, velocity * 0.58 + instantVelocity * 0.42));
+        lastScrollLeft = graph.scrollLeft;
+        lastSampleTime = event.timeStamp;
+        return;
+      }
       graph.scrollLeft = startScrollLeft - (event.clientX - startX);
     });
-    const finishPan = (event: PointerEvent): void => {
+    const finishPan = (event: PointerEvent, allowInertia: boolean): void => {
       if (pointerId !== event.pointerId) return;
-      if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
+      const activeDrag = this.#pointerDrag;
+      if (activeDrag?.pointerId === event.pointerId && activeDrag.active) {
+        pointerId = null;
+        pointerType = null;
+        isPanning = false;
+        return;
+      }
+      const completedTouchPan = pointerType === "touch" && isPanning;
+      const completedVelocity = event.timeStamp - lastSampleTime > 80 ? 0 : velocity;
       pointerId = null;
+      pointerType = null;
+      isPanning = false;
+      try {
+        if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
+      } catch {
+        // The graph can disappear while an expanded section is closing.
+      }
       graph.classList.remove("is-panning");
+      if (!completedTouchPan) return;
+      this.#suppressNextClick(500, graph);
+      if (allowInertia) this.#startGraphInertia(graph, completedVelocity);
     };
-    graph.addEventListener("pointerup", finishPan);
-    graph.addEventListener("pointercancel", finishPan);
+    graph.addEventListener("pointerup", (event) => finishPan(event, true));
+    graph.addEventListener("pointercancel", (event) => finishPan(event, false));
+    graph.addEventListener("lostpointercapture", (event) => finishPan(event, false));
   }
 
   #bindGraphPointerDrag(
@@ -1799,6 +1889,7 @@ export class TodosController {
       if (!chain || !container || !graph) return null;
       return {
         axis: "horizontal",
+        touchActivation: "long-press",
         source,
         captureTarget: graph,
         members: [chain],
@@ -1858,9 +1949,13 @@ export class TodosController {
       if ((event.target as Element).closest(".todo-checkbox")) return;
       const resolved = config();
       if (!resolved) return;
+      const requiresLongPress = event.pointerType === "touch"
+        && resolved.touchActivation === "long-press";
       const session: TodoPointerDragSession = {
         ...resolved,
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        requiresLongPress,
         startX: event.clientX,
         startY: event.clientY,
         originalElements: this.#directDragElements(resolved.container),
@@ -1870,10 +1965,18 @@ export class TodosController {
         preview: null,
         previewOffsetX: 0,
         previewOffsetY: 0,
+        longPressTimer: null,
         autoScrollFrame: null,
         animations: [],
       };
       this.#pointerDrag = session;
+      if (requiresLongPress) {
+        session.longPressTimer = this.#window.setTimeout(() => {
+          if (this.#pointerDrag !== session || session.active || !session.source.isConnected) return;
+          const distance = Math.hypot(session.lastX - session.startX, session.lastY - session.startY);
+          if (distance < TOUCH_DIRECTION_THRESHOLD) this.#activatePointerDrag(session);
+        }, TOUCH_LONG_PRESS_DELAY_MS);
+      }
     });
   }
 
@@ -1882,8 +1985,13 @@ export class TodosController {
     if (!session || session.pointerId !== event.pointerId) return;
     session.lastX = event.clientX;
     session.lastY = event.clientY;
-    if (!session.active && Math.hypot(event.clientX - session.startX, event.clientY - session.startY) >= 5) {
-      this.#activatePointerDrag(session);
+    if (!session.active) {
+      const distance = Math.hypot(event.clientX - session.startX, event.clientY - session.startY);
+      if (session.requiresLongPress) {
+        if (distance >= TOUCH_DIRECTION_THRESHOLD) this.#finishPointerDrag(false);
+        return;
+      }
+      if (distance >= POINTER_DRAG_THRESHOLD) this.#activatePointerDrag(session);
     }
     if (!session.active) return;
     event.preventDefault();
@@ -1894,7 +2002,12 @@ export class TodosController {
     const session = this.#pointerDrag;
     if (!session || session.pointerId !== event.pointerId) return;
     const dragged = session.active;
-    if (dragged) this.#suppressNextClick();
+    if (dragged) {
+      this.#suppressNextClick(
+        session.pointerType === "touch" ? 500 : 0,
+        session.pointerType === "touch" ? session.scrollHost : null,
+      );
+    }
     this.#finishPointerDrag(dragged);
   }
 
@@ -1911,6 +2024,11 @@ export class TodosController {
   }
 
   #activatePointerDrag(session: TodoPointerDragSession): void {
+    if (session.longPressTimer !== null) {
+      this.#window.clearTimeout(session.longPressTimer);
+      session.longPressTimer = null;
+    }
+    this.#stopGraphInertia();
     session.active = true;
     try {
       session.captureTarget.setPointerCapture(session.pointerId);
@@ -2112,6 +2230,10 @@ export class TodosController {
     const session = this.#pointerDrag;
     if (!session) return;
     this.#pointerDrag = null;
+    if (session.longPressTimer !== null) {
+      this.#window.clearTimeout(session.longPressTimer);
+      session.longPressTimer = null;
+    }
     if (session.autoScrollFrame !== null) this.#window.cancelAnimationFrame(session.autoScrollFrame);
     this.#cancelPointerAnimations(session);
     const shouldCommit = commit && session.active;
@@ -2136,13 +2258,69 @@ export class TodosController {
     if (shouldCommit) session.commit(beforeGroupId);
   }
 
-  #suppressNextClick(): void {
-    const suppress = (event: Event): void => {
+  #cancelPendingTouchDrag(pointerId: number): void {
+    const session = this.#pointerDrag;
+    if (!session || session.pointerId !== pointerId || session.active || !session.requiresLongPress) return;
+    this.#finishPointerDrag(false);
+  }
+
+  #startGraphInertia(graph: HTMLElement, initialVelocity: number): void {
+    this.#stopGraphInertia();
+    if (!graph.isConnected || Math.abs(initialVelocity) < GRAPH_INERTIA_MIN_VELOCITY) return;
+    let velocity = initialVelocity;
+    let previousTime = this.#window.performance.now();
+    const tick = (time: number): void => {
+      if (!graph.isConnected) {
+        this.#graphInertiaFrame = null;
+        return;
+      }
+      const elapsed = Math.max(1, Math.min(32, time - previousTime));
+      previousTime = time;
+      const before = graph.scrollLeft;
+      graph.scrollLeft += velocity * elapsed;
+      const after = graph.scrollLeft;
+      velocity *= Math.pow(GRAPH_INERTIA_DECAY_PER_FRAME, elapsed / (1000 / 60));
+      if (after === before || Math.abs(velocity) < GRAPH_INERTIA_MIN_VELOCITY) {
+        this.#graphInertiaFrame = null;
+        return;
+      }
+      this.#graphInertiaFrame = this.#window.requestAnimationFrame(tick);
+    };
+    this.#graphInertiaFrame = this.#window.requestAnimationFrame(tick);
+  }
+
+  #stopGraphInertia(): void {
+    if (this.#graphInertiaFrame === null) return;
+    this.#window.cancelAnimationFrame(this.#graphInertiaFrame);
+    this.#graphInertiaFrame = null;
+  }
+
+  #isTouchContextMenu(event: MouseEvent): boolean {
+    const pointerType = "pointerType" in event ? (event as PointerEvent).pointerType : "";
+    const sourceCapabilities = (event as MouseEvent & {
+      readonly sourceCapabilities?: { readonly firesTouchEvents?: boolean } | null;
+    }).sourceCapabilities;
+    return this.#pointerDrag?.pointerType === "touch"
+      || (pointerType !== "" && pointerType !== "mouse")
+      || sourceCapabilities?.firesTouchEvents === true
+      || (pointerType === "" && Date.now() - this.#lastGraphTouchAt < TOUCH_CONTEXT_MENU_GUARD_MS);
+  }
+
+  #suppressNextClick(timeoutMs = 0, scope: HTMLElement | null = null): void {
+    let timeout = 0;
+    let suppress: (event: Event) => void;
+    const cleanup = (): void => {
+      this.#window.removeEventListener("click", suppress, true);
+      if (timeout !== 0) this.#window.clearTimeout(timeout);
+    };
+    suppress = (event: Event): void => {
+      if (scope && (!(event.target instanceof Element) || !scope.contains(event.target))) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      cleanup();
     };
-    this.#window.addEventListener("click", suppress, { capture: true, once: true });
-    this.#window.setTimeout(() => this.#window.removeEventListener("click", suppress, true), 0);
+    this.#window.addEventListener("click", suppress, true);
+    timeout = this.#window.setTimeout(cleanup, timeoutMs);
   }
 
   #drawGraphLines(graph: HTMLElement, root: TodoTask, graphId: string): void {
