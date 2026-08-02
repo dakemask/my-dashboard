@@ -95,7 +95,7 @@ const TOUCH_DIRECTION_THRESHOLD = 8;
 const TOUCH_LONG_PRESS_DELAY_MS = 420;
 const TOUCH_CONTEXT_MENU_GUARD_MS = 2_000;
 const GRAPH_INERTIA_MIN_VELOCITY = 0.01;
-const GRAPH_INERTIA_DECAY_PER_FRAME = 0.965;
+const GRAPH_INERTIA_DECAY_PER_FRAME = 0.93;
 
 interface TodoPointerDragConfig {
   readonly axis: TodoDragAxis;
@@ -116,6 +116,7 @@ interface TodoPointerDragSession extends TodoPointerDragConfig {
   readonly requiresLongPress: boolean;
   readonly startX: number;
   readonly startY: number;
+  readonly clickTarget: Element | null;
   readonly originalElements: readonly HTMLElement[];
   active: boolean;
   lastX: number;
@@ -1787,6 +1788,7 @@ export class TodosController {
     let lastSampleTime = 0;
     let velocity = 0;
     let removeTouchWindowListeners: (() => void) | null = null;
+    let touchClickTarget: Element | null = null;
     let finishPan: (event: PointerEvent, allowInertia: boolean) => void;
     graph.addEventListener("pointerdown", (event) => {
       if (!event.isPrimary || event.button !== 0) return;
@@ -1798,6 +1800,9 @@ export class TodosController {
         isPanning = false;
         startX = event.clientX;
         startY = event.clientY;
+        touchClickTarget = event.target instanceof Element
+          ? event.target.closest("button, input, a")
+          : null;
         startScrollLeft = graph.scrollLeft;
         lastScrollLeft = graph.scrollLeft;
         lastSampleTime = this.#window.performance.now();
@@ -1816,6 +1821,7 @@ export class TodosController {
               this.#cancelPendingTouchDrag(touchMove.pointerId);
               pointerId = null;
               pointerType = null;
+              touchClickTarget = null;
               removeTouchWindowListeners?.();
               return;
             }
@@ -1881,13 +1887,16 @@ export class TodosController {
         pointerId = null;
         pointerType = null;
         isPanning = false;
+        touchClickTarget = null;
         return;
       }
       const completedTouchPan = pointerType === "touch" && isPanning;
+      const completedClickTarget = touchClickTarget;
       const completedVelocity = this.#window.performance.now() - lastSampleTime > 80 ? 0 : velocity;
       pointerId = null;
       pointerType = null;
       isPanning = false;
+      touchClickTarget = null;
       try {
         if (graph.hasPointerCapture(event.pointerId)) graph.releasePointerCapture(event.pointerId);
       } catch {
@@ -1895,7 +1904,7 @@ export class TodosController {
       }
       graph.classList.remove("is-panning");
       if (!completedTouchPan) return;
-      this.#suppressNextClick(500, graph);
+      if (completedClickTarget) this.#suppressNextClick(500, graph, completedClickTarget);
       if (allowInertia) this.#startGraphInertia(graph, completedVelocity);
     };
     graph.addEventListener("pointerup", (event) => finishPan(event, true));
@@ -1988,6 +1997,9 @@ export class TodosController {
         requiresLongPress,
         startX: event.clientX,
         startY: event.clientY,
+        clickTarget: event.target instanceof Element
+          ? event.target.closest("button, input, a")
+          : null,
         originalElements: this.#directDragElements(resolved.container),
         active: false,
         lastX: event.clientX,
@@ -2032,10 +2044,11 @@ export class TodosController {
     const session = this.#pointerDrag;
     if (!session || session.pointerId !== event.pointerId) return;
     const dragged = session.active;
-    if (dragged) {
+    if (dragged && (session.pointerType !== "touch" || session.clickTarget)) {
       this.#suppressNextClick(
         session.pointerType === "touch" ? 500 : 0,
         session.pointerType === "touch" ? session.scrollHost : null,
+        session.pointerType === "touch" ? session.clickTarget : null,
       );
     }
     this.#finishPointerDrag(dragged);
@@ -2336,7 +2349,11 @@ export class TodosController {
       || (pointerType === "" && Date.now() - this.#lastGraphTouchAt < TOUCH_CONTEXT_MENU_GUARD_MS);
   }
 
-  #suppressNextClick(timeoutMs = 0, scope: HTMLElement | null = null): void {
+  #suppressNextClick(
+    timeoutMs = 0,
+    scope: HTMLElement | null = null,
+    target: Element | null = null,
+  ): void {
     let timeout = 0;
     let suppress: (event: Event) => void;
     const cleanup = (): void => {
@@ -2345,6 +2362,7 @@ export class TodosController {
     };
     suppress = (event: Event): void => {
       if (scope && (!(event.target instanceof Element) || !scope.contains(event.target))) return;
+      if (target && (!(event.target instanceof Element) || !target.contains(event.target))) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       cleanup();

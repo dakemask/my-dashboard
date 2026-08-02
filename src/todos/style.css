@@ -288,6 +288,8 @@ button:disabled, input:disabled, textarea:disabled { cursor: default; }
   animation: todo-drop-guide-in .14s ease-out both;
 }
 .todo-task-node { width: 188px; border: 1px solid var(--status); border-radius: 7px; background: #fff; overflow: hidden; box-shadow: 0 3px 10px color-mix(in srgb, var(--status) 11%, transparent); transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, opacity .15s ease; }
+.todo-task-node,
+.todo-task-node * { -webkit-tap-highlight-color: transparent; }
 .todo-task-node:hover { box-shadow: 0 8px 20px color-mix(in srgb, var(--status) 18%, transparent); }
 .todo-task-node[data-draggable="true"],
 .todo-task-node[data-draggable="true"] * { cursor: pointer; }
