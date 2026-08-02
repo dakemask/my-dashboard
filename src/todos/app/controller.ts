@@ -59,6 +59,7 @@ import {
 } from "../ui/shell";
 
 type TodosRuntime = ModuleRuntime<TodosPayload, TodosEvent>;
+type TodoCommitRenderer = "all" | ((payload: TodosPayload) => void);
 
 const EMPTY_SNAPSHOT: ModuleRuntimeSnapshot = {
   initialized: false,
@@ -86,6 +87,35 @@ interface TodoFieldElements {
   readonly input: HTMLInputElement;
 }
 
+type TodoDragAxis = "horizontal" | "vertical";
+
+interface TodoPointerDragConfig {
+  readonly axis: TodoDragAxis;
+  readonly source: HTMLElement;
+  readonly captureTarget: HTMLElement;
+  readonly members: readonly HTMLElement[];
+  readonly container: HTMLElement;
+  readonly groupId: string;
+  readonly scrollHost: HTMLElement | null;
+  readonly redraw: () => void;
+  readonly commit: (beforeGroupId: string | null) => void;
+}
+
+interface TodoPointerDragSession extends TodoPointerDragConfig {
+  readonly pointerId: number;
+  readonly startX: number;
+  readonly startY: number;
+  readonly originalElements: readonly HTMLElement[];
+  active: boolean;
+  lastX: number;
+  lastY: number;
+  preview: HTMLElement | null;
+  previewOffsetX: number;
+  previewOffsetY: number;
+  autoScrollFrame: number | null;
+  animations: Animation[];
+}
+
 export class TodosController {
   readonly hooks: ModuleRuntimeHooks<TodosPayload, TodosEvent>;
   readonly #shell: TodosShell;
@@ -99,7 +129,7 @@ export class TodosController {
   #activeDialog: HTMLDialogElement | null = null;
   #dialogBuildEvent: (() => TodosEvent | null) | null = null;
   #draggingTaskId: string | null = null;
-  #draggingGroupId: string | null = null;
+  #pointerDrag: TodoPointerDragSession | null = null;
   readonly #graphScrollLeft = new Map<string, number>();
   readonly #ruleGraphScrollLeft = new Map<string, number>();
   readonly #collapsedRuleIds = new Set<string>();
@@ -136,6 +166,7 @@ export class TodosController {
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     this.#disposed = true;
+    this.#finishPointerDrag(false);
     if (this.#boundaryTimer !== null) this.#window.clearTimeout(this.#boundaryTimer);
     this.#activeDialog?.close();
     this.#activeDialog?.remove();
@@ -157,19 +188,15 @@ export class TodosController {
     this.#listen(this.#window.document, "visibilitychange", () => {
       if (this.#window.document.visibilityState === "visible") void this.#runPeriodicGeneration();
     });
-    this.#listen(this.#window, "resize", () => this.#scheduleGraphLines());
+    this.#listen(this.#window, "resize", () => {
+      this.#scheduleGraphLines();
+      this.#scheduleRuleGraphLines();
+    });
     this.#listen(this.#window, "beforeunload", (event) => this.#onBeforeUnload(event as BeforeUnloadEvent));
-    this.#listen(this.#window, "dragover", (event) => {
-      if (!this.#draggingTaskId) return;
-      const dragEvent = event as DragEvent;
-      dragEvent.preventDefault();
-      if (dragEvent.dataTransfer) dragEvent.dataTransfer.dropEffect = "move";
-    });
-    this.#listen(this.#window, "drop", (event) => {
-      if (!this.#draggingTaskId) return;
-      event.preventDefault();
-      this.#clearDragState();
-    });
+    this.#listen(this.#window, "pointermove", (event) => this.#onPointerDragMove(event as PointerEvent));
+    this.#listen(this.#window, "pointerup", (event) => this.#onPointerDragEnd(event as PointerEvent));
+    this.#listen(this.#window, "pointercancel", (event) => this.#onPointerDragCancel(event as PointerEvent));
+    this.#listen(this.#window, "lostpointercapture", (event) => this.#onPointerCaptureLost(event as PointerEvent));
   }
 
   #settle(reason: SettleReason): TodosEvent | null {
@@ -270,7 +297,7 @@ export class TodosController {
     expand.disabled = instance.root.children.length === 0;
     expand.addEventListener("click", (event) => {
       event.stopPropagation();
-      void this.#setExpanded(instance, !instance.expanded);
+      void this.#toggleExpanded(instance.id);
     });
     const checkbox = this.#taskCheckbox(instance, instance.root);
     const open = this.#shell.document.createElement("button");
@@ -288,31 +315,45 @@ export class TodosController {
       : formatDisplayDate(instance.deadlineAt);
     if (instance.deadlineAt) date.dateTime = instance.deadlineAt;
     header.append(expand, checkbox, open, date);
-    summary.append(header, this.#progressBar(taskProgress(instance.root)));
+    summary.append(header, this.#progressBar(taskProgress(instance.root), instance.root.id));
     article.append(summary);
 
     if (instance.expanded && instance.root.children.length > 0) {
-      const graph = this.#shell.document.createElement("div");
-      graph.className = "todo-graph";
-      graph.dataset.instanceId = instance.id;
-      const canvas = this.#shell.document.createElement("div");
-      canvas.className = "todo-graph-canvas";
-      const svg = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.classList.add("todo-graph-lines");
-      svg.setAttribute("aria-hidden", "true");
-      const content = this.#shell.document.createElement("div");
-      content.className = "todo-graph-content";
-      content.append(this.#renderTaskChildren(instance, instance.root.children));
-      canvas.append(svg, content);
-      graph.append(canvas);
-      graph.addEventListener("scroll", () => {
-        this.#graphScrollLeft.set(instance.id, graph.scrollLeft);
-        this.#drawGraphLines(graph, instance.root, instance.id);
-      });
-      this.#bindGraphNavigation(graph);
-      article.append(graph);
+      article.append(this.#graphReveal(this.#createInstanceGraph(instance)));
     }
     return article;
+  }
+
+  #createInstanceGraph(instance: TodoInstance): HTMLElement {
+    const graph = this.#shell.document.createElement("div");
+    graph.className = "todo-graph";
+    graph.dataset.instanceId = instance.id;
+    const canvas = this.#shell.document.createElement("div");
+    canvas.className = "todo-graph-canvas";
+    const svg = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("todo-graph-lines");
+    svg.setAttribute("aria-hidden", "true");
+    const content = this.#shell.document.createElement("div");
+    content.className = "todo-graph-content";
+    content.append(this.#renderTaskChildren(instance, instance.root.children));
+    canvas.append(svg, content);
+    graph.append(canvas);
+    graph.addEventListener("scroll", () => {
+      this.#graphScrollLeft.set(instance.id, graph.scrollLeft);
+    });
+    this.#bindGraphNavigation(graph);
+    return graph;
+  }
+
+  #graphReveal(graph: HTMLElement, expanded = true): HTMLElement {
+    const reveal = this.#shell.document.createElement("div");
+    reveal.className = "todo-graph-reveal";
+    reveal.dataset.expanded = String(expanded);
+    const inner = this.#shell.document.createElement("div");
+    inner.className = "todo-graph-reveal-inner";
+    inner.append(graph);
+    reveal.append(inner);
+    return reveal;
   }
 
   #renderTaskChildren(instance: TodoInstance, children: readonly TodoTask[]): HTMLElement {
@@ -339,9 +380,8 @@ export class TodosController {
     const card = this.#shell.document.createElement("div");
     card.className = "todo-task-node";
     card.dataset.taskId = task.id;
-    card.dataset.parentId = this.#findParentId(instance.root, task.id) ?? "";
     card.dataset.dragGroupId = groupId;
-    card.draggable = true;
+    card.dataset.draggable = "true";
     const checkbox = this.#taskCheckbox(instance, task);
     const body = this.#shell.document.createElement("div");
     body.className = "todo-task-node-main";
@@ -351,48 +391,8 @@ export class TodosController {
     open.textContent = task.name;
     open.addEventListener("click", () => this.#openInstanceEditor(instance.id, task.id));
     body.append(checkbox, open);
-    card.append(body, this.#progressBar(taskProgress(task)));
-    card.addEventListener("dragstart", (event) => {
-      if ((event.target as Element | null)?.closest?.(".todo-checkbox")) {
-        event.preventDefault();
-        return;
-      }
-      const chain = subtree.closest<HTMLElement>(".todo-task-chain");
-      this.#beginDrag(event, task.id, groupId, chain ? [chain] : [subtree]);
-    });
-    card.addEventListener("dragend", () => {
-      this.#clearDragState();
-    });
-    card.addEventListener("dragover", (event) => {
-      const draggedId = this.#draggingTaskId ?? event.dataTransfer?.getData("text/plain");
-      if (!draggedId) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-      this.#clearDropTargets();
-      if (draggedId === task.id || this.#draggingGroupId === groupId) return;
-      const draggedParentId = this.#findParentId(instance.root, draggedId);
-      if (draggedParentId !== card.dataset.parentId) return;
-      subtree.closest<HTMLElement>(".todo-task-chain")?.classList.add("is-drop-target");
-    });
-    card.addEventListener("dragleave", (event) => {
-      const chain = subtree.closest<HTMLElement>(".todo-task-chain");
-      if (!chain?.contains(event.relatedTarget as Node | null)) chain?.classList.remove("is-drop-target");
-    });
-    card.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const draggedId = event.dataTransfer?.getData("text/plain") || this.#draggingTaskId;
-      const draggedGroupId = this.#draggingGroupId;
-      const draggedParentId = draggedId ? this.#findParentId(instance.root, draggedId) : null;
-      this.#clearDragState();
-      if (
-        draggedId
-        && draggedId !== task.id
-        && draggedGroupId !== groupId
-        && draggedParentId === card.dataset.parentId
-      ) {
-        void this.#reorderGraphTask(instance.id, draggedId, task.id);
-      }
-    });
+    card.append(body, this.#progressBar(taskProgress(task), task.id));
+    this.#bindGraphPointerDrag(card, "instance", instance.id, groupId);
     card.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       if (!this.#activeDialog) void this.#deleteGraphTask(instance.id, task.id);
@@ -411,22 +411,17 @@ export class TodosController {
     const checkbox = this.#shell.document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "todo-checkbox";
-    checkbox.checked = isTaskComplete(task);
-    const predecessor = task.predecessorId ? findTask(instance.root, task.predecessorId) : null;
-    const locked = Boolean(predecessor && !isTaskComplete(predecessor));
-    checkbox.disabled = task.children.length > 0 || locked || this.#runtime === null;
-    checkbox.title = task.children.length > 0
-      ? "完成状态由所有子任务决定"
-      : locked ? "请先完成前置任务" : "切换完成状态";
-    checkbox.setAttribute("aria-label", `${task.name}：${checkbox.title}`);
+    checkbox.dataset.taskId = task.id;
+    this.#syncTaskCheckbox(checkbox, instance, task);
     checkbox.addEventListener("click", (event) => event.stopPropagation());
-    checkbox.addEventListener("change", () => void this.#toggleTask(instance, task.id));
+    checkbox.addEventListener("change", () => void this.#toggleTask(instance.id, task.id));
     return checkbox;
   }
 
-  #progressBar(progress: number): HTMLElement {
+  #progressBar(progress: number, taskId: string): HTMLElement {
     const bar = this.#shell.document.createElement("div");
     bar.className = "todo-progress";
+    bar.dataset.taskId = taskId;
     bar.setAttribute("role", "progressbar");
     bar.setAttribute("aria-valuemin", "0");
     bar.setAttribute("aria-valuemax", "100");
@@ -474,11 +469,7 @@ export class TodosController {
     expand.setAttribute("aria-label", expand.title);
     expand.setAttribute("aria-expanded", String(!collapsed));
     expand.disabled = rule.template.children.length === 0;
-    expand.addEventListener("click", () => {
-      if (collapsed) this.#collapsedRuleIds.delete(rule.id);
-      else this.#collapsedRuleIds.add(rule.id);
-      this.#renderRules();
-    });
+    expand.addEventListener("click", () => this.#toggleRuleExpanded(rule.id));
     const open = this.#shell.document.createElement("button");
     open.type = "button";
     open.className = "todo-title-button";
@@ -497,27 +488,30 @@ export class TodosController {
     summary.append(header);
     article.append(summary);
     if (!collapsed && rule.template.children.length > 0) {
-      const graph = this.#shell.document.createElement("div");
-      graph.className = "todo-graph todo-rule-graph";
-      graph.dataset.ruleId = rule.id;
-      const canvas = this.#shell.document.createElement("div");
-      canvas.className = "todo-graph-canvas";
-      const svg = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.classList.add("todo-graph-lines");
-      svg.setAttribute("aria-hidden", "true");
-      const content = this.#shell.document.createElement("div");
-      content.className = "todo-graph-content";
-      content.append(this.#renderRuleTaskChildren(rule, rule.template.children));
-      canvas.append(svg, content);
-      graph.append(canvas);
-      graph.addEventListener("scroll", () => {
-        this.#ruleGraphScrollLeft.set(rule.id, graph.scrollLeft);
-        this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
-      });
-      this.#bindGraphNavigation(graph);
-      article.append(graph);
+      article.append(this.#graphReveal(this.#createRuleGraph(rule)));
     }
     return article;
+  }
+
+  #createRuleGraph(rule: TodoRecurrenceRule): HTMLElement {
+    const graph = this.#shell.document.createElement("div");
+    graph.className = "todo-graph todo-rule-graph";
+    graph.dataset.ruleId = rule.id;
+    const canvas = this.#shell.document.createElement("div");
+    canvas.className = "todo-graph-canvas";
+    const svg = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("todo-graph-lines");
+    svg.setAttribute("aria-hidden", "true");
+    const content = this.#shell.document.createElement("div");
+    content.className = "todo-graph-content";
+    content.append(this.#renderRuleTaskChildren(rule, rule.template.children));
+    canvas.append(svg, content);
+    graph.append(canvas);
+    graph.addEventListener("scroll", () => {
+      this.#ruleGraphScrollLeft.set(rule.id, graph.scrollLeft);
+    });
+    this.#bindGraphNavigation(graph);
+    return graph;
   }
 
   #renderRuleTaskChildren(rule: TodoRecurrenceRule, children: readonly TodoTask[]): HTMLElement {
@@ -526,13 +520,15 @@ export class TodosController {
     for (const group of dependencyGroups(children)) {
       const chain = this.#shell.document.createElement("div");
       chain.className = "todo-task-chain";
-      group.forEach((task) => chain.append(this.#renderRuleTaskSubtree(rule, task)));
+      const groupId = group[0]!.id;
+      chain.dataset.dragGroupId = groupId;
+      group.forEach((task) => chain.append(this.#renderRuleTaskSubtree(rule, task, groupId)));
       row.append(chain);
     }
     return row;
   }
 
-  #renderRuleTaskSubtree(rule: TodoRecurrenceRule, task: TodoTask): HTMLElement {
+  #renderRuleTaskSubtree(rule: TodoRecurrenceRule, task: TodoTask, groupId: string): HTMLElement {
     const subtree = this.#shell.document.createElement("div");
     subtree.className = "todo-task-subtree";
     subtree.dataset.taskId = task.id;
@@ -540,6 +536,8 @@ export class TodosController {
     const card = this.#shell.document.createElement("div");
     card.className = "todo-task-node todo-rule-task-node";
     card.dataset.taskId = task.id;
+    card.dataset.dragGroupId = groupId;
+    card.dataset.draggable = "true";
     const body = this.#shell.document.createElement("div");
     body.className = "todo-task-node-main";
     const open = this.#shell.document.createElement("button");
@@ -552,6 +550,7 @@ export class TodosController {
       });
     body.append(open);
     card.append(body);
+    this.#bindGraphPointerDrag(card, "rule", rule.id, groupId);
     subtree.append(card);
     if (task.children.length > 0) {
       const nested = this.#shell.document.createElement("div");
@@ -662,9 +661,7 @@ export class TodosController {
     taskHeading.className = "todo-editor-task-heading";
     const heading = this.#shell.document.createElement("h3");
     heading.textContent = "子任务结构";
-    const hint = this.#shell.document.createElement("p");
-    hint.textContent = "点击选择；拖动任意节点会移动整条递进链。";
-    taskHeading.append(heading, hint);
+    taskHeading.append(heading);
     const taskList = this.#shell.document.createElement("div");
     taskList.className = "todo-editor-task-list";
     const toolbar = this.#shell.document.createElement("div");
@@ -682,11 +679,12 @@ export class TodosController {
       if (scope.children.length === 0) taskList.append(this.#empty("暂无子任务。"));
       else taskList.append(this.#editorTaskGroups(scope.children, () => selectedId, (id) => {
         selectedId = id;
-        renderDraftTasks();
-      }, (dragged, target) => {
+        this.#setEditorSelection(taskList, id);
+        successor.disabled = false;
+        remove.disabled = false;
+      }, (dragged, beforeGroupId) => {
         try {
-          draft = { ...draft, root: reorderDependencyGroup(draft.root, dragged, target) };
-          renderDraftTasks();
+          draft = { ...draft, root: reorderDependencyGroup(draft.root, dragged, beforeGroupId) };
         } catch {
           this.#shell.showMessage("依赖组只能在同一层级移动。", "error");
         }
@@ -859,9 +857,7 @@ export class TodosController {
     taskHeading.className = "todo-editor-task-heading";
     const heading = this.#shell.document.createElement("h3");
     heading.textContent = "模板子任务";
-    const hint = this.#shell.document.createElement("p");
-    hint.textContent = "选择后可新增递进任务或删除。";
-    taskHeading.append(heading, hint);
+    taskHeading.append(heading);
     const list = this.#shell.document.createElement("div");
     list.className = "todo-editor-task-list";
     const toolbar = this.#shell.document.createElement("div");
@@ -876,10 +872,14 @@ export class TodosController {
       list.replaceChildren();
       if (draft.template.children.length === 0) list.append(this.#empty("暂无模板子任务。"));
       else list.append(this.#editorTaskGroups(
-        draft.template.children, () => selectedId, (id) => { selectedId = id; render(); },
-        (dragged, target) => {
-          draft = { ...draft, template: reorderDependencyGroup(draft.template, dragged, target) };
-          render();
+        draft.template.children, () => selectedId, (id) => {
+          selectedId = id;
+          this.#setEditorSelection(list, id);
+          successor.disabled = false;
+          remove.disabled = false;
+        },
+        (dragged, beforeGroupId) => {
+          draft = { ...draft, template: reorderDependencyGroup(draft.template, dragged, beforeGroupId) };
         },
       ));
       successor.disabled = selectedId === null;
@@ -1109,7 +1109,7 @@ export class TodosController {
     children: readonly TodoTask[],
     selected: () => string | null,
     select: (id: string) => void,
-    reorder: (dragged: string, target: string) => void,
+    reorder: (dragged: string, beforeGroupId: string | null) => void,
   ): HTMLElement {
     const groups = this.#shell.document.createElement("div");
     groups.className = "todo-editor-task-groups";
@@ -1120,7 +1120,14 @@ export class TodosController {
     for (const group of dependencyGroups(children)) {
       const groupId = group[0]!.id;
       for (const task of group) {
-        groups.append(this.#editorTaskRow(task, groupId, selected, select, reorder));
+        groups.append(this.#editorTaskRow(
+          task,
+          groupId,
+          selected,
+          select,
+          reorder,
+          () => this.#drawEditorDependencyLines(groups, children),
+        ));
       }
     }
     this.#window.requestAnimationFrame(() => this.#drawEditorDependencyLines(groups, children));
@@ -1191,7 +1198,8 @@ export class TodosController {
     groupId: string,
     selected: () => string | null,
     select: (id: string) => void,
-    reorder: (dragged: string, target: string) => void,
+    reorder: (dragged: string, beforeGroupId: string | null) => void,
+    redraw: () => void,
   ): HTMLElement {
     const row = this.#shell.document.createElement("button");
     row.type = "button";
@@ -1199,42 +1207,19 @@ export class TodosController {
     row.dataset.taskId = task.id;
     row.dataset.dragGroupId = groupId;
     row.dataset.selected = String(selected() === task.id);
-    row.draggable = true;
     row.append(createTodoIcon(this.#shell.document, Drag, 18));
     const name = this.#shell.document.createElement("span");
     name.textContent = task.name;
     row.append(name);
     row.addEventListener("click", () => select(task.id));
-    row.addEventListener("dragstart", (event) => {
-      this.#beginDrag(event, task.id, groupId, this.#editorGroupRows(row, groupId));
-    });
-    row.addEventListener("dragend", () => {
-      this.#clearDragState();
-    });
-    row.addEventListener("dragover", (event) => {
-      if (!this.#draggingTaskId) return;
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-      this.#clearDropTargets();
-      if (this.#draggingGroupId === groupId) return;
-      for (const member of this.#editorGroupRows(row, groupId)) member.classList.add("is-drop-target");
-    });
-    row.addEventListener("dragleave", (event) => {
-      const relatedTarget = event.relatedTarget;
-      const related = relatedTarget && "closest" in relatedTarget
-        ? (relatedTarget as Element).closest<HTMLElement>(".todo-editor-task-row")
-        : null;
-      if (related?.dataset.dragGroupId === groupId) return;
-      for (const member of this.#editorGroupRows(row, groupId)) member.classList.remove("is-drop-target");
-    });
-    row.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const dragged = event.dataTransfer?.getData("text/plain") || this.#draggingTaskId;
-      const draggedGroupId = this.#draggingGroupId;
-      this.#clearDragState();
-      if (dragged && draggedGroupId !== groupId) reorder(dragged, task.id);
-    });
+    this.#bindEditorPointerDrag(row, groupId, reorder, redraw);
     return row;
+  }
+
+  #setEditorSelection(scope: HTMLElement, selectedId: string): void {
+    for (const row of scope.querySelectorAll<HTMLElement>(".todo-editor-task-row")) {
+      row.dataset.selected = String(row.dataset.taskId === selectedId);
+    }
   }
 
   #confirm(titleText: string, messageText: string, confirmLabel: string): Promise<boolean> {
@@ -1316,7 +1301,7 @@ export class TodosController {
     const dialog = this.#activeDialog;
     this.#activeDialog = null;
     this.#dialogBuildEvent = null;
-    this.#clearDragState();
+    this.#finishPointerDrag(false);
     if (dialog) {
       dialog.close();
       dialog.remove();
@@ -1348,31 +1333,67 @@ export class TodosController {
     return { label, input };
   }
 
-  async #toggleTask(instance: TodoInstance, taskId: string): Promise<void> {
+  #syncTaskCheckbox(checkbox: HTMLInputElement, instance: TodoInstance, task: TodoTask): void {
+    checkbox.checked = isTaskComplete(task);
+    const predecessor = task.predecessorId ? findTask(instance.root, task.predecessorId) : null;
+    const locked = Boolean(predecessor && !isTaskComplete(predecessor));
+    checkbox.disabled = task.children.length > 0 || locked || this.#runtime === null;
+    checkbox.title = task.children.length > 0
+      ? "完成状态由所有子任务决定"
+      : locked ? "请先完成前置任务" : "切换完成状态";
+    checkbox.setAttribute("aria-label", `${task.name}：${checkbox.title}`);
+  }
+
+  async #toggleTask(instanceId: string, taskId: string): Promise<void> {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    if (!instance) return;
     try {
       const nextInstance = toggleTodoLeaf(instance, taskId, new Date());
       await this.#commit({
         ...this.#payload,
         instances: this.#payload.instances.map((item) => item.id === instance.id ? nextInstance : item),
-      }, null);
+      }, null, () => this.#patchInstancePresentation(instanceId));
     } catch (error) {
       this.#shell.showMessage(safeMessage(error, "完成状态未能更新。"), "error");
-      this.#renderInstances();
+      this.#patchInstancePresentation(instanceId);
     }
   }
 
-  async #reorderGraphTask(instanceId: string, draggedId: string, targetId: string): Promise<void> {
+  async #reorderGraphTask(
+    instanceId: string,
+    draggedGroupId: string,
+    beforeGroupId: string | null,
+  ): Promise<void> {
     const instance = this.#payload.instances.find((item) => item.id === instanceId);
     if (!instance) return;
     try {
-      const root = reorderDependencyGroup(instance.root, draggedId, targetId);
+      const root = reorderDependencyGroup(instance.root, draggedGroupId, beforeGroupId);
       await this.#commit({
         ...this.#payload,
         instances: this.#payload.instances.map((item) => item.id === instanceId ? { ...item, root } : item),
-      }, null);
+      }, null, () => undefined);
     } catch (error) {
       this.#shell.showMessage(safeMessage(error, "只能调整同一父任务下的任务组。"), "error");
-      this.#renderInstances();
+      this.#restoreInstanceGraph(instanceId);
+    }
+  }
+
+  async #reorderRuleGraphTask(
+    ruleId: string,
+    draggedGroupId: string,
+    beforeGroupId: string | null,
+  ): Promise<void> {
+    const rule = this.#payload.rules.find((item) => item.id === ruleId);
+    if (!rule) return;
+    try {
+      const template = reorderDependencyGroup(rule.template, draggedGroupId, beforeGroupId);
+      await this.#commit({
+        ...this.#payload,
+        rules: this.#payload.rules.map((item) => item.id === ruleId ? { ...item, template } : item),
+      }, null, () => undefined);
+    } catch (error) {
+      this.#shell.showMessage(safeMessage(error, "只能调整同一父任务下的任务组。"), "error");
+      this.#restoreRuleGraph(ruleId);
     }
   }
 
@@ -1394,16 +1415,195 @@ export class TodosController {
     }, null);
   }
 
-  async #setExpanded(instance: TodoInstance, expanded: boolean): Promise<void> {
-    await this.#commit({
-      ...this.#payload,
-      instances: this.#payload.instances.map((item) => item.id === instance.id
-        ? { ...item, expanded }
-        : item),
-    }, null);
+  async #toggleExpanded(instanceId: string): Promise<void> {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    if (!instance) return;
+    await this.#setExpanded(instanceId, !instance.expanded);
   }
 
-  async #commit(nextValue: TodosPayload, _message: string | null): Promise<void> {
+  async #setExpanded(instanceId: string, expanded: boolean): Promise<void> {
+    await this.#commit({
+      ...this.#payload,
+      instances: this.#payload.instances.map((item) => item.id === instanceId
+        ? { ...item, expanded }
+        : item),
+    }, null, () => this.#patchInstanceExpanded(instanceId));
+  }
+
+  #patchInstancePresentation(instanceId: string): void {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    const article = [...this.#shell.elements.todoList.querySelectorAll<HTMLElement>(".todo-card")]
+      .find((candidate) => candidate.dataset.instanceId === instanceId);
+    if (!instance || !article) return;
+    const status = todoStatus(instance, new Date());
+    article.dataset.status = status;
+    const title = article.querySelector<HTMLElement>(".todo-title-button");
+    title?.setAttribute("aria-label", `${instance.root.name}，${STATUS_LABELS[status]}`);
+    for (const checkbox of article.querySelectorAll<HTMLInputElement>(".todo-checkbox[data-task-id]")) {
+      const task = findTask(instance.root, checkbox.dataset.taskId ?? "");
+      if (task) this.#syncTaskCheckbox(checkbox, instance, task);
+    }
+    for (const bar of article.querySelectorAll<HTMLElement>(".todo-progress[data-task-id]")) {
+      const task = findTask(instance.root, bar.dataset.taskId ?? "");
+      if (!task) continue;
+      const progress = Math.max(0, Math.min(1, taskProgress(task)));
+      bar.setAttribute("aria-valuenow", String(Math.round(progress * 100)));
+      const fill = bar.querySelector<HTMLElement>(":scope > span");
+      if (fill) fill.style.width = `${progress * 100}%`;
+    }
+    this.#sortInstanceCards();
+  }
+
+  #sortInstanceCards(): void {
+    const list = this.#shell.elements.todoList;
+    const articles = [...list.querySelectorAll<HTMLElement>(":scope > .todo-card")];
+    if (articles.length < 2) return;
+    const byId = new Map(articles.map((article) => [article.dataset.instanceId!, article]));
+    const ordered = [...this.#payload.instances]
+      .sort((left, right) => compareTodoInstances(left, right, new Date()))
+      .map((instance) => byId.get(instance.id))
+      .filter((article): article is HTMLElement => article !== undefined);
+    if (ordered.every((article, index) => article === articles[index])) return;
+    const before = new Map(articles.map((article) => [article, article.getBoundingClientRect()]));
+    for (const article of ordered) list.append(article);
+    this.#animateFromRects(articles, before);
+  }
+
+  #toggleRuleExpanded(ruleId: string): void {
+    this.#setRuleExpanded(ruleId, this.#collapsedRuleIds.has(ruleId));
+  }
+
+  #setRuleExpanded(ruleId: string, expanded: boolean): void {
+    if (expanded) this.#collapsedRuleIds.delete(ruleId);
+    else this.#collapsedRuleIds.add(ruleId);
+    this.#patchRuleExpanded(ruleId);
+  }
+
+  #patchInstanceExpanded(instanceId: string): void {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    const article = [...this.#shell.elements.todoList.querySelectorAll<HTMLElement>(".todo-card")]
+      .find((candidate) => candidate.dataset.instanceId === instanceId);
+    if (!instance || !article) return;
+    const button = article.querySelector<HTMLButtonElement>(":scope > .todo-card-summary .todo-expand");
+    if (button) this.#syncExpandButton(button, instance.expanded, false);
+    const reveal = article.querySelector<HTMLElement>(":scope > .todo-graph-reveal");
+    if (instance.expanded && instance.root.children.length > 0) {
+      if (reveal && !reveal.classList.contains("is-collapsing")) return;
+      reveal?.remove();
+      const graph = this.#createInstanceGraph(instance);
+      const nextReveal = this.#graphReveal(graph, false);
+      graph.classList.add("is-expanding");
+      article.append(nextReveal);
+      nextReveal.getBoundingClientRect();
+      this.#window.requestAnimationFrame(() => {
+        graph.scrollLeft = this.#graphScrollLeft.get(instance.id) ?? 0;
+        this.#drawGraphLines(graph, instance.root, instance.id);
+        nextReveal.dataset.expanded = "true";
+        nextReveal.classList.add("is-expanding", "is-expanded");
+        this.#window.setTimeout(() => {
+          nextReveal.classList.remove("is-expanding", "is-expanded");
+          graph.classList.remove("is-expanding");
+        }, 260);
+      });
+      return;
+    }
+    if (reveal) this.#collapseGraphReveal(reveal);
+  }
+
+  #patchRuleExpanded(ruleId: string): void {
+    const rule = this.#payload.rules.find((item) => item.id === ruleId);
+    const article = [...this.#shell.elements.ruleList.querySelectorAll<HTMLElement>(".todo-rule-preview")]
+      .find((candidate) => candidate.dataset.ruleId === ruleId);
+    if (!rule || !article) return;
+    const expanded = !this.#collapsedRuleIds.has(ruleId);
+    const button = article.querySelector<HTMLButtonElement>(":scope > .todo-card-summary .todo-expand");
+    if (button) this.#syncExpandButton(button, expanded, true);
+    const reveal = article.querySelector<HTMLElement>(":scope > .todo-graph-reveal");
+    if (expanded && rule.template.children.length > 0) {
+      if (reveal && !reveal.classList.contains("is-collapsing")) return;
+      reveal?.remove();
+      const graph = this.#createRuleGraph(rule);
+      const nextReveal = this.#graphReveal(graph, false);
+      graph.classList.add("is-expanding");
+      article.append(nextReveal);
+      nextReveal.getBoundingClientRect();
+      this.#window.requestAnimationFrame(() => {
+        graph.scrollLeft = this.#ruleGraphScrollLeft.get(rule.id) ?? 0;
+        this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
+        nextReveal.dataset.expanded = "true";
+        nextReveal.classList.add("is-expanding", "is-expanded");
+        this.#window.setTimeout(() => {
+          nextReveal.classList.remove("is-expanding", "is-expanded");
+          graph.classList.remove("is-expanding");
+        }, 260);
+      });
+      return;
+    }
+    if (reveal) this.#collapseGraphReveal(reveal);
+  }
+
+  #syncExpandButton(button: HTMLButtonElement, expanded: boolean, template: boolean): void {
+    const restoreFocus = this.#shell.document.activeElement === button;
+    button.replaceChildren(createTodoIcon(this.#shell.document, expanded ? Down : Right, 18));
+    button.title = template
+      ? expanded ? "收起模板子任务" : "展开模板子任务"
+      : expanded ? "收起子任务" : "展开子任务";
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-expanded", String(expanded));
+    if (restoreFocus) button.focus({ preventScroll: true });
+  }
+
+  #collapseGraphReveal(reveal: HTMLElement): void {
+    if (reveal.classList.contains("is-collapsing")) return;
+    reveal.classList.remove("is-expanding", "is-expanded");
+    reveal.classList.add("is-collapsing");
+    reveal.dataset.expanded = "false";
+    reveal.querySelector<HTMLElement>(".todo-graph")?.classList.add("is-collapsing");
+    let removed = false;
+    const remove = (): void => {
+      if (removed) return;
+      removed = true;
+      reveal.remove();
+    };
+    reveal.addEventListener("transitionend", (event) => {
+      if ((event as TransitionEvent).propertyName === "grid-template-rows") remove();
+    });
+    this.#window.setTimeout(remove, 280);
+  }
+
+  #restoreInstanceGraph(instanceId: string): void {
+    const instance = this.#payload.instances.find((item) => item.id === instanceId);
+    const article = [...this.#shell.elements.todoList.querySelectorAll<HTMLElement>(".todo-card")]
+      .find((candidate) => candidate.dataset.instanceId === instanceId);
+    const inner = article?.querySelector<HTMLElement>(":scope > .todo-graph-reveal > .todo-graph-reveal-inner");
+    if (!instance || !inner) return;
+    const graph = this.#createInstanceGraph(instance);
+    inner.replaceChildren(graph);
+    this.#window.requestAnimationFrame(() => {
+      graph.scrollLeft = this.#graphScrollLeft.get(instanceId) ?? 0;
+      this.#drawGraphLines(graph, instance.root, instance.id);
+    });
+  }
+
+  #restoreRuleGraph(ruleId: string): void {
+    const rule = this.#payload.rules.find((item) => item.id === ruleId);
+    const article = [...this.#shell.elements.ruleList.querySelectorAll<HTMLElement>(".todo-rule-preview")]
+      .find((candidate) => candidate.dataset.ruleId === ruleId);
+    const inner = article?.querySelector<HTMLElement>(":scope > .todo-graph-reveal > .todo-graph-reveal-inner");
+    if (!rule || !inner) return;
+    const graph = this.#createRuleGraph(rule);
+    inner.replaceChildren(graph);
+    this.#window.requestAnimationFrame(() => {
+      graph.scrollLeft = this.#ruleGraphScrollLeft.get(ruleId) ?? 0;
+      this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
+    });
+  }
+
+  async #commit(
+    nextValue: TodosPayload,
+    _message: string | null,
+    renderer: TodoCommitRenderer = "all",
+  ): Promise<void> {
     const runtime = this.#runtime;
     if (!runtime) return;
     const next = validateTodosPayload(nextValue);
@@ -1411,7 +1611,12 @@ export class TodosController {
     if (event.instances.length === 0 && event.rules.length === 0) return;
     try {
       this.#payload = runtime.dispatch(event);
-      this.#renderAll();
+      if (renderer === "all") this.#renderAll();
+      else {
+        renderer(this.#payload);
+        this.#renderSnapshot();
+        this.#renderCommandState();
+      }
       await runtime.save();
       this.#localSaveFailed = false;
       this.#renderSnapshot();
@@ -1463,6 +1668,11 @@ export class TodosController {
   }
 
   #onKeyDown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && this.#pointerDrag) {
+      event.preventDefault();
+      this.#finishPointerDrag(false);
+      return;
+    }
     if (event.key === "Escape" && this.#activeDialog) {
       const openDialogs = [...this.#shell.document.querySelectorAll<HTMLDialogElement>("dialog[open]")];
       const topDialog = openDialogs[openDialogs.length - 1];
@@ -1576,31 +1786,159 @@ export class TodosController {
     graph.addEventListener("pointercancel", finishPan);
   }
 
-  #beginDrag(
-    event: DragEvent,
-    taskId: string,
+  #bindGraphPointerDrag(
+    source: HTMLElement,
+    kind: "instance" | "rule",
+    ownerId: string,
     groupId: string,
-    members: readonly HTMLElement[],
   ): void {
-    this.#draggingTaskId = taskId;
-    this.#draggingGroupId = groupId;
-    this.#shell.elements.root.classList.add("is-dragging");
-    for (const member of members) member.classList.add("is-dragging");
-    event.dataTransfer?.setData("text/plain", taskId);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-    this.#setDragPreview(event, members);
+    this.#bindPointerDrag(source, () => {
+      const chain = source.closest<HTMLElement>(".todo-task-chain");
+      const container = chain?.parentElement;
+      const graph = source.closest<HTMLElement>(".todo-graph");
+      if (!chain || !container || !graph) return null;
+      return {
+        axis: "horizontal",
+        source,
+        captureTarget: graph,
+        members: [chain],
+        container,
+        groupId,
+        scrollHost: graph,
+        redraw: () => {
+          if (kind === "instance") {
+            const instance = this.#payload.instances.find((item) => item.id === ownerId);
+            if (instance) this.#drawGraphLines(graph, instance.root, instance.id);
+          } else {
+            const rule = this.#payload.rules.find((item) => item.id === ownerId);
+            if (rule) this.#drawGraphLines(graph, rule.template, `rule-${rule.id}`);
+          }
+        },
+        commit: (beforeGroupId) => {
+          if (kind === "instance") void this.#reorderGraphTask(ownerId, groupId, beforeGroupId);
+          else void this.#reorderRuleGraphTask(ownerId, groupId, beforeGroupId);
+        },
+      };
+    });
   }
 
-  #setDragPreview(event: DragEvent, members: readonly HTMLElement[]): void {
-    const transfer = event.dataTransfer;
-    if (!transfer || typeof transfer.setDragImage !== "function" || members.length === 0) return;
+  #bindEditorPointerDrag(
+    source: HTMLElement,
+    groupId: string,
+    reorder: (dragged: string, beforeGroupId: string | null) => void,
+    redraw: () => void,
+  ): void {
+    this.#bindPointerDrag(source, () => {
+      const container = source.closest<HTMLElement>(".todo-editor-task-groups");
+      const scrollHost = container?.closest<HTMLElement>(".todo-editor-task-list");
+      if (!container || !scrollHost) return null;
+      const members = this.#directDragElements(container)
+        .filter((candidate) => candidate.dataset.dragGroupId === groupId);
+      if (members.length === 0) return null;
+      return {
+        axis: "vertical",
+        source,
+        captureTarget: container,
+        members,
+        container,
+        groupId,
+        scrollHost,
+        redraw,
+        commit: (beforeGroupId) => reorder(groupId, beforeGroupId),
+      };
+    });
+  }
+
+  #bindPointerDrag(
+    source: HTMLElement,
+    config: () => TodoPointerDragConfig | null,
+  ): void {
+    source.addEventListener("pointerdown", (event) => {
+      if (!event.isPrimary || event.button !== 0 || this.#pointerDrag) return;
+      if ((event.target as Element).closest(".todo-checkbox")) return;
+      const resolved = config();
+      if (!resolved) return;
+      const session: TodoPointerDragSession = {
+        ...resolved,
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        originalElements: this.#directDragElements(resolved.container),
+        active: false,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        preview: null,
+        previewOffsetX: 0,
+        previewOffsetY: 0,
+        autoScrollFrame: null,
+        animations: [],
+      };
+      this.#pointerDrag = session;
+    });
+  }
+
+  #onPointerDragMove(event: PointerEvent): void {
+    const session = this.#pointerDrag;
+    if (!session || session.pointerId !== event.pointerId) return;
+    session.lastX = event.clientX;
+    session.lastY = event.clientY;
+    if (!session.active && Math.hypot(event.clientX - session.startX, event.clientY - session.startY) >= 5) {
+      this.#activatePointerDrag(session);
+    }
+    if (!session.active) return;
+    event.preventDefault();
+    this.#updatePointerLayout(session);
+  }
+
+  #onPointerDragEnd(event: PointerEvent): void {
+    const session = this.#pointerDrag;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const dragged = session.active;
+    if (dragged) this.#suppressNextClick();
+    this.#finishPointerDrag(dragged);
+  }
+
+  #onPointerDragCancel(event: PointerEvent): void {
+    const session = this.#pointerDrag;
+    if (session?.pointerId === event.pointerId) this.#finishPointerDrag(false);
+  }
+
+  #onPointerCaptureLost(event: PointerEvent): void {
+    const session = this.#pointerDrag;
+    if (session?.pointerId === event.pointerId && event.target === session.captureTarget) {
+      this.#finishPointerDrag(false);
+    }
+  }
+
+  #activatePointerDrag(session: TodoPointerDragSession): void {
+    session.active = true;
+    try {
+      session.captureTarget.setPointerCapture(session.pointerId);
+    } catch {
+      // Window-level listeners keep the drag usable when capture is unavailable.
+    }
+    this.#draggingTaskId = session.groupId;
+    session.preview = this.#createPointerPreview(session);
+    this.#shell.elements.root.classList.add("is-dragging");
+    session.container.classList.add("is-reordering");
+    session.scrollHost?.classList.add("is-reordering");
+    for (const member of session.members) member.classList.add("is-dragging");
+    this.#updatePointerLayout(session);
+    if (session.scrollHost) this.#startPointerAutoScroll(session);
+  }
+
+  #createPointerPreview(session: TodoPointerDragSession): HTMLElement {
+    const rects = session.members.map((member) => member.getBoundingClientRect());
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
     const preview = this.#shell.document.createElement("div");
-    preview.className = "todo-drag-preview";
-    preview.dataset.kind = members[0]!.classList.contains("todo-editor-task-row") ? "editor" : "graph";
+    preview.className = "todo-pointer-preview";
+    preview.dataset.kind = session.axis === "horizontal" ? "graph" : "editor";
     preview.setAttribute("aria-hidden", "true");
-    const rects = members.map((member) => member.getBoundingClientRect());
-    preview.style.width = `${Math.max(...rects.map((rect) => rect.width))}px`;
-    for (const member of members) {
+    preview.style.width = `${right - left}px`;
+    for (const member of session.members) {
       const clone = member.cloneNode(true) as HTMLElement;
       clone.classList.remove("is-dragging", "is-drop-target");
       for (const marked of clone.querySelectorAll<HTMLElement>(".is-dragging, .is-drop-target")) {
@@ -1608,48 +1946,203 @@ export class TodosController {
       }
       preview.append(clone);
     }
-    this.#shell.elements.root.append(preview);
-    const left = Math.min(...rects.map((rect) => rect.left));
-    const top = Math.min(...rects.map((rect) => rect.top));
-    const right = Math.max(...rects.map((rect) => rect.right));
-    const bottom = Math.max(...rects.map((rect) => rect.bottom));
-    const bounds = { left, top, width: right - left, height: bottom - top };
-    const offsetX = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left));
-    const offsetY = Math.max(0, Math.min(bounds.height, event.clientY - bounds.top));
-    try {
-      transfer.setDragImage(preview, offsetX, offsetY);
-    } catch {
-      preview.remove();
-      return;
+    session.previewOffsetX = Math.max(0, Math.min(right - left, session.lastX - left));
+    session.previewOffsetY = Math.max(0, Math.min(bottom - top, session.lastY - top));
+    const dialog = session.source.closest<HTMLDialogElement>("dialog[open]");
+    if (dialog && typeof preview.showPopover === "function") {
+      preview.popover = "manual";
+      dialog.append(preview);
+      try {
+        preview.showPopover();
+      } catch {
+        preview.removeAttribute("popover");
+        preview.dataset.layer = "dialog";
+      }
+    } else if (dialog) {
+      preview.dataset.layer = "dialog";
+      dialog.append(preview);
+    } else {
+      this.#shell.elements.root.append(preview);
     }
-    this.#window.setTimeout(() => preview.remove(), 0);
+    this.#positionPointerPreview(session);
+    return preview;
   }
 
-  #editorGroupRows(row: HTMLElement, groupId: string): HTMLElement[] {
-    const groups = row.closest<HTMLElement>(".todo-editor-task-groups");
-    if (!groups) return [row];
-    return [...groups.querySelectorAll<HTMLElement>(".todo-editor-task-row")]
-      .filter((candidate) => candidate.dataset.dragGroupId === groupId);
+  #positionPointerPreview(session: TodoPointerDragSession): void {
+    if (!session.preview) return;
+    const dialogRect = session.preview.dataset.layer === "dialog"
+      ? session.preview.parentElement?.getBoundingClientRect()
+      : null;
+    session.preview.style.left = `${session.lastX - session.previewOffsetX - (dialogRect?.left ?? 0)}px`;
+    session.preview.style.top = `${session.lastY - session.previewOffsetY - (dialogRect?.top ?? 0)}px`;
   }
 
-  #clearDropTargets(): void {
-    for (const target of this.#shell.elements.root.querySelectorAll<HTMLElement>(
-      ".todo-task-chain.is-drop-target, .todo-editor-task-row.is-drop-target",
-    )) {
-      target.classList.remove("is-drop-target");
+  #directDragElements(container: HTMLElement): HTMLElement[] {
+    return [...container.children].filter((child): child is HTMLElement =>
+      child instanceof HTMLElement
+      && (child.classList.contains("todo-task-chain") || child.classList.contains("todo-editor-task-row")));
+  }
+
+  #pointerBlocks(session: TodoPointerDragSession): Array<{
+    readonly groupId: string;
+    readonly elements: HTMLElement[];
+  }> {
+    const blocks: Array<{ groupId: string; elements: HTMLElement[] }> = [];
+    for (const element of this.#directDragElements(session.container)) {
+      const groupId = element.dataset.dragGroupId;
+      if (!groupId) continue;
+      const current = blocks[blocks.length - 1];
+      if (current?.groupId === groupId) current.elements.push(element);
+      else blocks.push({ groupId, elements: [element] });
+    }
+    return blocks;
+  }
+
+  #updatePointerLayout(session: TodoPointerDragSession): void {
+    if (this.#pointerDrag !== session || !session.active) return;
+    this.#positionPointerPreview(session);
+    const blocks = this.#pointerBlocks(session);
+    const candidates = blocks.filter((block) => block.groupId !== session.groupId);
+    const coordinate = session.axis === "horizontal" ? session.lastX : session.lastY;
+    const targetBlock = candidates.find((block) => {
+      const rects = block.elements.map((element) => element.getBoundingClientRect());
+      const start = Math.min(...rects.map((rect) => session.axis === "horizontal" ? rect.left : rect.top));
+      const end = Math.max(...rects.map((rect) => session.axis === "horizontal" ? rect.right : rect.bottom));
+      return coordinate < (start + end) / 2;
+    }) ?? null;
+    this.#markPointerTarget(session, targetBlock?.elements ?? []);
+    const currentIndex = blocks.findIndex((block) => block.groupId === session.groupId);
+    const currentBeforeGroupId = currentIndex < 0 ? null : blocks[currentIndex + 1]?.groupId ?? null;
+    const nextBeforeGroupId = targetBlock?.groupId ?? null;
+    if (currentBeforeGroupId === nextBeforeGroupId) return;
+
+    this.#cancelPointerAnimations(session);
+    const elements = this.#directDragElements(session.container);
+    const before = new Map(elements.map((element) => [element, element.getBoundingClientRect()]));
+    const fragment = this.#shell.document.createDocumentFragment();
+    for (const member of session.members) fragment.append(member);
+    session.container.insertBefore(fragment, targetBlock?.elements[0] ?? null);
+    session.redraw();
+    this.#animateFromRects(elements, before, session);
+  }
+
+  #markPointerTarget(session: TodoPointerDragSession, targets: readonly HTMLElement[]): void {
+    for (const element of this.#directDragElements(session.container)) {
+      element.classList.remove("is-drop-target");
+    }
+    session.container.classList.toggle("is-drop-at-end", targets.length === 0);
+    for (const target of targets) target.classList.add("is-drop-target");
+  }
+
+  #animateFromRects(
+    elements: readonly HTMLElement[],
+    before: ReadonlyMap<HTMLElement, DOMRect>,
+    session?: TodoPointerDragSession,
+  ): void {
+    for (const element of elements) {
+      const previous = before.get(element);
+      if (!previous || typeof element.animate !== "function") continue;
+      const current = element.getBoundingClientRect();
+      const deltaX = previous.left - current.left;
+      const deltaY = previous.top - current.top;
+      if (Math.abs(deltaX) < 0.5 && Math.abs(deltaY) < 0.5) continue;
+      const animation = element.animate([
+        { transform: `translate(${deltaX}px, ${deltaY}px)` },
+        { transform: "translate(0, 0)" },
+      ], { duration: 180, easing: "cubic-bezier(.22, 1, .36, 1)" });
+      if (session) session.animations.push(animation);
+      void animation.finished.catch(() => undefined);
     }
   }
 
-  #clearDragState(): void {
-    this.#draggingTaskId = null;
-    this.#draggingGroupId = null;
+  #cancelPointerAnimations(session: TodoPointerDragSession): void {
+    for (const animation of session.animations.splice(0)) animation.cancel();
+  }
+
+  #startPointerAutoScroll(session: TodoPointerDragSession): void {
+    const tick = (): void => {
+      if (this.#pointerDrag !== session || !session.active || !session.scrollHost) return;
+      const host = session.scrollHost;
+      const rect = host.getBoundingClientRect();
+      const horizontal = session.axis === "horizontal";
+      const size = horizontal ? rect.width : rect.height;
+      const start = horizontal ? rect.left : rect.top;
+      const end = horizontal ? rect.right : rect.bottom;
+      const pointer = horizontal ? session.lastX : session.lastY;
+      const crossStart = horizontal ? rect.top : rect.left;
+      const crossEnd = horizontal ? rect.bottom : rect.right;
+      const crossPointer = horizontal ? session.lastY : session.lastX;
+      const zone = Math.min(56, size * 0.18);
+      let velocity = 0;
+      const withinCrossAxis = crossPointer >= crossStart - 24 && crossPointer <= crossEnd + 24;
+      if (withinCrossAxis && pointer < start + zone) {
+        const depth = Math.max(0, Math.min(1, (start + zone - pointer) / zone));
+        velocity = -(2 + depth * 16);
+      } else if (withinCrossAxis && pointer > end - zone) {
+        const depth = Math.max(0, Math.min(1, (pointer - (end - zone)) / zone));
+        velocity = 2 + depth * 16;
+      }
+      if (velocity !== 0) {
+        const before = horizontal ? host.scrollLeft : host.scrollTop;
+        if (horizontal) host.scrollLeft += velocity;
+        else host.scrollTop += velocity;
+        const after = horizontal ? host.scrollLeft : host.scrollTop;
+        if (after !== before) this.#updatePointerLayout(session);
+      }
+      session.autoScrollFrame = this.#window.requestAnimationFrame(tick);
+    };
+    session.autoScrollFrame = this.#window.requestAnimationFrame(tick);
+  }
+
+  #nextPointerGroupId(session: TodoPointerDragSession): string | null {
+    const blocks = this.#pointerBlocks(session);
+    const index = blocks.findIndex((block) => block.groupId === session.groupId);
+    return index < 0 ? null : blocks[index + 1]?.groupId ?? null;
+  }
+
+  #restorePointerOrder(session: TodoPointerDragSession): void {
+    const elements = this.#directDragElements(session.container);
+    const before = new Map(elements.map((element) => [element, element.getBoundingClientRect()]));
+    for (const element of session.originalElements) session.container.append(element);
+    session.redraw();
+    this.#animateFromRects(elements, before);
+  }
+
+  #finishPointerDrag(commit: boolean): void {
+    const session = this.#pointerDrag;
+    if (!session) return;
+    this.#pointerDrag = null;
+    if (session.autoScrollFrame !== null) this.#window.cancelAnimationFrame(session.autoScrollFrame);
+    this.#cancelPointerAnimations(session);
+    const shouldCommit = commit && session.active;
+    const beforeGroupId = shouldCommit ? this.#nextPointerGroupId(session) : null;
+    if (!shouldCommit && session.active) this.#restorePointerOrder(session);
+    else if (shouldCommit) session.redraw();
+    session.preview?.remove();
+    session.container.classList.remove("is-reordering", "is-drop-at-end");
+    session.scrollHost?.classList.remove("is-reordering");
+    for (const element of this.#directDragElements(session.container)) {
+      element.classList.remove("is-dragging", "is-drop-target");
+    }
     this.#shell.elements.root.classList.remove("is-dragging");
-    for (const target of this.#shell.elements.root.querySelectorAll<HTMLElement>(
-      ".todo-task-chain.is-dragging, .todo-task-chain.is-drop-target, "
-      + ".todo-editor-task-row.is-dragging, .todo-editor-task-row.is-drop-target",
-    )) {
-      target.classList.remove("is-dragging", "is-drop-target");
+    this.#draggingTaskId = null;
+    try {
+      if (session.captureTarget.hasPointerCapture(session.pointerId)) {
+        session.captureTarget.releasePointerCapture(session.pointerId);
+      }
+    } catch {
+      // The source can disappear while a dialog is being closed.
     }
+    if (shouldCommit) session.commit(beforeGroupId);
+  }
+
+  #suppressNextClick(): void {
+    const suppress = (event: Event): void => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    this.#window.addEventListener("click", suppress, { capture: true, once: true });
+    this.#window.setTimeout(() => this.#window.removeEventListener("click", suppress, true), 0);
   }
 
   #drawGraphLines(graph: HTMLElement, root: TodoTask, graphId: string): void {
@@ -1709,8 +2202,8 @@ export class TodosController {
       const targets = childNodes.map((childNode) => point(childNode, "top"));
       const firstChildY = Math.min(...targets.map((target) => target.y));
       const busY = from.y + (firstChildY - from.y) / 2;
-      const left = Math.min(...targets.map((target) => target.x));
-      const right = Math.max(...targets.map((target) => target.x));
+      const left = Math.min(from.x, ...targets.map((target) => target.x));
+      const right = Math.max(from.x, ...targets.map((target) => target.x));
       const path = this.#shell.document.createElementNS("http://www.w3.org/2000/svg", "path");
       const branches = targets.map((target) => `M${target.x},${busY} V${target.y}`).join(" ");
       path.setAttribute("d", `M${from.x},${from.y} V${busY} M${left},${busY} H${right} ${branches}`);
@@ -1723,10 +2216,10 @@ export class TodosController {
     const visit = (parent: TodoTask): void => {
       const parentNode = parent.id === root.id ? null : node(parent.id);
       if (parentNode) {
-        const childBoxes = parent.children
-          .map((child) => dependencyBox(child.id))
-          .filter((childBox): childBox is HTMLElement => childBox !== null);
-        addParentBus(parentNode, childBoxes);
+        const childNodes = parent.children
+          .map((child) => node(child.id))
+          .filter((childNode): childNode is HTMLElement => childNode !== null);
+        addParentBus(parentNode, childNodes);
       }
       for (const child of parent.children) {
         if (child.predecessorId) {
@@ -1738,15 +2231,6 @@ export class TodosController {
       }
     };
     visit(root);
-  }
-
-  #findParentId(root: TodoTask, taskId: string): string | null {
-    if (root.children.some((child) => child.id === taskId)) return root.id;
-    for (const child of root.children) {
-      const found = this.#findParentId(child, taskId);
-      if (found) return found;
-    }
-    return null;
   }
 
   #empty(message: string): HTMLElement {

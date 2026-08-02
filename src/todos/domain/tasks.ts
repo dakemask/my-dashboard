@@ -88,20 +88,23 @@ export function deleteTaskAndReconnect(root: TodoTask, taskId: string): TodoTask
 export function reorderDependencyGroup(
   root: TodoTask,
   draggedId: string,
-  targetId: string,
+  beforeGroupId: string | null,
 ): TodoTask {
-  if (draggedId === targetId) return root;
+  if (draggedId === beforeGroupId) return root;
   return updateSiblingList(root, draggedId, (children) => {
-    if (!children.some((child) => child.id === targetId)) {
-      throw new TypeError("依赖组只能在同一父任务下移动。");
-    }
     const groups = dependencyGroups(children);
     const draggedGroup = groups.find((group) => group.some((child) => child.id === draggedId));
-    const targetGroup = groups.find((group) => group.some((child) => child.id === targetId));
-    if (!draggedGroup || !targetGroup || draggedGroup === targetGroup) return children;
+    const targetGroup = beforeGroupId === null
+      ? null
+      : groups.find((group) => group[0]?.id === beforeGroupId);
+    if (!draggedGroup) return children;
+    if (beforeGroupId !== null && !targetGroup) {
+      throw new TypeError("依赖组只能在同一父任务下移动。");
+    }
+    if (draggedGroup === targetGroup) return children;
     const reordered = groups.filter((group) => group !== draggedGroup);
-    const targetIndex = reordered.indexOf(targetGroup);
-    reordered.splice(targetIndex, 0, draggedGroup);
+    const targetIndex = targetGroup ? reordered.indexOf(targetGroup) : reordered.length;
+    reordered.splice(Math.max(0, targetIndex), 0, draggedGroup);
     return reordered.flat();
   });
 }
