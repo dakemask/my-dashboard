@@ -131,12 +131,22 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 | `src/fragment-thoughts/domain/events.ts` | 五类 event 的纯 `apply` / `invert` |
 | `src/fragment-thoughts/domain/codec.ts` | payload 与 `thoughts.json` 的严格映射 |
 | `src/fragment-thoughts/domain/index.ts` | 领域层公共导出 |
-| `src/fragment-thoughts/app/controller.ts` | 唯一 runtime 持有者；协调草稿、投影、历史、搜索、自动保存，并向 Shared 同步 UI 提供门禁 |
-| `src/fragment-thoughts/ui/shell.ts` | 安全 DOM 壳、同步 UI 挂载点、卡片/编辑器、历史栏、业务确认对话框和 toast |
-| `src/fragment-thoughts/style.css` | 页面布局、状态和桌面/窄屏响应式样式 |
+| `src/fragment-thoughts/app/controller.ts` | 唯一 runtime 持有者；协调命令、自动保存、投影与组件生命周期，并向 Shared 同步 UI 提供门禁 |
+| `src/fragment-thoughts/app/drafts.ts` | 新增/编辑联合草稿状态、命令门禁及手动/远端变化的统一结算 |
+| `src/fragment-thoughts/app/presentation.ts` | 搜索匹配范围、排序、当前/旧版本命中计数和历史选择的纯投影管线 |
+| `src/fragment-thoughts/app/keyboard.ts` | 业务撤销/重做快捷键判定，隔离输入控件、IME 和浏览器原生文字撤销 |
+| `src/fragment-thoughts/app/index.ts` | 应用层兼容导出 |
+| `src/fragment-thoughts/ui/shell.ts` | 组合页面、列表、历史和反馈组件的兼容 facade，只向 controller 暴露语义方法与回调 |
+| `src/fragment-thoughts/ui/pageShell.ts` | 稳定的页面骨架、新增输入和搜索控件 |
+| `src/fragment-thoughts/ui/thoughtList.ts` | 按 thought ID 复用卡片与 textarea，负责无感编辑、IME 保护和命中高亮 |
+| `src/fragment-thoughts/ui/historyPanel.ts` | 历史内容投影、桌面侧栏/窄屏抽屉、折叠交互和焦点恢复 |
+| `src/fragment-thoughts/ui/feedback.ts` | 持久保存失败、草稿提示、toast、确认 dialog 和唯一启动失败视图 |
+| `src/fragment-thoughts/style.css`、`styles/*.css` | 固定入口依次导入基础布局、想法列表、历史和反馈分区；组件响应式规则与组件同置 |
 
 - Shared runtime 持有当前完整 payload、业务 event 历史和保存同步 snapshot。
-- controller 持有 runtime 引用及当前标签页的搜索词、草稿和历史选择；折叠状态由 payload 持有，DOM 只是这些状态和 payload 的投影。
+- controller 持有 runtime 引用及当前标签页的搜索词、联合草稿和历史选择；草稿规则和 presentation/search 计算分别由纯应用层 helper 完成。折叠状态由 payload 持有，DOM 只是这些状态和 payload 的投影。
+- 搜索筛选、当前正文高亮、旧版本命中计数和历史正文高亮全部消费同一批大小写不敏感的匹配范围，不允许 UI 再次独立解释搜索词。
+- 想法卡片按 ID keyed 更新；正文 textarea 在筛选、排序和只读/编辑切换间保持同一节点。组合输入期间不覆盖其值，避免破坏光标、IME 和浏览器原生文字撤销。
 - 领域层不访问 DOM、存储、网络、当前时间或随机数；新 ID 和新时间由 controller 在构造 event 时给出。
 - `main.ts` 在启动 runtime 前先建立完整 hooks；ready 后才把 runtime 交给 controller。其他启动状态由公共边界呈现并释放 controller；捕获异常只显示安全、可重试的模块文案。
 
@@ -183,4 +193,4 @@ payload 中 `thoughts` 的输入顺序不属于业务语义，校验后按 thoug
 - 缺失文件、额外文件或损坏 JSON 由 codec 拒绝；Runtime 根据 schemaVersion 完成迁移后再执行完整 payload 校验；
 - codec 不读取或生成 Shared 的系统文件。
 
-模块自动测试只覆盖领域层和 codec：空数据、payload 与折叠引用不变量、五类 event 的 apply/invert 与输入不可变，以及 codec 的稳定编码、往返和非法输入。UI、搜索、保存重试和同步交互由用户依据交付时的验收清单验收。
+模块自动测试覆盖领域层和 codec 的空数据、payload 与折叠引用不变量、五类 event 的 apply/invert 与输入不可变，以及 codec 的稳定编码、往返和非法输入；同时覆盖联合草稿结算、快捷键门禁、当前/旧版本统一搜索投影、keyed 卡片复用、稳定 textarea、IME 保护和结构化高亮范围。页面观感、窄屏历史抽屉、完整保存重试和同步交互仍由用户依据交付时的验收清单验收。
