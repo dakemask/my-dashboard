@@ -1,4 +1,4 @@
-import { parentPath } from "./names";
+import { ancestorFolderPaths, parentPath } from "./names";
 import { validateMindMapPayload } from "./model";
 import type { MindMapDocument, MindMapPayload } from "./types";
 
@@ -95,11 +95,8 @@ function emptyLeafFolders(payload: MindMapPayload): readonly string[] {
 }
 
 function addFolderAndParents(folders: Set<string>, path: string): void {
-  let current = path;
-  while (current) {
-    folders.add(current);
-    current = parentPath(current);
-  }
+  folders.add(path);
+  for (const ancestor of [...ancestorFolderPaths(path)].reverse()) folders.add(ancestor);
 }
 
 function validateFilePath(path: string): void {

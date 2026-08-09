@@ -16,12 +16,8 @@ import {
 } from "../canvas";
 import {
   baseName,
-  comparableLibraryName,
+  canConnect,
   createEmptyMindMapPayload,
-  isSameOrDescendant,
-  normalizeFolderName,
-  normalizeMapName,
-  parentPath,
   type MindMapDocument,
   type MindMapEndpoint,
   type MindMapEvent,
@@ -34,11 +30,30 @@ import {
   type SettledLibraryDraft,
 } from "../library/treeView";
 import { MindMapShell } from "../ui/shell";
+import {
+  mapReflectsTextChange,
+  planAddNode,
+  planCreateArrow,
+  planDeleteCanvasSelection,
+  planMoveNodes,
+  planNodeFrame,
+  planNodeText,
+} from "./canvasCommands";
+import {
+  hasPendingLibraryChange,
+  isLibraryPlanApplied,
+  nearestExistingFolder,
+  planLibraryDelete,
+  planLibraryDraft,
+  planLibraryMove,
+  retainLibrarySelection,
+  selectedParentPath,
+  validateLibraryDraft,
+  type LibraryCommandEffect,
+} from "./libraryCommands";
+import { routePageKeyCommand } from "./pageCommands";
 import { computeDirtyLibraryState, findHistoryFocus } from "./payloadDiff";
 import { MindMapPreferences } from "./preferences";
-
-const DEFAULT_NODE_WIDTH = 260;
-const DEFAULT_NODE_HEIGHT = 92;
 
 type MindMapRuntime = ModuleRuntime<MindMapPayload, MindMapEvent>;
 
@@ -125,17 +140,16 @@ export class MindMapController {
             ),
       },
       callbacks: {
+        onArrowModeChange: (enabled) => this.shell.setArrowMode(enabled),
         onSelectionChange: (selection) => this.#onCanvasSelectionChange(selection),
         onAddNodeRequest: ({ position }) => this.#addNode(position),
         onMoveNodes: ({ nodeIds, dx, dy }) => this.#moveNodes(nodeIds, dx, dy),
         onResizeNode: ({ nodeId, frame, autoWidth }) => {
-          const mapId = this.#currentMapId;
-          if (!mapId) return;
-          this.#dispatch({ type: "set-node-frame", mapId, nodeId, frame, autoWidth });
+          const event = planNodeFrame(this.#currentMapId, nodeId, frame, autoWidth);
+          if (event) this.#dispatch(event);
         },
         onChangeNodeText: (change, mode) => this.#commitTextChange(change, mode),
         onCreateArrow: ({ from, to }) => this.#createArrow(from, to),
-        onDeleteSelection: (selection) => this.#deleteCanvasSelection(selection),
         isArrowTargetValid: (from, to) => this.#isArrowTargetValid(from, to),
       },
     });
@@ -219,15 +233,9 @@ export class MindMapController {
       this.tree.settleDraft(false);
     });
 
-    const updateArrowButton = (): void => {
-      this.#pageWindow.queueMicrotask(() => this.shell.setArrowMode(this.canvas.arrowMode));
-    };
     this.#listen(this.canvas.element, "pointerdown", () => {
       if (this.tree.settleDraft(false)) this.#clearLibrarySelection();
     });
-    this.#listen(this.canvas.element, "pointerdown", updateArrowButton);
-    this.#listen(this.canvas.element, "pointerup", updateArrowButton);
-    this.#listen(this.canvas.element, "pointercancel", updateArrowButton);
     this.#listen(this.#pageWindow.document, "keydown", (event) => this.#onKeyDown(event), true);
     this.#listen(this.#pageWindow, "beforeunload", (event) => this.#onBeforeUnload(event));
   }
@@ -329,7 +337,6 @@ export class MindMapController {
     this.shell.setMapTitle(map ? baseName(map.path) : null, Boolean(map && dirty.mapIds.has(map.id)));
     this.#renderSnapshot();
     this.shell.setLibrarySelectionAvailable(this.#librarySelection !== null);
-    this.shell.setArrowMode(this.canvas.arrowMode);
     this.#renderTree(dirty);
     if (this.#suppressCanvasRender) return;
 
@@ -389,7 +396,6 @@ export class MindMapController {
       this.#suppressCanvasSelection = false;
     }
     this.#librarySelection = selection;
-    this.shell.setArrowMode(false);
     this.#renderTree();
     if (selection) {
       this.#pageWindow.queueMicrotask(() => this.tree.focusSelection(selection));
@@ -432,7 +438,6 @@ export class MindMapController {
     this.tree.settleDraft(true);
     this.canvas.commitActiveTextEdit();
     this.canvas.cancelLiveInteraction();
-    this.shell.setArrowMode(false);
   }
 
   #beginCreate(kind: "folder" | "map"): void {
@@ -453,28 +458,11 @@ export class MindMapController {
   }
 
   #selectedParentPath(): string {
-    const selection = this.#librarySelection;
-    if (selection?.kind === "folder") return selection.path;
-    if (selection?.kind === "map") return parentPath(this.#findMap(selection.mapId)?.path ?? "");
-    return "";
+    return selectedParentPath(this.#payload, this.#librarySelection);
   }
 
   #validateDraft(draft: LibraryDraft, value: string): string | null {
-    try {
-      const kind = draftKind(draft);
-      const name = kind === "folder" ? normalizeFolderName(value) : normalizeMapName(value);
-      const parent = draftParent(draft, this.#payload);
-      if (kind === "map" && parent === "" && comparableLibraryName(name, "map") === "revision") {
-        return "根目录的脑图不能命名为 revision。";
-      }
-      const excluded = draft.kind === "rename" ? draft.selection : null;
-      if (hasSibling(this.#payload, parent, name, kind, excluded)) {
-        return kind === "folder" ? "同一层已有同名文件夹。" : "同一层已有同名脑图。";
-      }
-      return null;
-    } catch (error) {
-      return error instanceof TypeError ? error.message : "名称无效。";
-    }
+    return validateLibraryDraft(this.#payload, draft, value);
   }
 
   #commitLibraryDraft(draft: LibraryDraft, value: string): string | null {
@@ -492,99 +480,49 @@ export class MindMapController {
   }
 
   #buildDraftCommit(settled: SettledLibraryDraft): DraftCommit {
-    const { draft, value } = settled;
-    const kind = draftKind(draft);
-    const name = kind === "folder" ? normalizeFolderName(value) : normalizeMapName(value);
-    if (draft.kind === "new-folder") {
-      const path = joinPath(draft.parentPath, name);
-      return {
-        event: { type: "create-folder", path },
-        expected: (payload) => payload.folders.includes(path),
-        applyUi: () => {
-          if (draft.parentPath) this.#preferences.setFolderExpanded(draft.parentPath, true);
-          this.#librarySelection = { kind: "folder", path };
-        },
-      };
-    }
-    if (draft.kind === "new-map") {
-      const id = this.#createId();
-      const path = joinPath(draft.parentPath, name);
-      const map: MindMapDocument = { id, path, nodes: [], arrows: [] };
-      return {
-        event: { type: "create-map", map },
-        expected: (payload) => payload.maps.some((candidate) => candidate.id === id),
-        applyUi: () => {
-          if (draft.parentPath) this.#preferences.setFolderExpanded(draft.parentPath, true);
-          this.#currentMapId = id;
-          this.#librarySelection = { kind: "map", mapId: id };
-          this.#preferences.setLastMapId(id);
-          this.#preferences.expandAncestors(path);
-        },
-      };
-    }
-    if (draft.selection.kind === "folder") {
-      const fromPath = draft.selection.path;
-      const toPath = joinPath(parentPath(fromPath), name);
-      return {
-        event: toPath === fromPath ? null : { type: "relocate-folder", fromPath, toPath },
-        expected: (payload) => payload.folders.includes(toPath),
-        applyUi: () => {
-          this.#preferences.remapFolderPrefix(fromPath, toPath);
-          this.#librarySelection = { kind: "folder", path: toPath };
-        },
-      };
-    }
-    const mapId = draft.selection.mapId;
-    const map = this.#findMap(mapId);
-    if (!map) throw new TypeError("脑图已不存在。");
-    const path = joinPath(parentPath(map.path), name);
+    const plan = planLibraryDraft(this.#payload, settled, this.#createId);
     return {
-      event: path === map.path ? null : { type: "relocate-map", mapId, path },
-      expected: (payload) => payload.maps.some((candidate) => candidate.id === mapId && candidate.path === path),
-      applyUi: () => {
-        this.#librarySelection = { kind: "map", mapId };
-        this.#preferences.expandAncestors(path);
-      },
+      event: plan.event,
+      expected: (payload) => isLibraryPlanApplied(payload, plan),
+      applyUi: () => this.#applyLibraryEffect(plan.effect),
     };
+  }
+
+  #applyLibraryEffect(effect: LibraryCommandEffect): void {
+    switch (effect.type) {
+      case "select-folder":
+        if (effect.parentPath) this.#preferences.setFolderExpanded(effect.parentPath, true);
+        this.#librarySelection = { kind: "folder", path: effect.path };
+        return;
+      case "open-map":
+        if (effect.parentPath) this.#preferences.setFolderExpanded(effect.parentPath, true);
+        this.#currentMapId = effect.mapId;
+        this.#librarySelection = { kind: "map", mapId: effect.mapId };
+        this.#preferences.setLastMapId(effect.mapId);
+        this.#preferences.expandAncestors(effect.path);
+        return;
+      case "remap-folder":
+        this.#preferences.remapFolderPrefix(effect.fromPath, effect.toPath);
+        this.#librarySelection = { kind: "folder", path: effect.toPath };
+        return;
+      case "select-map":
+        this.#librarySelection = { kind: "map", mapId: effect.mapId };
+        this.#preferences.expandAncestors(effect.path);
+    }
   }
 
   #moveLibraryItem(selection: Exclude<LibrarySelection, null>, destination: string): void {
     this.#prepareLibraryCommand();
     try {
-      if (selection.kind === "folder") {
-        const fromPath = selection.path;
-        if (destination && isSameOrDescendant(destination, fromPath)) {
-          this.shell.showMessage("文件夹不能移动到自身或其子文件夹中。", "error");
-          return;
-        }
-        const toPath = joinPath(destination, baseName(fromPath));
-        if (toPath === fromPath) return;
-        if (hasSibling(this.#payload, destination, baseName(fromPath), "folder", selection)) {
-          this.shell.showMessage("目标位置已有同名文件夹。", "error");
-          return;
-        }
-        this.#dispatch(
-          { type: "relocate-folder", fromPath, toPath },
-          () => {
-            this.#preferences.remapFolderPrefix(fromPath, toPath);
-            if (destination) this.#preferences.setFolderExpanded(destination, true);
-            this.#librarySelection = { kind: "folder", path: toPath };
-          },
-        );
+      const plan = planLibraryMove(this.#payload, selection, destination);
+      if (plan.status === "noop") return;
+      if (plan.status === "invalid") {
+        this.shell.showMessage(plan.message, "error");
         return;
       }
-      const map = this.#findMap(selection.mapId);
-      if (!map) return;
-      const path = joinPath(destination, baseName(map.path));
-      if (path === map.path) return;
-      if (hasSibling(this.#payload, destination, baseName(map.path), "map", selection)) {
-        this.shell.showMessage("目标位置已有同名脑图。", "error");
-        return;
-      }
-      this.#dispatch({ type: "relocate-map", mapId: map.id, path }, () => {
+      this.#dispatch(plan.event, () => {
+        this.#applyLibraryEffect(plan.effect);
         if (destination) this.#preferences.setFolderExpanded(destination, true);
-        this.#librarySelection = { kind: "map", mapId: map.id };
-        this.#preferences.expandAncestors(path);
       });
     } catch {
       this.shell.showMessage("这个项目不能移动到所选位置。", "error");
@@ -602,28 +540,20 @@ export class MindMapController {
         ? "将递归删除该文件夹、全部子文件夹和其中的所有脑图。此操作可以撤销。"
         : "将删除这张脑图。此操作可以撤销。",
       [
-        { id: "delete", label: "删除", tone: "danger" },
         { id: "cancel", label: "取消" },
+        { id: "delete", label: "删除", tone: "danger" },
       ],
     );
     if (choice !== "delete") return;
-    if (selection.kind === "folder") {
-      const current = this.#currentMapId ? this.#findMap(this.#currentMapId) : null;
-      this.#dispatch({ type: "delete-folder", path: selection.path }, () => {
-        if (current && isSameOrDescendant(current.path, selection.path)) {
-          this.#currentMapId = null;
-          this.#preferences.setLastMapId(null);
-        }
-        this.#librarySelection = nearestExistingFolder(parentPath(selection.path), this.#payload);
-      });
-      return;
-    }
-    this.#dispatch({ type: "delete-map", mapId: selection.mapId }, () => {
-      if (this.#currentMapId === selection.mapId) {
+    const plan = planLibraryDelete(this.#payload, selection, this.#currentMapId);
+    this.#dispatch(plan.event, () => {
+      if (plan.closesCurrentMap) {
         this.#currentMapId = null;
         this.#preferences.setLastMapId(null);
       }
-      this.#librarySelection = null;
+      this.#librarySelection = selection.kind === "folder"
+        ? nearestExistingFolder(plan.fallbackFolderPath, this.#payload)
+        : null;
     });
   }
 
@@ -637,30 +567,15 @@ export class MindMapController {
     const mapId = this.#currentMapId;
     if (!mapId) return;
     const nodeId = this.#createId();
-    const added = this.#dispatch({
-      type: "add-node",
-      mapId,
-      node: {
-        id: nodeId,
-        text: "",
-        x: position.x - DEFAULT_NODE_WIDTH / 2,
-        y: position.y - DEFAULT_NODE_HEIGHT / 2,
-        width: DEFAULT_NODE_WIDTH,
-        height: DEFAULT_NODE_HEIGHT,
-        autoWidth: false,
-      },
-    });
+    const added = this.#dispatch(planAddNode(mapId, nodeId, position));
     if (added) this.canvas.editNode(nodeId);
   }
 
   #moveNodes(nodeIds: readonly string[], dx: number, dy: number): void {
     const map = this.#currentMap();
     if (!map) return;
-    const selected = new Set(nodeIds);
-    const positions = map.nodes
-      .filter((node) => selected.has(node.id))
-      .map((node) => ({ nodeId: node.id, x: node.x + dx, y: node.y + dy }));
-    if (positions.length > 0) this.#dispatch({ type: "move-nodes", mapId: map.id, positions });
+    const event = planMoveNodes(map, nodeIds, dx, dy);
+    if (event) this.#dispatch(event);
   }
 
   #commitTextChange(
@@ -684,59 +599,35 @@ export class MindMapController {
   }
 
   #textEvent(change: CanvasTextChange): MindMapEvent | null {
-    const mapId = this.#currentMapId;
-    if (!mapId) return null;
-    return {
-      type: "set-node-text",
-      mapId,
-      nodeId: change.nodeId,
-      text: change.text,
-      frame: change.frame,
-      autoWidth: change.autoWidth,
-    };
+    return planNodeText(this.#currentMapId, change);
   }
 
   #createArrow(from: MindMapEndpoint, to: MindMapEndpoint): void {
-    const mapId = this.#currentMapId;
-    if (!mapId || !this.#isArrowTargetValid(from, to)) return;
-    this.#dispatch({
-      type: "add-arrow",
-      mapId,
-      arrow: { id: this.#createId(), from, to },
-    });
-    this.shell.setArrowMode(false);
+    const map = this.#currentMap();
+    if (!map || !canConnect(map, from, to)) return;
+    const event = planCreateArrow(map, this.#createId(), from, to);
+    if (!event) return;
+    this.#dispatch(event);
   }
 
   #isArrowTargetValid(from: MindMapEndpoint, to: MindMapEndpoint): boolean {
     const map = this.#currentMap();
-    return Boolean(
-      map
-      && from.nodeId !== to.nodeId
-      && !map.arrows.some((arrow) => sameEndpoint(arrow.from, from) && sameEndpoint(arrow.to, to)),
-    );
+    return Boolean(map && canConnect(map, from, to));
   }
 
   #toggleArrowMode(): void {
     if (this.canvas.arrowMode) {
       this.canvas.setArrowMode(false);
-      this.shell.setArrowMode(false);
       return;
     }
     this.#commitPendingUi();
     this.#clearLibrarySelection();
     this.canvas.setArrowMode(true);
-    this.shell.setArrowMode(true);
   }
 
   #deleteCanvasSelection(selection = this.canvas.getSelection()): void {
-    const mapId = this.#currentMapId;
-    if (!mapId || (selection.nodeIds.length === 0 && selection.arrowIds.length === 0)) return;
-    this.#dispatch({
-      type: "delete-objects",
-      mapId,
-      nodeIds: selection.nodeIds,
-      arrowIds: selection.arrowIds,
-    });
+    const event = planDeleteCanvasSelection(this.#currentMapId, selection);
+    if (event) this.#dispatch(event);
   }
 
   #commitPendingUi(): void {
@@ -744,7 +635,6 @@ export class MindMapController {
     this.tree.settleDraft(true);
     this.canvas.commitActiveTextEdit();
     this.canvas.cancelLiveInteraction();
-    this.shell.setArrowMode(false);
   }
 
   async #undo(): Promise<void> {
@@ -865,9 +755,9 @@ export class MindMapController {
       "返回首页",
       "还有尚未保存到本机的内容。",
       [
+        { id: "cancel", label: "取消" },
         { id: "save", label: "重试保存并返回", tone: "primary" },
         { id: "discard", label: "不保存返回", tone: "danger" },
-        { id: "cancel", label: "取消" },
       ],
     );
     if (choice === "discard") this.#navigateHome();
@@ -875,60 +765,49 @@ export class MindMapController {
   }
 
   #onKeyDown(event: KeyboardEvent): void {
-    if (event.defaultPrevented) return;
-    const key = event.key.toLowerCase();
-    const exactControl = event.ctrlKey && !event.altKey && !event.metaKey;
-    if (exactControl && event.shiftKey && key === "z") {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (exactControl && !event.shiftKey && (key === "z" || key === "y")) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (key === "z") void this.#undo();
-      else void this.#redo();
-      return;
-    }
-    if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key === "1" || event.key === "2")) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.#commitPendingUi();
-      this.#clearLibrarySelection();
-      if (event.key === "1") this.canvas.requestAddNode();
-      else {
-        this.canvas.setArrowMode(true);
-        this.shell.setArrowMode(this.canvas.arrowMode);
-      }
-      return;
-    }
-    if (
-      event.key === "F2"
-      && !event.ctrlKey
-      && !event.altKey
-      && !event.metaKey
-      && !event.shiftKey
-      && this.#librarySelection
-      && !isTextEditingTarget(event.target)
-    ) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.#beginRename();
-      return;
-    }
-    if (event.key !== "Delete" || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
-    if (isTextEditingTarget(event.target)) return;
-    if (this.shell.elements.sidebar.contains(event.target as Node) && this.#librarySelection) {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.#confirmDeleteLibrarySelection();
-      return;
-    }
+    if (this.shell.dialogOpen || this.#pageWindow.document.querySelector("dialog[open]")) return;
     const selection = this.canvas.getSelection();
-    if (selection.nodeIds.length > 0 || selection.arrowIds.length > 0) {
-      event.preventDefault();
-      event.stopPropagation();
-      this.#deleteCanvasSelection(selection);
+    const targetIsNode = isDomNode(event.target);
+    const command = routePageKeyCommand({
+      key: event.key,
+      defaultPrevented: event.defaultPrevented,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      textEditing: isTextEditingTarget(event.target),
+      withinLibrary: targetIsNode && this.shell.elements.sidebar.contains(event.target as Node),
+      hasLibrarySelection: this.#librarySelection !== null,
+      hasCanvasSelection: selection.nodeIds.length > 0 || selection.arrowIds.length > 0,
+    });
+    if (!command) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    switch (command) {
+      case "suppress-redo-shortcut":
+        return;
+      case "undo":
+        void this.#undo();
+        return;
+      case "redo":
+        void this.#redo();
+        return;
+      case "add-node":
+        this.#commitPendingUi();
+        this.#clearLibrarySelection();
+        this.canvas.requestAddNode();
+        return;
+      case "add-arrow":
+        this.#commitPendingUi();
+        this.#clearLibrarySelection();
+        this.canvas.setArrowMode(true);
+        return;
+      case "delete-library":
+        void this.#confirmDeleteLibrarySelection();
+        return;
+      case "delete-canvas":
+        this.#deleteCanvasSelection(selection);
     }
   }
 
@@ -950,17 +829,7 @@ export class MindMapController {
   }
 
   #hasPendingLibraryChange(): boolean {
-    const draft = this.tree.draft;
-    const value = this.tree.draftValue;
-    if (!draft || value === null || this.#validateDraft(draft, value) !== null) return false;
-    if (draft.kind === "new-folder" || draft.kind === "new-map") return true;
-    if (draft.selection.kind === "folder") {
-      const selectedPath = draft.selection.path;
-      const current = this.#payload.folders.find((path) => path === selectedPath);
-      return current !== undefined && normalizeFolderName(value) !== baseName(current);
-    }
-    const current = this.#findMap(draft.selection.mapId);
-    return current !== null && normalizeMapName(value) !== baseName(current.path);
+    return hasPendingLibraryChange(this.#payload, this.tree.draft, this.tree.draftValue);
   }
 
   #findMap(id: string): MindMapDocument | null {
@@ -976,78 +845,17 @@ export class MindMapController {
   }
 }
 
-function mapReflectsTextChange(map: MindMapDocument, change: CanvasTextChange): boolean {
-  const node = map.nodes.find((candidate) => candidate.id === change.nodeId);
+function isTextEditingTarget(target: EventTarget | null): boolean {
   return Boolean(
-    node
-    && node.text === change.text
-    && node.x === change.frame.x
-    && node.y === change.frame.y
-    && node.width === change.frame.width
-    && node.height === change.frame.height
-    && node.autoWidth === change.autoWidth,
+    target
+    && "matches" in target
+    && typeof target.matches === "function"
+    && target.matches("input, textarea, [contenteditable='true']"),
   );
 }
 
-function draftKind(draft: LibraryDraft): "folder" | "map" {
-  if (draft.kind === "new-folder") return "folder";
-  if (draft.kind === "new-map") return "map";
-  return draft.selection.kind;
-}
-
-function draftParent(draft: LibraryDraft, payload: MindMapPayload): string {
-  if (draft.kind === "new-folder" || draft.kind === "new-map") return draft.parentPath;
-  if (draft.selection.kind === "folder") return parentPath(draft.selection.path);
-  const mapId = draft.selection.mapId;
-  return parentPath(payload.maps.find((map) => map.id === mapId)?.path ?? "");
-}
-
-function hasSibling(
-  payload: MindMapPayload,
-  parent: string,
-  name: string,
-  kind: "folder" | "map",
-  excluded: Exclude<LibrarySelection, null> | null,
-): boolean {
-  const key = comparableLibraryName(name, kind);
-  if (kind === "folder") {
-    return payload.folders.some((path) =>
-      parentPath(path) === parent
-      && !(excluded?.kind === "folder" && excluded.path === path)
-      && comparableLibraryName(baseName(path), "folder") === key);
-  }
-  return payload.maps.some((map) =>
-    parentPath(map.path) === parent
-    && !(excluded?.kind === "map" && excluded.mapId === map.id)
-    && comparableLibraryName(baseName(map.path), "map") === key);
-}
-
-function joinPath(parent: string, name: string): string {
-  return parent ? `${parent}/${name}` : name;
-}
-
-function sameEndpoint(left: MindMapEndpoint, right: MindMapEndpoint): boolean {
-  return left.nodeId === right.nodeId && left.side === right.side;
-}
-
-function retainLibrarySelection(selection: LibrarySelection, payload: MindMapPayload): LibrarySelection {
-  if (selection?.kind === "folder") return payload.folders.includes(selection.path) ? selection : null;
-  if (selection?.kind === "map") return payload.maps.some((map) => map.id === selection.mapId) ? selection : null;
-  return null;
-}
-
-function nearestExistingFolder(path: string, payload: MindMapPayload): LibrarySelection {
-  let candidate = path;
-  while (candidate) {
-    if (payload.folders.includes(candidate)) return { kind: "folder", path: candidate };
-    candidate = parentPath(candidate);
-  }
-  return null;
-}
-
-function isTextEditingTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) return false;
-  return target.matches("input, textarea, [contenteditable='true']");
+function isDomNode(target: EventTarget | null): target is Node {
+  return Boolean(target && "nodeType" in target && typeof target.nodeType === "number");
 }
 
 function rectLike(rect: DOMRect): { left: number; top: number; width: number; height: number } {

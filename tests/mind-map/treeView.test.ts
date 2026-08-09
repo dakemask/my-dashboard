@@ -43,6 +43,18 @@ describe("LibraryTreeView selection", () => {
     expect(fixture.callbacks.onSelect).toHaveBeenCalledWith({ kind: "map", mapId: "map-root" });
     expect(fixture.callbacks.onOpenMap).toHaveBeenCalledWith("map-root");
   });
+
+  it("exposes selected and current tree items to assistive technology", () => {
+    const fixture = createFixture();
+    fixture.view.render(createState({
+      selection: { kind: "map", mapId: "map-root" },
+      currentMapId: "map-root",
+    }));
+
+    const item = rowNamed(fixture.container, "随手记").closest<HTMLElement>("[role=treeitem]")!;
+    expect(item.getAttribute("aria-selected")).toBe("true");
+    expect(item.getAttribute("aria-current")).toBe("page");
+  });
 });
 
 describe("LibraryTreeView inline drafts", () => {
@@ -110,6 +122,49 @@ describe("LibraryTreeView inline drafts", () => {
     expect(fixture.callbacks.commitDraft).not.toHaveBeenCalled();
     expect(fixture.callbacks.onDraftCancelled).toHaveBeenCalledOnce();
     expect(fixture.view.draft).toBeNull();
+  });
+
+  it("renders a visible accessible IconPark cancel control without using Escape as cancel", () => {
+    const fixture = createFixture();
+    fixture.view.render(createState());
+    fixture.view.beginCreate("map", "");
+    const input = draftInput(fixture.container);
+    input.value = "保留草稿";
+    const cancel = fixture.container.querySelector<HTMLButtonElement>(".inline-cancel")!;
+
+    expect(cancel.hidden).toBe(false);
+    expect(cancel.title).toBe("取消新建项目");
+    expect(cancel.getAttribute("aria-label")).toBe(cancel.title);
+    expect(cancel.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    input.dispatchEvent(escape);
+
+    expect(escape.defaultPrevented).toBe(false);
+    expect(fixture.view.draft).toEqual({ kind: "new-map", parentPath: "" });
+    expect(input.value).toBe("保留草稿");
+    expect(fixture.callbacks.commitDraft).not.toHaveBeenCalled();
+    expect(fixture.callbacks.onDraftCancelled).not.toHaveBeenCalled();
+  });
+
+  it("uses the same fixed row chrome and keeps keyed read rows across projections", () => {
+    const fixture = createFixture();
+    fixture.view.render(createState());
+    const initial = rowNamed(fixture.container, "随手记");
+    expect(initial.classList.contains("library-row-chrome")).toBe(true);
+
+    fixture.view.render(createState({
+      selection: { kind: "map", mapId: "map-root" },
+      currentMapId: "map-root",
+      dirtyMapIds: new Set(["map-root"]),
+    }));
+    expect(rowNamed(fixture.container, "随手记")).toBe(initial);
+
+    fixture.view.beginRename({ kind: "map", mapId: "map-root" });
+    const editor = fixture.container.querySelector<HTMLElement>(".library-inline-editor")!;
+    expect(editor.classList.contains("library-row-chrome")).toBe(true);
+    expect(editor.querySelector(".folder-arrow")).toBeTruthy();
+    expect(editor.querySelector(".library-item-icon")).toBeTruthy();
+    expect(editor.querySelector(".library-name-slot input")).toBeTruthy();
   });
 
   it("keeps an invalid draft visible, reports the error, and does not commit it", async () => {
@@ -290,6 +345,24 @@ describe("LibraryTreeView drag and drop", () => {
     dispatchDrag(rowNamed(fixture.container, "资料"), "drop");
     dispatchDrag(fixture.rootDropTarget, "drop");
 
+    expect(fixture.callbacks.onMove).not.toHaveBeenCalled();
+  });
+
+  it("removes delegated drag listeners and pending hover work on dispose", () => {
+    vi.useFakeTimers();
+    const fixture = createFixture();
+    fixture.view.render(createState());
+    const dragged = rowNamed(fixture.container, "随手记");
+    const destination = rowNamed(fixture.container, "工作");
+
+    dispatchDrag(dragged, "dragstart");
+    dispatchDrag(destination, "dragover");
+    fixture.view.dispose();
+    vi.advanceTimersByTime(700);
+    dispatchDrag(destination, "drop");
+
+    expect(fixture.view.dragging).toBe(false);
+    expect(fixture.callbacks.onToggleFolder).not.toHaveBeenCalled();
     expect(fixture.callbacks.onMove).not.toHaveBeenCalled();
   });
 });

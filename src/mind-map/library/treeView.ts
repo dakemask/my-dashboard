@@ -1,64 +1,61 @@
+import { MindmapMap } from "@icon-park/svg";
+import { createIconParkIcon } from "../../shared";
+import { LibraryDragDrop } from "./dragDrop";
 import {
-  Down,
-  FolderClose,
-  FolderOpen,
-  MindmapMap,
-} from "@icon-park/svg";
-import type { MindMapPayload } from "../domain";
-import { createMindMapIcon } from "../ui/icons";
+  LibraryInlineEditor,
+  type LibraryInlineEditorState,
+} from "./inlineEditor";
+import {
+  createLibraryRowChrome,
+  updateLibraryRowChrome,
+  type LibraryRowChrome,
+} from "./rowChrome";
+import {
+  buildLibraryTree,
+  draftInitialValue,
+  findFolderNode,
+  sameLibraryDraft,
+  sameLibrarySelection,
+  type FolderTreeNode,
+  type LibraryMapNode,
+} from "./treeModel";
+import type {
+  LibraryDraft,
+  LibrarySelection,
+  LibraryTreeCallbacks,
+  LibraryTreeRenderState,
+  SettledLibraryDraft,
+} from "./types";
 
-export type LibrarySelection =
-  | { readonly kind: "folder"; readonly path: string }
-  | { readonly kind: "map"; readonly mapId: string }
-  | null;
+export type {
+  LibraryDraft,
+  LibrarySelection,
+  LibraryTreeCallbacks,
+  LibraryTreeRenderState,
+  SettledLibraryDraft,
+} from "./types";
 
-export type LibraryDraft =
-  | { readonly kind: "new-folder"; readonly parentPath: string }
-  | { readonly kind: "new-map"; readonly parentPath: string }
-  | { readonly kind: "rename"; readonly selection: Exclude<LibrarySelection, null> };
+type ConcreteSelection = Exclude<LibrarySelection, null>;
 
-export interface LibraryTreeRenderState {
-  readonly payload: MindMapPayload;
-  readonly selection: LibrarySelection;
-  readonly currentMapId: string | null;
-  readonly expandedFolders: ReadonlySet<string>;
-  readonly dirtyMapIds: ReadonlySet<string>;
-  readonly dirtyFolderPaths: ReadonlySet<string>;
-}
-
-export interface LibraryTreeCallbacks {
-  onSelect(selection: LibrarySelection): void;
-  onOpenMap(mapId: string): void;
-  onToggleFolder(path: string, expanded: boolean): void;
-  onMove(selection: Exclude<LibrarySelection, null>, destinationFolder: string): void;
-  validateDraft(draft: LibraryDraft, value: string): string | null;
-  commitDraft(draft: LibraryDraft, value: string): string | null;
-  onDraftCancelled?(): void;
-}
-
-export interface SettledLibraryDraft {
-  readonly draft: LibraryDraft;
-  readonly value: string;
-}
-
-interface FolderTreeNode {
-  readonly path: string;
-  readonly name: string;
-  readonly folders: FolderTreeNode[];
-  readonly maps: Array<{ readonly id: string; readonly path: string; readonly name: string }>;
-}
-
+/**
+ * Compatibility facade for the library tree. Domain modelling, inline editing,
+ * and native drag/drop state live in focused collaborators behind this class.
+ */
 export class LibraryTreeView {
   readonly #container: HTMLElement;
-  readonly #rootDropTarget: HTMLElement;
   readonly #callbacks: LibraryTreeCallbacks;
+  readonly #rootList: HTMLUListElement;
+  readonly #empty: HTMLElement;
+  readonly #dragDrop: LibraryDragDrop;
+  readonly #items = new Map<string, HTMLLIElement>();
+  readonly #rows = new Map<string, HTMLButtonElement>();
+  readonly #rowChromes = new WeakMap<HTMLButtonElement, LibraryRowChrome>();
+  readonly #folderLists = new Map<string, HTMLUListElement>();
+  readonly #document: Document;
   #state: LibraryTreeRenderState | null = null;
   #draft: LibraryDraft | null = null;
-  #draftInput: HTMLInputElement | null = null;
-  #draftError: HTMLElement | null = null;
-  #dragged: Exclude<LibrarySelection, null> | null = null;
-  #hoverTimer: number | null = null;
-  #hoverPath: string | null = null;
+  #draftEditor: LibraryInlineEditor | null = null;
+  #draftItem: HTMLLIElement | null = null;
 
   constructor(
     container: HTMLElement,
@@ -66,11 +63,17 @@ export class LibraryTreeView {
     callbacks: LibraryTreeCallbacks,
   ) {
     this.#container = container;
-    this.#rootDropTarget = rootDropTarget;
     this.#callbacks = callbacks;
-    rootDropTarget.addEventListener("dragover", this.#onRootDragOver);
-    rootDropTarget.addEventListener("dragleave", this.#onRootDragLeave);
-    rootDropTarget.addEventListener("drop", this.#onRootDrop);
+    this.#document = container.ownerDocument;
+    this.#rootList = this.#document.createElement("ul");
+    this.#rootList.className = "library-level library-level-root";
+    this.#rootList.setAttribute("role", "group");
+    this.#empty = this.#createEmptyState();
+    this.#dragDrop = new LibraryDragDrop(container, rootDropTarget, {
+      onMove: (selection, destination) => callbacks.onMove(selection, destination),
+      onToggleFolder: (path, expanded) => callbacks.onToggleFolder(path, expanded),
+      isFolderExpanded: (path) => this.#state?.expandedFolders.has(path) ?? false,
+    });
   }
 
   get draft(): LibraryDraft | null {
@@ -79,101 +82,77 @@ export class LibraryTreeView {
 
   get draftValue(): string | null {
     if (!this.#draft) return null;
-    return this.#draftInput?.value ?? this.#draftInitialValue(this.#draft);
+    return this.#draftEditor?.input.value ?? this.#initialDraftValue(this.#draft);
   }
 
   get dragging(): boolean {
-    return this.#dragged !== null;
+    return this.#dragDrop.dragging;
   }
 
   cancelLiveInteraction(): void {
-    this.#dragged = null;
-    this.#clearHoverTimer();
-    this.#clearDropClasses();
+    this.#dragDrop.cancel();
   }
 
-  focusSelection(selection: Exclude<LibrarySelection, null>): void {
-    const rows = this.#container.querySelectorAll<HTMLButtonElement>(".library-row");
-    const row = [...rows].find((candidate) => selection.kind === "folder"
-      ? candidate.dataset.folderPath === selection.path
-      : candidate.dataset.mapId === selection.mapId);
-    row?.focus({ preventScroll: true });
+  focusSelection(selection: ConcreteSelection): void {
+    const key = selection.kind === "folder" ? folderKey(selection.path) : mapKey(selection.mapId);
+    this.#rows.get(key)?.focus({ preventScroll: true });
   }
 
-  /** Expands a hovered drop target without replacing the active native drag source. */
+  /** Expands only the hovered branch, preserving the active native drag source node. */
   expandFolderDuringDrag(path: string): boolean {
     const state = this.#state;
-    if (!state || !this.#dragged || state.expandedFolders.has(path)) return false;
-    const row = [...this.#container.querySelectorAll<HTMLButtonElement>(".library-row")]
-      .find((candidate) => candidate.dataset.folderPath === path);
-    const item = row?.closest<HTMLLIElement>(".library-folder");
-    const folder = findFolder(buildTree(state.payload), path);
-    if (!row || !item || !folder) return false;
+    if (!state || !this.#dragDrop.dragging || state.expandedFolders.has(path)) return false;
+    const root = buildLibraryTree(state.payload);
+    const folder = findFolderNode(root, path);
+    const item = this.#items.get(folderKey(path));
+    if (!folder || !item) return false;
 
     const expandedFolders = new Set(state.expandedFolders);
     expandedFolders.add(path);
     this.#state = { ...state, expandedFolders };
     item.setAttribute("aria-expanded", "true");
-    const folderIcon = row.querySelector<HTMLElement>(".library-folder-icon");
-    folderIcon?.replaceChildren(createMindMapIcon(this.#container.ownerDocument, FolderOpen));
-
-    const children = this.#container.ownerDocument.createElement("ul");
-    children.className = "library-level";
-    children.setAttribute("role", "group");
-    this.#appendDraftIfNeeded(children, folder.path);
-    for (const child of folder.folders) children.append(this.#renderFolder(child));
-    for (const map of folder.maps) children.append(this.#renderMap(map));
-    item.append(children);
+    const row = this.#rows.get(folderKey(path));
+    if (row) this.#updateReadRow(row, { kind: "folder", path }, folder.name, true);
+    const children = this.#renderLevel(folder, path);
+    if (!children.isConnected) item.append(children);
     return true;
   }
 
   render(state: LibraryTreeRenderState): void {
     this.#state = state;
-    const root = buildTree(state.payload);
-    const list = this.#container.ownerDocument.createElement("ul");
-    list.className = "library-level library-level-root";
-    list.setAttribute("role", "group");
-    this.#appendDraftIfNeeded(list, "");
-    for (const folder of root.folders) list.append(this.#renderFolder(folder));
-    for (const map of root.maps) list.append(this.#renderMap(map));
-    if (root.folders.length === 0 && root.maps.length === 0 && !this.#draft) {
-      const empty = this.#container.ownerDocument.createElement("div");
-      empty.className = "library-empty";
-      const icon = this.#container.ownerDocument.createElement("span");
-      icon.className = "library-empty-icon";
-      icon.append(createMindMapIcon(this.#container.ownerDocument, MindmapMap));
-      const title = this.#container.ownerDocument.createElement("strong");
-      title.textContent = "资料库还是空的";
-      const message = this.#container.ownerDocument.createElement("p");
-      message.textContent = "新建一张脑图，开始整理想法。";
-      empty.append(icon, title, message);
-      this.#container.replaceChildren(empty);
-    } else {
-      this.#container.replaceChildren(list);
+    const root = buildLibraryTree(state.payload);
+    const hasContent = root.folders.length > 0 || root.maps.length > 0 || this.#draft !== null;
+    if (hasContent) {
+      this.#renderLevelInto(this.#rootList, root, "");
+      if (this.#container.firstElementChild !== this.#rootList) {
+        this.#container.replaceChildren(this.#rootList);
+      }
+    } else if (this.#container.firstElementChild !== this.#empty) {
+      this.#container.replaceChildren(this.#empty);
     }
-    this.#focusDraft();
+    this.#sweepCaches(root);
   }
 
   beginCreate(kind: "folder" | "map", parentPath: string): void {
     this.cancelDraft();
-    this.#draft = {
-      kind: kind === "folder" ? "new-folder" : "new-map",
-      parentPath,
-    };
+    this.#draft = { kind: kind === "folder" ? "new-folder" : "new-map", parentPath };
+    this.#resetDraftEditor();
     this.#rerender();
   }
 
-  beginRename(selection: Exclude<LibrarySelection, null>): void {
+  beginRename(selection: ConcreteSelection): void {
     this.cancelDraft();
     this.#draft = { kind: "rename", selection };
+    this.#resetDraftEditor();
     this.#rerender();
   }
 
   /** Commits a valid draft. Invalid drafts are either retained or explicitly cancelled. */
   settleDraft(cancelInvalid: boolean): boolean {
-    if (!this.#draft) return true;
-    const value = this.#draftInput?.value ?? this.#draftInitialValue(this.#draft);
-    const validation = this.#callbacks.validateDraft(this.#draft, value);
+    const draft = this.#draft;
+    if (!draft) return true;
+    const value = this.draftValue ?? this.#initialDraftValue(draft);
+    const validation = this.#callbacks.validateDraft(draft, value);
     if (validation) {
       if (cancelInvalid) {
         this.cancelDraft();
@@ -185,27 +164,18 @@ export class LibraryTreeView {
     return this.#commitDraft(value);
   }
 
-  /**
-   * Removes a draft for a Shared settle hook without dispatching from inside
-   * the already-running runtime command. The controller converts the result
-   * into the one event returned to Shared.
-   */
   takeDraftForSettle(cancelInvalid: boolean): SettledLibraryDraft | null {
     const draft = this.#draft;
     if (!draft) return null;
-    const value = this.#draftInput?.value ?? this.#draftInitialValue(draft);
+    const value = this.draftValue ?? this.#initialDraftValue(draft);
     const validation = this.#callbacks.validateDraft(draft, value);
     if (validation) {
-      if (!cancelInvalid) {
-        this.#showDraftError(validation);
-        return null;
-      }
-      this.cancelDraft();
+      if (!cancelInvalid) this.#showDraftError(validation);
+      else this.cancelDraft();
       return null;
     }
     this.#draft = null;
-    this.#draftInput = null;
-    this.#draftError = null;
+    this.#resetDraftEditor();
     this.#rerender();
     return { draft, value };
   }
@@ -213,256 +183,216 @@ export class LibraryTreeView {
   cancelDraft(): void {
     if (!this.#draft) return;
     this.#draft = null;
-    this.#draftInput = null;
-    this.#draftError = null;
+    this.#resetDraftEditor();
     this.#callbacks.onDraftCancelled?.();
     this.#rerender();
   }
 
   dispose(): void {
-    this.cancelLiveInteraction();
-    this.#rootDropTarget.removeEventListener("dragover", this.#onRootDragOver);
-    this.#rootDropTarget.removeEventListener("dragleave", this.#onRootDragLeave);
-    this.#rootDropTarget.removeEventListener("drop", this.#onRootDrop);
+    this.#dragDrop.dispose();
+    this.#resetDraftEditor();
+  }
+
+  #renderLevel(folder: FolderTreeNode, path: string): HTMLUListElement {
+    let list = this.#folderLists.get(path);
+    if (!list) {
+      list = this.#document.createElement("ul");
+      list.className = "library-level";
+      list.setAttribute("role", "group");
+      this.#folderLists.set(path, list);
+    }
+    this.#renderLevelInto(list, folder, path);
+    return list;
+  }
+
+  #renderLevelInto(list: HTMLUListElement, folder: FolderTreeNode, parentPath: string): void {
+    const children: HTMLElement[] = [];
+    const draft = this.#draft;
+    if (draft && draft.kind !== "rename" && draft.parentPath === parentPath) {
+      children.push(this.#renderDraftItem(draft));
+    }
+    for (const child of folder.folders) children.push(this.#renderFolder(child));
+    for (const map of folder.maps) children.push(this.#renderMap(map));
+    list.replaceChildren(...children);
   }
 
   #renderFolder(folder: FolderTreeNode): HTMLLIElement {
     const state = this.#state!;
-    const item = this.#container.ownerDocument.createElement("li");
-    item.className = "library-item library-folder";
-    item.setAttribute("role", "treeitem");
+    const key = folderKey(folder.path);
+    const item = this.#item(key, "library-folder");
     const expanded = state.expandedFolders.has(folder.path);
     item.setAttribute("aria-expanded", String(expanded));
+    const selection: ConcreteSelection = { kind: "folder", path: folder.path };
+    item.setAttribute("aria-selected", String(sameLibrarySelection(state.selection, selection)));
+    item.removeAttribute("aria-current");
+    const editing = this.#draft?.kind === "rename"
+      && sameLibrarySelection(this.#draft.selection, selection);
+    const row = editing
+      ? this.#ensureDraftEditor(this.#draft!, this.#draftState("folder", expanded)).element
+      : this.#readRow(key, selection, folder.name, expanded);
+    const children = expanded ? this.#renderLevel(folder, folder.path) : null;
+    item.replaceChildren(...(children ? [row, children] : [row]));
+    return item;
+  }
 
-    if (
-      this.#draft?.kind === "rename"
-      && this.#draft.selection.kind === "folder"
-      && this.#draft.selection.path === folder.path
-    ) {
-      item.append(this.#createDraftEditor(this.#draft, folder.name, expanded));
-      if (expanded) {
-        const children = this.#container.ownerDocument.createElement("ul");
-        children.className = "library-level";
-        children.setAttribute("role", "group");
-        for (const child of folder.folders) children.append(this.#renderFolder(child));
-        for (const map of folder.maps) children.append(this.#renderMap(map));
-        item.append(children);
-      }
-      return item;
+  #renderMap(map: LibraryMapNode): HTMLLIElement {
+    const key = mapKey(map.id);
+    const item = this.#item(key, "library-map");
+    const selection: ConcreteSelection = { kind: "map", mapId: map.id };
+    item.setAttribute("aria-selected", String(sameLibrarySelection(this.#state!.selection, selection)));
+    if (this.#state!.currentMapId === map.id) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+    const editing = this.#draft?.kind === "rename"
+      && sameLibrarySelection(this.#draft.selection, selection);
+    const row = editing
+      ? this.#ensureDraftEditor(this.#draft!, this.#draftState("map", false)).element
+      : this.#readRow(key, selection, map.name, false);
+    item.replaceChildren(row);
+    return item;
+  }
+
+  #renderDraftItem(draft: LibraryDraft): HTMLLIElement {
+    if (!this.#draftItem) {
+      this.#draftItem = this.#document.createElement("li");
+      this.#draftItem.className = "library-item library-draft-item";
+      this.#draftItem.setAttribute("role", "treeitem");
     }
+    const kind = draft.kind === "new-folder" ? "folder" : "map";
+    this.#draftItem.replaceChildren(this.#ensureDraftEditor(
+      draft,
+      { kind, selected: false, current: false, dirty: false },
+    ).element);
+    return this.#draftItem;
+  }
 
-    const row = this.#createRow({ kind: "folder", path: folder.path });
-    row.dataset.folderPath = folder.path;
-    row.classList.toggle(
-      "selected",
-      state.selection?.kind === "folder" && state.selection.path === folder.path,
-    );
-    row.classList.toggle("dirty", state.dirtyFolderPaths.has(folder.path));
-    row.addEventListener("click", () => {
-      this.#callbacks.onSelect({ kind: "folder", path: folder.path });
-      this.#callbacks.onToggleFolder(folder.path, !expanded);
-    });
-    row.addEventListener("dragover", (event) => this.#onFolderDragOver(event, folder.path));
-    row.addEventListener("dragleave", (event) => this.#onFolderDragLeave(event, folder.path));
-    row.addEventListener("drop", (event) => this.#onFolderDrop(event, folder.path));
-
-    const arrow = this.#container.ownerDocument.createElement("span");
-    arrow.className = "folder-arrow";
-    arrow.append(createMindMapIcon(this.#container.ownerDocument, Down));
-    const folderIcon = this.#container.ownerDocument.createElement("span");
-    folderIcon.className = "library-item-icon library-folder-icon";
-    folderIcon.append(
-      createMindMapIcon(this.#container.ownerDocument, expanded ? FolderOpen : FolderClose),
-    );
-    const name = this.#container.ownerDocument.createElement("span");
-    name.className = "library-item-name";
-    name.textContent = folder.name;
-    row.append(arrow, folderIcon, name);
-    if (state.dirtyFolderPaths.has(folder.path)) {
-      row.append(this.#createDirtyMarker());
-      row.setAttribute("aria-label", `${folder.name}，有未保存修改`);
-    }
-    item.append(row);
-
-    if (expanded) {
-      const children = this.#container.ownerDocument.createElement("ul");
-      children.className = "library-level";
-      children.setAttribute("role", "group");
-      this.#appendDraftIfNeeded(children, folder.path);
-      for (const child of folder.folders) children.append(this.#renderFolder(child));
-      for (const map of folder.maps) children.append(this.#renderMap(map));
-      item.append(children);
+  #item(key: string, typeClass: string): HTMLLIElement {
+    let item = this.#items.get(key);
+    if (!item) {
+      item = this.#document.createElement("li");
+      item.className = `library-item ${typeClass}`;
+      item.setAttribute("role", "treeitem");
+      item.dataset.treeKey = key;
+      this.#items.set(key, item);
     }
     return item;
   }
 
-  #renderMap(map: { readonly id: string; readonly path: string; readonly name: string }): HTMLLIElement {
-    const state = this.#state!;
-    const item = this.#container.ownerDocument.createElement("li");
-    item.className = "library-item library-map";
-    item.setAttribute("role", "treeitem");
-    const selection: Exclude<LibrarySelection, null> = { kind: "map", mapId: map.id };
-
-    if (
-      this.#draft?.kind === "rename"
-      && this.#draft.selection.kind === "map"
-      && this.#draft.selection.mapId === map.id
-    ) {
-      item.append(this.#createDraftEditor(this.#draft, map.name));
-      return item;
+  #readRow(
+    key: string,
+    selection: ConcreteSelection,
+    name: string,
+    expanded: boolean,
+  ): HTMLButtonElement {
+    let existingRow = this.#rows.get(key);
+    if (!existingRow) {
+      const createdRow = this.#document.createElement("button");
+      createdRow.type = "button";
+      createdRow.className = "library-row";
+      const chrome = createLibraryRowChrome(this.#document, createdRow);
+      const label = this.#document.createElement("span");
+      label.className = "library-item-name";
+      chrome.nameSlot.replaceChildren(label);
+      this.#rowChromes.set(createdRow, chrome);
+      this.#rows.set(key, createdRow);
+      createdRow.addEventListener("click", () => {
+        const currentSelection = selectionForRow(createdRow);
+        if (!currentSelection) return;
+        this.#callbacks.onSelect(currentSelection);
+        if (currentSelection.kind === "folder") {
+          this.#callbacks.onToggleFolder(
+            currentSelection.path,
+            !(this.#state?.expandedFolders.has(currentSelection.path) ?? false),
+          );
+        } else {
+          this.#callbacks.onOpenMap(currentSelection.mapId);
+        }
+      });
+      existingRow = createdRow;
     }
-
-    const row = this.#createRow(selection);
-    row.dataset.mapId = map.id;
-    row.classList.toggle(
-      "selected",
-      state.selection?.kind === "map" && state.selection.mapId === map.id,
-    );
-    row.classList.toggle("current", state.currentMapId === map.id);
-    row.classList.toggle("dirty", state.dirtyMapIds.has(map.id));
-    row.addEventListener("click", () => {
-      this.#callbacks.onSelect(selection);
-      this.#callbacks.onOpenMap(map.id);
-    });
-    const spacer = this.#container.ownerDocument.createElement("span");
-    spacer.className = "folder-arrow folder-arrow-spacer";
-    const icon = this.#container.ownerDocument.createElement("span");
-    icon.className = "library-item-icon map-icon";
-    icon.append(createMindMapIcon(this.#container.ownerDocument, MindmapMap));
-    const name = this.#container.ownerDocument.createElement("span");
-    name.className = "library-item-name";
-    name.textContent = map.name;
-    row.append(spacer, icon, name);
-    if (state.dirtyMapIds.has(map.id)) {
-      row.append(this.#createDirtyMarker());
-      row.setAttribute("aria-label", `${map.name}，有未保存修改`);
-    }
-    item.append(row);
-    return item;
-  }
-
-  #createRow(selection: Exclude<LibrarySelection, null>): HTMLButtonElement {
-    const row = this.#container.ownerDocument.createElement("button");
-    row.type = "button";
-    row.className = "library-row";
-    row.draggable = true;
-    row.addEventListener("dragstart", (event) => {
-      this.#dragged = selection;
-      row.classList.add("dragging");
-      event.dataTransfer?.setData("text/plain", "mind-map-library-entry");
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-    });
-    row.addEventListener("dragend", () => {
-      row.classList.remove("dragging");
-      this.#dragged = null;
-      this.#clearHoverTimer();
-      this.#clearDropClasses();
-    });
+    const row = existingRow;
+    setSelectionDataset(row, selection);
+    this.#dragDrop.bindRow(row, selection);
+    if (selection.kind === "folder") this.#dragDrop.bindFolderTarget(row, selection.path);
+    this.#updateReadRow(row, selection, name, expanded);
     return row;
   }
 
-  #appendDraftIfNeeded(list: HTMLUListElement, parentPath: string): void {
-    const draft = this.#draft;
-    if (!draft || draft.kind === "rename" || draft.parentPath !== parentPath) return;
-    const item = this.#container.ownerDocument.createElement("li");
-    item.className = "library-item library-draft-item";
-    item.append(this.#createDraftEditor(draft, ""));
-    list.append(item);
+  #updateReadRow(
+    row: HTMLButtonElement,
+    selection: ConcreteSelection,
+    name: string,
+    expanded: boolean,
+  ): void {
+    const state = this.#state!;
+    const chrome = this.#rowChromes.get(row);
+    if (!chrome) return;
+    const dirty = selection.kind === "folder"
+      ? state.dirtyFolderPaths.has(selection.path)
+      : state.dirtyMapIds.has(selection.mapId);
+    const selected = sameLibrarySelection(state.selection, selection);
+    const current = selection.kind === "map" && state.currentMapId === selection.mapId;
+    updateLibraryRowChrome(chrome, {
+      kind: selection.kind,
+      expanded,
+      selected,
+      current,
+      dirty,
+    });
+    const label = chrome.nameSlot.querySelector<HTMLElement>(".library-item-name");
+    if (label && label.textContent !== name) label.textContent = name;
+    if (dirty) row.setAttribute("aria-label", `${name}，有未保存修改`);
+    else row.removeAttribute("aria-label");
   }
 
-  #createDraftEditor(
+  #ensureDraftEditor(
     draft: LibraryDraft,
-    value: string,
-    folderExpanded = false,
-  ): HTMLElement {
-    const editor = this.#container.ownerDocument.createElement("div");
-    editor.className = "library-inline-editor";
-    editor.classList.toggle("is-rename", draft.kind === "rename");
-    const renamedSelection = draft.kind === "rename" ? draft.selection : null;
-    const selected = sameSelection(this.#state?.selection ?? null, renamedSelection);
-    const current = renamedSelection?.kind === "map"
-      && this.#state?.currentMapId === renamedSelection.mapId;
-    const dirty = renamedSelection?.kind === "folder"
-      ? this.#state?.dirtyFolderPaths.has(renamedSelection.path) === true
-      : renamedSelection?.kind === "map"
-        && this.#state?.dirtyMapIds.has(renamedSelection.mapId) === true;
-    editor.classList.toggle("selected", selected);
-    editor.classList.toggle("current", current);
-    editor.classList.toggle("dirty", dirty);
-    const spacer = this.#container.ownerDocument.createElement("span");
-    spacer.className = "folder-arrow folder-arrow-spacer";
-    const icon = this.#container.ownerDocument.createElement("span");
-    icon.className = "library-item-icon";
-    const isFolder = draft.kind === "new-folder"
-      || (draft.kind === "rename" && draft.selection.kind === "folder");
-    if (isFolder && draft.kind === "rename") {
-      spacer.append(createMindMapIcon(this.#container.ownerDocument, Down));
+    state: LibraryInlineEditorState,
+  ): LibraryInlineEditor {
+    if (!this.#draftEditor || !sameLibraryDraft(this.#draftEditor.draft, draft)) {
+      this.#draftEditor = new LibraryInlineEditor(
+        this.#document,
+        draft,
+        this.#initialDraftValue(draft),
+        state,
+        {
+          onCommit: (value) => { this.#attemptDraftCommit(value); },
+          onCancel: () => this.cancelDraft(),
+        },
+      );
+      const editor = this.#draftEditor;
+      this.#document.defaultView?.queueMicrotask(() => {
+        if (this.#draftEditor === editor) editor.focusAndSelect();
+      });
+    } else {
+      this.#draftEditor.update(state);
     }
-    icon.classList.toggle("library-folder-icon", isFolder);
-    icon.classList.toggle("map-icon", !isFolder);
-    icon.append(createMindMapIcon(
-      this.#container.ownerDocument,
-      isFolder ? (folderExpanded ? FolderOpen : FolderClose) : MindmapMap,
-    ));
-    const input = this.#container.ownerDocument.createElement("input");
-    input.type = "text";
-    input.value = value;
-    input.setAttribute("aria-label", draft.kind === "rename" ? "新名称" : "项目名称");
-    const cancel = this.#container.ownerDocument.createElement("button");
-    cancel.type = "button";
-    cancel.className = "inline-cancel";
-    cancel.hidden = true;
-    cancel.addEventListener("click", () => this.cancelDraft());
-    const error = this.#container.ownerDocument.createElement("span");
-    error.className = "inline-error";
-    error.setAttribute("role", "alert");
-    input.addEventListener("input", () => {
-      error.textContent = "";
-      input.removeAttribute("aria-invalid");
-    });
-    input.addEventListener("keydown", (event) => {
-      if (
-        event.key === "Escape"
-        && !event.ctrlKey
-        && !event.altKey
-        && !event.metaKey
-        && !event.shiftKey
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        this.cancelDraft();
-        return;
-      }
-      if (
-        event.key !== "Enter"
-        || event.isComposing
-        || event.keyCode === 229
-        || event.ctrlKey
-        || event.altKey
-        || event.metaKey
-        || event.shiftKey
-      ) return;
-      event.preventDefault();
-      this.#attemptDraftCommit();
-    });
-    input.addEventListener("blur", () => this.#attemptDraftCommit());
-    editor.append(spacer, icon, input);
-    if (dirty) editor.append(this.#createDirtyMarker());
-    editor.append(cancel, error);
-    this.#draftInput = input;
-    this.#draftError = error;
-    return editor;
+    return this.#draftEditor;
   }
 
-  #attemptDraftCommit(): void {
-    if (!this.#draft || !this.#draftInput) return;
-    const validation = this.#callbacks.validateDraft(this.#draft, this.#draftInput.value);
+  #draftState(kind: "folder" | "map", expanded: boolean): LibraryInlineEditorState {
+    const state = this.#state!;
+    const selection = this.#draft?.kind === "rename" ? this.#draft.selection : null;
+    return {
+      kind,
+      expanded,
+      selected: sameLibrarySelection(state.selection, selection),
+      current: selection?.kind === "map" && state.currentMapId === selection.mapId,
+      dirty: selection?.kind === "folder"
+        ? state.dirtyFolderPaths.has(selection.path)
+        : selection?.kind === "map" && state.dirtyMapIds.has(selection.mapId),
+    };
+  }
+
+  #attemptDraftCommit(value: string): void {
+    const draft = this.#draft;
+    if (!draft) return;
+    const validation = this.#callbacks.validateDraft(draft, value);
     if (validation) {
       this.#showDraftError(validation);
-      queueMicrotask(() => this.#draftInput?.focus());
+      this.#document.defaultView?.queueMicrotask(() => this.#draftEditor?.input.focus());
       return;
     }
-    this.#commitDraft(this.#draftInput.value);
+    this.#commitDraft(value);
   }
 
   #commitDraft(value: string): boolean {
@@ -471,175 +401,97 @@ export class LibraryTreeView {
     const error = this.#callbacks.commitDraft(draft, value);
     if (error) {
       this.#showDraftError(error);
-      queueMicrotask(() => this.#draftInput?.focus());
+      this.#document.defaultView?.queueMicrotask(() => this.#draftEditor?.input.focus());
       return false;
     }
     this.#draft = null;
-    this.#draftInput = null;
-    this.#draftError = null;
+    this.#resetDraftEditor();
     this.#rerender();
     return true;
   }
 
   #showDraftError(message: string): void {
-    if (this.#draftError) this.#draftError.textContent = message;
-    this.#draftInput?.setAttribute("aria-invalid", "true");
+    this.#draftEditor?.showError(message);
   }
 
-  #createDirtyMarker(): HTMLElement {
-    const marker = this.#container.ownerDocument.createElement("span");
-    marker.className = "library-dirty-marker";
-    marker.textContent = "*";
-    marker.title = "有未保存修改";
-    marker.setAttribute("aria-hidden", "true");
-    return marker;
+  #initialDraftValue(draft: LibraryDraft): string {
+    return this.#state ? draftInitialValue(draft, this.#state.payload) : "";
   }
 
-  #draftInitialValue(draft: LibraryDraft): string {
-    if (draft.kind !== "rename" || !this.#state) return "";
-    if (draft.selection.kind === "folder") return basename(draft.selection.path);
-    const mapId = draft.selection.mapId;
-    return this.#state.payload.maps.find((map) => map.id === mapId)?.path
-      .split("/")
-      .at(-1) ?? "";
-  }
-
-  #focusDraft(): void {
-    const draft = this.#draft;
-    if (!draft || !this.#draftInput) return;
-    if (draft.kind === "rename" && this.#draftInput.value.length === 0) {
-      this.#draftInput.value = this.#draftInitialValue(draft);
-    }
-    queueMicrotask(() => {
-      this.#draftInput?.focus();
-      this.#draftInput?.select();
-    });
+  #resetDraftEditor(): void {
+    this.#draftEditor = null;
+    this.#draftItem = null;
   }
 
   #rerender(): void {
     if (this.#state) this.render(this.#state);
   }
 
-  #onFolderDragOver(event: DragEvent, path: string): void {
-    if (!this.#dragged) return;
-    event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    (event.currentTarget as HTMLElement).classList.add("drop-target");
-    if (!this.#state?.expandedFolders.has(path) && this.#hoverPath !== path) {
-      this.#clearHoverTimer();
-      this.#hoverPath = path;
-      this.#hoverTimer = window.setTimeout(() => {
-        this.#hoverTimer = null;
-        this.#hoverPath = null;
-        this.#callbacks.onToggleFolder(path, true);
-      }, 650);
+  #createEmptyState(): HTMLElement {
+    const empty = this.#document.createElement("div");
+    empty.className = "library-empty";
+    const icon = this.#document.createElement("span");
+    icon.className = "library-empty-icon";
+    icon.append(createIconParkIcon(this.#document, MindmapMap, {
+      classNames: "mind-map-icon",
+    }));
+    const title = this.#document.createElement("strong");
+    title.textContent = "资料库还是空的";
+    const message = this.#document.createElement("p");
+    message.textContent = "新建一张脑图，开始整理想法。";
+    empty.append(icon, title, message);
+    return empty;
+  }
+
+  #sweepCaches(root: FolderTreeNode): void {
+    const keys = new Set<string>();
+    const folderPaths = new Set<string>();
+    collectModelKeys(root, keys, folderPaths);
+    for (const key of this.#items.keys()) {
+      if (!keys.has(key)) {
+        this.#items.delete(key);
+        this.#rows.delete(key);
+      }
     }
-  }
-
-  #onFolderDragLeave(event: DragEvent, path: string): void {
-    const row = event.currentTarget as HTMLElement;
-    if (event.relatedTarget instanceof Node && row.contains(event.relatedTarget)) return;
-    row.classList.remove("drop-target");
-    if (this.#hoverPath === path) this.#clearHoverTimer();
-  }
-
-  #onFolderDrop(event: DragEvent, path: string): void {
-    event.preventDefault();
-    event.stopPropagation();
-    if (this.#dragged) this.#callbacks.onMove(this.#dragged, path);
-    this.#dragged = null;
-    this.#clearHoverTimer();
-    this.#clearDropClasses();
-  }
-
-  readonly #onRootDragOver = (event: DragEvent): void => {
-    if (!this.#dragged) return;
-    event.preventDefault();
-    this.#rootDropTarget.classList.add("drop-target");
-  };
-
-  readonly #onRootDragLeave = (): void => {
-    this.#rootDropTarget.classList.remove("drop-target");
-  };
-
-  readonly #onRootDrop = (event: DragEvent): void => {
-    event.preventDefault();
-    if (this.#dragged) this.#callbacks.onMove(this.#dragged, "");
-    this.#dragged = null;
-    this.#clearHoverTimer();
-    this.#clearDropClasses();
-  };
-
-  #clearHoverTimer(): void {
-    if (this.#hoverTimer !== null) window.clearTimeout(this.#hoverTimer);
-    this.#hoverTimer = null;
-    this.#hoverPath = null;
-  }
-
-  #clearDropClasses(): void {
-    this.#rootDropTarget.classList.remove("drop-target");
-    for (const element of this.#container.querySelectorAll(".drop-target, .dragging")) {
-      element.classList.remove("drop-target", "dragging");
+    for (const path of this.#folderLists.keys()) {
+      if (!folderPaths.has(path)) this.#folderLists.delete(path);
     }
   }
 }
 
-function sameSelection(left: LibrarySelection, right: LibrarySelection): boolean {
-  if (!left || !right) return false;
-  if (left.kind === "folder") return right.kind === "folder" && left.path === right.path;
-  return right.kind === "map" && left.mapId === right.mapId;
+function folderKey(path: string): string {
+  return `folder:${path}`;
 }
 
-function buildTree(payload: MindMapPayload): FolderTreeNode {
-  const root: MutableFolder = { path: "", name: "", folders: [], maps: [] };
-  const byPath = new Map<string, MutableFolder>([["", root]]);
-  for (const path of [...payload.folders].sort(comparePath)) {
-    const parentPath = dirname(path);
-    const folder: MutableFolder = { path, name: basename(path), folders: [], maps: [] };
-    byPath.set(path, folder);
-    byPath.get(parentPath)?.folders.push(folder);
-  }
-  for (const map of payload.maps) {
-    byPath.get(dirname(map.path))?.maps.push({ id: map.id, path: map.path, name: basename(map.path) });
-  }
-  sortFolder(root);
-  return root;
+function mapKey(id: string): string {
+  return `map:${id}`;
 }
 
-function findFolder(root: FolderTreeNode, path: string): FolderTreeNode | null {
-  for (const folder of root.folders) {
-    if (folder.path === path) return folder;
-    const nested = findFolder(folder, path);
-    if (nested) return nested;
+function setSelectionDataset(row: HTMLElement, selection: ConcreteSelection): void {
+  if (selection.kind === "folder") {
+    row.dataset.folderPath = selection.path;
+    delete row.dataset.mapId;
+  } else {
+    row.dataset.mapId = selection.mapId;
+    delete row.dataset.folderPath;
   }
+}
+
+function selectionForRow(row: HTMLElement): ConcreteSelection | null {
+  if (row.dataset.folderPath !== undefined) return { kind: "folder", path: row.dataset.folderPath };
+  if (row.dataset.mapId !== undefined) return { kind: "map", mapId: row.dataset.mapId };
   return null;
 }
 
-interface MutableFolder {
-  path: string;
-  name: string;
-  folders: MutableFolder[];
-  maps: Array<{ id: string; path: string; name: string }>;
-}
-
-function sortFolder(folder: MutableFolder): void {
-  const compare = (a: { name: string }, b: { name: string }): number =>
-    a.name.localeCompare(b.name, "zh-CN", { sensitivity: "base", numeric: true });
-  folder.folders.sort(compare);
-  folder.maps.sort(compare);
-  for (const child of folder.folders) sortFolder(child);
-}
-
-function dirname(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? "" : path.slice(0, index);
-}
-
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-
-function comparePath(a: string, b: string): number {
-  const depth = (path: string): number => path.split("/").length;
-  return depth(a) - depth(b) || a.localeCompare(b);
+function collectModelKeys(
+  folder: FolderTreeNode,
+  keys: Set<string>,
+  folderPaths: Set<string>,
+): void {
+  for (const child of folder.folders) {
+    keys.add(folderKey(child.path));
+    folderPaths.add(child.path);
+    collectModelKeys(child, keys, folderPaths);
+  }
+  for (const map of folder.maps) keys.add(mapKey(map.id));
 }

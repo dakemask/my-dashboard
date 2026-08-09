@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  ancestorFolderPaths,
   applyMindMapEvent,
+  canConnect,
   compareDisplayNames,
   comparableLibraryName,
+  connectionKey,
   createEmptyMindMapPayload,
   invertMindMapEvent,
+  isMapPathInsideFolder,
+  joinPath,
   normalizeFolderName,
   normalizeMapName,
+  replacePathPrefix,
+  samePath,
   sameLibraryName,
   validateMindMapPayload,
   type MindMapDocument,
@@ -61,6 +68,29 @@ describe("Mind Map names and model", () => {
     const names = ["项目10", "项目2", "阿尔法"];
     names.sort(compareDisplayNames);
     expect(names.indexOf("项目2")).toBeLessThan(names.indexOf("项目10"));
+  });
+
+  it("centralizes logical path ancestry, replacement and map ownership", () => {
+    expect(joinPath("工作/计划", "季度")).toBe("工作/计划/季度");
+    expect(joinPath("", "根脑图")).toBe("根脑图");
+    expect(ancestorFolderPaths("工作/计划/季度")).toEqual(["工作", "工作/计划"]);
+    expect(replacePathPrefix("工作/计划/季度", "工作/计划", "归档")).toBe("归档/季度");
+    expect(samePath("Plan/ROADMAP", "plan/roadmap")).toBe(true);
+    expect(isMapPathInsideFolder("工作/计划/季度", "工作/计划")).toBe(true);
+    expect(isMapPathInsideFolder("工作/计划", "工作/计划")).toBe(false);
+    expect(isMapPathInsideFolder("PLAN/季度", "plan")).toBe(true);
+  });
+
+  it("centralizes endpoint identity, self-connect and duplicate-connect checks", () => {
+    const map = fixture().maps[0]!;
+    const from = { nodeId: "node-1", side: "right" } as const;
+    const to = { nodeId: "node-2", side: "left" } as const;
+    expect(connectionKey(from, to)).toBe("node-1\u0000right\u0000node-2\u0000left");
+    expect(canConnect(map, from, to)).toBe(false);
+    expect(canConnect(map, from, { nodeId: "node-1", side: "left" })).toBe(false);
+    expect(canConnect(map, from, { nodeId: "missing", side: "left" })).toBe(false);
+    expect(canConnect(map, from, { nodeId: "node-2", side: "diagonal" } as never)).toBe(false);
+    expect(canConnect(map, { ...from, side: "top" }, to)).toBe(true);
   });
 
   it("strictly validates references, duplicates, paths and finite frames", () => {
@@ -314,6 +344,15 @@ describe("Mind Map reversible events", () => {
         to: { nodeId: "node-1", side: "left" },
       },
     })).toThrow(/itself/);
+    expect(() => applyMindMapEvent(payload, {
+      type: "add-arrow",
+      mapId: "map-1",
+      arrow: {
+        id: "duplicate",
+        from: { nodeId: "node-1", side: "right" },
+        to: { nodeId: "node-2", side: "left" },
+      },
+    })).toThrow(/duplicate/i);
     expect(payload).toEqual(original);
   });
 });

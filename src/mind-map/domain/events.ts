@@ -1,4 +1,14 @@
-import { isSameOrDescendant, normalizeFolderPath, normalizeMapPath, parentPath } from "./names";
+import { connectionRejection } from "./connections";
+import {
+  comparablePath,
+  isMapPathInsideFolder,
+  isSameOrDescendant,
+  isSameOrDescendantPath,
+  normalizeFolderPath,
+  normalizeMapPath,
+  parentPath,
+  replacePathPrefix,
+} from "./names";
 import {
   validateMindMapArrow,
   validateMindMapDocument,
@@ -31,7 +41,7 @@ export function applyMindMapEvent(
       const path = requireExistingFolder(payload, event.path);
       return validateMindMapPayload({
         folders: payload.folders.filter((candidate) => !isSameOrDescendant(candidate, path)),
-        maps: payload.maps.filter((map) => !isMapInsideFolder(map, path)),
+        maps: payload.maps.filter((map) => !isMapPathInsideFolder(map.path, path)),
       });
     }
     case "restore-folder": {
@@ -43,7 +53,7 @@ export function applyMindMapEvent(
       if (event.folders.some((path) => !isSameOrDescendant(path, rootPath))) {
         throw new TypeError("A restored folder snapshot contains an unrelated folder.");
       }
-      if (event.maps.some((map) => !isMapInsideFolder(map, rootPath))) {
+      if (event.maps.some((map) => !isMapPathInsideFolder(map.path, rootPath))) {
         throw new TypeError("A restored folder snapshot contains an unrelated map.");
       }
       return validateMindMapPayload({
@@ -55,23 +65,17 @@ export function applyMindMapEvent(
       const fromPath = requireExistingFolder(payload, event.fromPath);
       const toPath = requireNormalizedFolderPath(event.toPath);
       const targetParent = parentPath(toPath);
-      if (targetParent && isSameOrDescendantComparable(targetParent, fromPath)) {
+      if (targetParent && isSameOrDescendantPath(targetParent, fromPath)) {
         throw new TypeError("A folder cannot be moved inside itself.");
       }
       if (targetParent && !hasFolder(payload, targetParent)) {
         throw new TypeError(`Target parent folder does not exist: ${targetParent}`);
       }
-      const relocateFolderPath = (path: string): string => path === fromPath
-        ? toPath
-        : path.startsWith(`${fromPath}/`)
-          ? `${toPath}${path.slice(fromPath.length)}`
-          : path;
-      const relocateMapPath = (path: string): string => path.startsWith(`${fromPath}/`)
-        ? `${toPath}${path.slice(fromPath.length)}`
-        : path;
       return validateMindMapPayload({
-        folders: payload.folders.map(relocateFolderPath),
-        maps: payload.maps.map((map) => ({ ...map, path: relocateMapPath(map.path) })),
+        folders: payload.folders.map((path) => replacePathPrefix(path, fromPath, toPath)),
+        maps: payload.maps.map((map) => isMapPathInsideFolder(map.path, fromPath)
+          ? { ...map, path: replacePathPrefix(map.path, fromPath, toPath) }
+          : map),
       });
     }
     case "create-map":
@@ -140,10 +144,22 @@ export function applyMindMapEvent(
     }
     case "add-arrow": {
       const arrow = validateMindMapArrow(event.arrow);
-      return replaceMap(payload, event.mapId, (map) => ({
-        ...map,
-        arrows: [...map.arrows, arrow],
-      }));
+      return replaceMap(payload, event.mapId, (map) => {
+        const rejection = connectionRejection(map, arrow.from, arrow.to);
+        if (rejection === "invalid-side") {
+          throw new TypeError(`Arrow ${arrow.id} has an invalid connector side.`);
+        }
+        if (rejection === "missing-node") {
+          throw new TypeError(`Arrow ${arrow.id} refers to a missing node.`);
+        }
+        if (rejection === "self") {
+          throw new TypeError(`Arrow ${arrow.id} cannot connect a node to itself.`);
+        }
+        if (rejection === "duplicate") {
+          throw new TypeError("Completely duplicate arrow connections are not allowed.");
+        }
+        return { ...map, arrows: [...map.arrows, arrow] };
+      });
     }
     case "delete-objects": {
       const nodeIds = uniqueIdentifiers(event.nodeIds, "node id");
@@ -192,7 +208,7 @@ export function invertMindMapEvent(
         type: "restore-folder",
         rootPath: path,
         folders: before.folders.filter((folder) => isSameOrDescendant(folder, path)),
-        maps: before.maps.filter((map) => isMapInsideFolder(map, path)),
+        maps: before.maps.filter((map) => isMapPathInsideFolder(map.path, path)),
       };
     }
     case "restore-folder":
@@ -312,10 +328,6 @@ function requireMap(payload: MindMapPayload, mapId: string): MindMapDocument {
   return map;
 }
 
-function isMapInsideFolder(map: MindMapDocument, folderPath: string): boolean {
-  return isSameOrDescendant(parentPath(map.path), folderPath);
-}
-
 function requireNode(map: MindMapDocument, nodeId: string): MindMapNode {
   const node = map.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) throw new TypeError(`Node does not exist: ${nodeId}`);
@@ -356,16 +368,6 @@ function requireNormalizedMapPath(value: string): string {
   const normalized = normalizeMapPath(value);
   if (normalized !== value) throw new TypeError(`Map path is not normalized: ${value}`);
   return value;
-}
-
-function comparablePath(path: string): string {
-  return path.normalize("NFC").toLocaleLowerCase("und");
-}
-
-function isSameOrDescendantComparable(path: string, ancestor: string): boolean {
-  const pathKey = comparablePath(path);
-  const ancestorKey = comparablePath(ancestor);
-  return pathKey === ancestorKey || pathKey.startsWith(`${ancestorKey}/`);
 }
 
 function validatePositions(values: readonly NodePosition[]): readonly NodePosition[] {

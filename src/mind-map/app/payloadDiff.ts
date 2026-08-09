@@ -1,4 +1,10 @@
-import type { MindMapDocument, MindMapPayload } from "../domain";
+import {
+  ancestorFolderPaths,
+  parentPath,
+  pathDepth,
+  type MindMapDocument,
+  type MindMapPayload,
+} from "../domain";
 import type { LibrarySelection } from "../library/treeView";
 
 export interface DirtyLibraryState {
@@ -18,34 +24,39 @@ export function computeDirtyLibraryState(
   const currentMaps = new Map(current.maps.map((map) => [map.id, map]));
   const baselineMaps = new Map(baseline.maps.map((map) => [map.id, map]));
   const dirtyMapIds = new Set<string>();
-  const changedPaths = new Set<string>();
+  const affectedFolderPaths = new Set<string>();
+  const markMapPath = (path: string): void => {
+    for (const folder of ancestorFolderPaths(path)) affectedFolderPaths.add(folder);
+  };
+  const markFolderPath = (path: string): void => {
+    for (const folder of ancestorFolderPaths(path)) affectedFolderPaths.add(folder);
+    affectedFolderPaths.add(path);
+  };
 
   for (const map of current.maps) {
     const saved = baselineMaps.get(map.id);
     if (!saved || documentKey(saved) !== documentKey(map)) {
       dirtyMapIds.add(map.id);
-      changedPaths.add(map.path);
-      if (saved) changedPaths.add(saved.path);
+      markMapPath(map.path);
+      if (saved) markMapPath(saved.path);
     }
   }
   for (const map of baseline.maps) {
-    if (!currentMaps.has(map.id)) changedPaths.add(map.path);
+    if (!currentMaps.has(map.id)) markMapPath(map.path);
   }
 
   const currentFolders = new Set(current.folders);
   const baselineFolders = new Set(baseline.folders);
   for (const path of currentFolders) {
-    if (!baselineFolders.has(path)) changedPaths.add(path);
+    if (!baselineFolders.has(path)) markFolderPath(path);
   }
   for (const path of baselineFolders) {
-    if (!currentFolders.has(path)) changedPaths.add(path);
+    if (!currentFolders.has(path)) markFolderPath(path);
   }
 
   const dirtyFolderPaths = new Set<string>();
   for (const folder of current.folders) {
-    if ([...changedPaths].some((path) => path === folder || path.startsWith(`${folder}/`))) {
-      dirtyFolderPaths.add(folder);
-    }
+    if (affectedFolderPaths.has(folder)) dirtyFolderPaths.add(folder);
   }
   return { mapIds: dirtyMapIds, folderPaths: dirtyFolderPaths };
 }
@@ -94,7 +105,7 @@ export function findHistoryFocus(before: MindMapPayload, after: MindMapPayload):
     .find((map): map is MindMapDocument => Boolean(map));
   if (removedMap) {
     return {
-      selection: nearestExistingParent(dirname(removedMap.path), afterFolderSet),
+      selection: nearestExistingParent(parentPath(removedMap.path), afterFolderSet),
       mapIdToOpen: null,
     };
   }
@@ -106,23 +117,14 @@ function documentKey(map: MindMapDocument): string {
 }
 
 function shallowestPath(paths: readonly string[]): string | null {
-  return [...paths].sort((left, right) => depth(left) - depth(right) || left.localeCompare(right))[0] ?? null;
+  return [...paths].sort((left, right) => pathDepth(left) - pathDepth(right) || left.localeCompare(right))[0] ?? null;
 }
 
 function nearestExistingParent(path: string, folders: ReadonlySet<string>): LibrarySelection {
   let candidate = path;
   while (candidate) {
     if (folders.has(candidate)) return { kind: "folder", path: candidate };
-    candidate = dirname(candidate);
+    candidate = parentPath(candidate);
   }
   return null;
-}
-
-function dirname(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? "" : path.slice(0, index);
-}
-
-function depth(path: string): number {
-  return path ? path.split("/").length : 0;
 }

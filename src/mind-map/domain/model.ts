@@ -1,11 +1,15 @@
 import {
+  connectionRejection,
+  isConnectorSide,
+} from "./connections";
+import {
+  comparablePath,
   compareLogicalPaths,
   normalizeFolderPath,
   normalizeMapPath,
   parentPath,
 } from "./names";
 import type {
-  ConnectorSide,
   MindMapArrow,
   MindMapDocument,
   MindMapEndpoint,
@@ -13,8 +17,6 @@ import type {
   MindMapPayload,
   NodeFrame,
 } from "./types";
-
-const connectorSides = new Set<ConnectorSide>(["top", "right", "bottom", "left"]);
 
 export function createEmptyMindMapPayload(): MindMapPayload {
   return { folders: [], maps: [] };
@@ -120,21 +122,27 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
   const arrows = record.arrows.map(validateMindMapArrow);
   assertUnique(nodes.map((node) => node.id), "node id");
   assertUnique(arrows.map((arrow) => arrow.id), "arrow id");
-  const nodeIds = new Set(nodes.map((node) => node.id));
-  const connections = new Set<string>();
+  const acceptedArrows: MindMapArrow[] = [];
 
   for (const arrow of arrows) {
-    if (!nodeIds.has(arrow.from.nodeId) || !nodeIds.has(arrow.to.nodeId)) {
+    const rejection = connectionRejection(
+      { nodes, arrows: acceptedArrows },
+      arrow.from,
+      arrow.to,
+    );
+    if (rejection === "invalid-side") {
+      throw new TypeError(`Arrow ${arrow.id} has an invalid connector side.`);
+    }
+    if (rejection === "missing-node") {
       throw new TypeError(`Arrow ${arrow.id} refers to a missing node.`);
     }
-    if (arrow.from.nodeId === arrow.to.nodeId) {
+    if (rejection === "self") {
       throw new TypeError(`Arrow ${arrow.id} cannot connect a node to itself.`);
     }
-    const key = endpointKey(arrow.from, arrow.to);
-    if (connections.has(key)) {
+    if (rejection === "duplicate") {
       throw new TypeError("Completely duplicate arrow connections are not allowed.");
     }
-    connections.add(key);
+    acceptedArrows.push(arrow);
   }
 
   return {
@@ -148,18 +156,10 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
 function validateEndpoint(value: unknown, label: string): MindMapEndpoint {
   const record = requireExactRecord(value, ["nodeId", "side"], label);
   const nodeId = requireIdentifier(record.nodeId, `${label} nodeId`);
-  if (typeof record.side !== "string" || !connectorSides.has(record.side as ConnectorSide)) {
+  if (!isConnectorSide(record.side)) {
     throw new TypeError(`${label} side is invalid.`);
   }
-  return { nodeId, side: record.side as ConnectorSide };
-}
-
-function endpointKey(from: MindMapEndpoint, to: MindMapEndpoint): string {
-  return `${from.nodeId}\u0000${from.side}\u0000${to.nodeId}\u0000${to.side}`;
-}
-
-function comparablePath(path: string): string {
-  return path.normalize("NFC").toLocaleLowerCase("und");
+  return { nodeId, side: record.side };
 }
 
 function compareDocuments(left: MindMapDocument, right: MindMapDocument): number {

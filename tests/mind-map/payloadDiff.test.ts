@@ -27,6 +27,20 @@ describe("payload diff helpers", () => {
     expect([...dirty.folderPaths].sort()).toEqual(["工作", "工作/计划"]);
   });
 
+  it("does not mark a same-path sibling folder dirty for a root map change", () => {
+    const baseline: MindMapPayload = {
+      folders: ["计划"],
+      maps: [map("root", "计划")],
+    };
+    const current: MindMapPayload = {
+      folders: baseline.folders,
+      maps: [map("root", "计划", "更新")],
+    };
+    const dirty = computeDirtyLibraryState(current, baseline);
+    expect([...dirty.mapIds]).toEqual(["root"]);
+    expect([...dirty.folderPaths]).toEqual([]);
+  });
+
   it("focuses the map changed by a cross-map history step", () => {
     const before: MindMapPayload = { folders: [], maps: [map("a", "A"), map("b", "B")] };
     const after: MindMapPayload = { folders: [], maps: [map("a", "A", "changed"), map("b", "B")] };

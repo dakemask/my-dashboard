@@ -1,3 +1,5 @@
+import { ancestorFolderPaths, replacePathPrefix } from "../domain";
+
 const PREFIX = "my-dashboard.mind-maps.";
 const SIDEBAR_KEY = `${PREFIX}sidebar-open`;
 const LAST_MAP_KEY = `${PREFIX}last-map-id`;
@@ -54,23 +56,14 @@ export class MindMapPreferences {
   }
 
   expandAncestors(path: string): void {
-    const segments = path.split("/").filter(Boolean);
-    let current = "";
-    for (const segment of segments.slice(0, -1)) {
-      current = current ? `${current}/${segment}` : segment;
-      this.#expandedFolders.add(current);
-    }
+    for (const ancestor of ancestorFolderPaths(path)) this.#expandedFolders.add(ancestor);
     this.#persistExpanded();
   }
 
   remapFolderPrefix(from: string, to: string): void {
     const next = new Set<string>();
     for (const path of this.#expandedFolders) {
-      if (path === from || path.startsWith(`${from}/`)) {
-        next.add(`${to}${path.slice(from.length)}`);
-      } else {
-        next.add(path);
-      }
+      next.add(replacePathPrefix(path, from, to));
     }
     this.#expandedFolders = next;
     this.#persistExpanded();

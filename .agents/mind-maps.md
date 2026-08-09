@@ -75,6 +75,8 @@ payload 多余或缺失字段、非法路径、重复 ID、无效几何、缺失
 
 页面使用浅色主题，由顶栏、左侧固定宽度浮动资料库、SVG 自由画布、版本区域、toast 和确认对话框组成。资料库浮在画布上方，不改变画布业务坐标。
 
+普通/成功业务 toast 显示 4200 ms 并使用 `role=status`；短暂错误显示 6200 ms 并使用 `role=alert`。确认对话框固定按“取消→普通确认→破坏性确认”排列，初始焦点在取消；只有存在安全取消选项时 Escape 或遮罩才关闭，关闭后恢复触发器焦点。
+
 顶栏只读显示当前脑图名称，并提供：首页、资料库开关、Shared 标准上传/拉取区、添加文本、添加箭头和复位。自动保存失败后才由模块额外显示“重试保存”。没有当前脑图时禁用添加文本、添加箭头和复位。
 
 资料库首次默认打开，之后按本机偏好恢复；打开脑图不关闭资料库。
@@ -188,24 +190,36 @@ Backspace、Ctrl+A 和 Escape 不是模块命令；在输入控件中保留文�
 | `src/mind-map/domain/types.ts` | payload、entity 和 event 类型 |
 | `src/mind-map/domain/model.ts` | 完整校验与规范排序 |
 | `src/mind-map/domain/names.ts` | 名称、路径、归属辅助和显示排序 |
+| `src/mind-map/domain/connections.ts` | endpoint、side、自连和重复连接的统一判断 |
 | `src/mind-map/domain/events.ts` | event apply/invert |
 | `src/mind-map/domain/codec.ts` | payload 与远端受管文件映射 |
 | `src/mind-map/app/controller.ts` | 唯一 runtime 持有者；协调业务命令、投影、自动保存，并向 Shared 同步 UI 提供门禁 |
+| `src/mind-map/app/libraryCommands.ts` | 资料库新建、重命名、移动和删除的纯命令计划 |
+| `src/mind-map/app/canvasCommands.ts` | 节点、文字、frame、箭头和删除选择的纯命令计划 |
+| `src/mind-map/app/pageCommands.ts` | 页面唯一快捷键路由；一次 keydown 至多产生一个命令 |
 | `src/mind-map/app/payloadDiff.ts` | dirty 资料库标记和跨图历史焦点 |
 | `src/mind-map/app/preferences.ts` | 侧栏、最近 map 和展开文件夹偏好 |
-| `src/mind-map/canvas/MindMapCanvas.ts` | SVG 投影与画布实时状态机 |
+| `src/mind-map/canvas/MindMapCanvas.ts` | 兼容 facade；协调画布投影、选择、文字和 pointer 模式 |
+| `src/mind-map/canvas/interactionController.ts` | pointer capture、各交互模式和共用 auto-pan 生命周期 |
+| `src/mind-map/canvas/textEditor.ts` | 稳定 textarea 上的文字草稿、IME 和提交状态 |
+| `src/mind-map/canvas/nodeLayout.ts`、`browserTextMeasurement.ts` | 节点布局规则和浏览器文字测量 |
+| `src/mind-map/canvas/keyedSvgRenderer.ts`、`svgRenderer.ts` | keyed SVG/textarea 投影及局部几何更新 |
 | `src/mind-map/canvas/geometry.ts` | 纯几何与命中计算 |
 | `src/mind-map/canvas/viewport.ts` | viewport 转换、缩放和适配 |
 | `src/mind-map/canvas/autoPan.ts` | 四类交互共用的自动平移 |
-| `src/mind-map/library/treeView.ts` | 资料库 DOM、名称草稿、折叠和拖放 |
-| `src/mind-map/ui/shell.ts` | 页面壳、顶栏、同步 UI 挂载点、业务 toast 和业务确认对话框 |
+| `src/mind-map/library/treeView.ts` | 兼容 facade；组合 keyed 资料库树、名称草稿和拖放 |
+| `src/mind-map/library/treeModel.ts`、`rowChrome.ts` | 资料库树模型和只读/编辑共用的 28px 行布局 |
+| `src/mind-map/library/inlineEditor.ts`、`dragDrop.ts` | IME 安全行内编辑及委托式拖放/悬停展开 |
+| `src/mind-map/ui/shell.ts` | 页面兼容 facade，组合 page view 与业务 feedback |
+| `src/mind-map/ui/pageView.ts`、`feedback.ts` | 顶栏/资料库壳，以及业务 toast/确认对话框 |
+| `src/mind-map/style.css`、`src/mind-map/styles/` | 固定顺序导入 base、shell、library、feedback、canvas 样式分区 |
 
 ### 状态所有者
 
 - Shared runtime 持有当前 payload、event 历史和保存同步系统状态。
 - controller 持有页面使用的 payload 投影、本地保存基线、当前 map、资料库选择和 snapshot；它是唯一持有 runtime 的业务对象。
-- canvas 持有画布选择、编辑、pointer、viewport、自动平移和临时 frame override。
-- tree 持有名称草稿、折叠交互和 HTML 拖放状态。
+- canvas facade 持有画布选择、viewport 和临时 frame override；interaction controller 独占 pointer capture 与自动平移生命周期，text editor 独占文字草稿，keyed renderer 只保存可复用 DOM/SVG 节点。
+- tree facade 持有名称草稿和折叠投影；inline editor 独占输入/IME 状态，drag/drop 组件独占原生拖放、650 ms 悬停 timer 与清理。
 - preferences 持有三类本机 UI 偏好。
 - DOM/SVG 只是投影，不能成为业务数据真源。
 
@@ -223,6 +237,14 @@ Canvas / Tree 用户命令
 - canvas、tree 和纯领域文件不得导入 Shared、访问存储或网络、直接修改 payload。
 - apply/invert、名称、校验、codec 和几何函数不得读取 DOM、时间、随机数或可变全局状态。
 - snapshot 只变化版本时间或 pending/conflict 时，只更新 shell 状态，不重建资料库或画布，以免中断 IME 和实时 pointer。
+- canvas 的 pointermove 只更新受影响节点、箭头和 overlay；普通投影通过稳定 key 复用节点、箭头和 textarea，不破坏光标、composition 或原生文字撤销。
+
+### 自动化测试重点
+
+- 名称/路径和连接 helper 覆盖同名 folder/map、真实子树归属、自连、重复连接和非法 endpoint。
+- 页面 command router 覆盖单次 Delete、精确 undo/redo、Alt 命令以及 F2/Escape 不接管。
+- canvas 覆盖文字测量、keyed DOM 身份、IME 草稿、各 pointer 模式的 capture/auto-pan 结束与取消。
+- tree/UI 覆盖可见取消按钮、Escape/IME、keyed 行、拖放 timer/dispose，以及 toast、dialog 顺序和焦点恢复。
 
 ## 5. 本模块的持久化定义
 

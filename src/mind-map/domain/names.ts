@@ -50,6 +50,15 @@ export function comparableLibraryName(input: string, kind: LibraryItemKind): str
   return normalized.toLocaleLowerCase("und");
 }
 
+/** Canonical comparison key for an already-normalized logical path. */
+export function comparablePath(path: string): string {
+  return path.normalize("NFC").toLocaleLowerCase("und");
+}
+
+export function samePath(left: string, right: string): boolean {
+  return comparablePath(left) === comparablePath(right);
+}
+
 export function sameLibraryName(
   left: string,
   right: string,
@@ -81,6 +90,26 @@ export function parentPath(path: string): string {
   return separator < 0 ? "" : path.slice(0, separator);
 }
 
+export function joinPath(parent: string, name: string): string {
+  return parent ? `${parent}/${name}` : name;
+}
+
+export function pathDepth(path: string): number {
+  return path ? path.split("/").length : 0;
+}
+
+/** Returns every folder above an item path, shallowest first. */
+export function ancestorFolderPaths(path: string): readonly string[] {
+  const parts = path.split("/").filter(Boolean);
+  const ancestors: string[] = [];
+  let current = "";
+  for (const part of parts.slice(0, -1)) {
+    current = joinPath(current, part);
+    ancestors.push(current);
+  }
+  return ancestors;
+}
+
 export function baseName(path: string): string {
   const separator = path.lastIndexOf("/");
   return separator < 0 ? path : path.slice(separator + 1);
@@ -88,6 +117,24 @@ export function baseName(path: string): string {
 
 export function isSameOrDescendant(path: string, ancestor: string): boolean {
   return path === ancestor || path.startsWith(`${ancestor}/`);
+}
+
+export function isSameOrDescendantPath(path: string, ancestor: string): boolean {
+  const pathKey = comparablePath(path);
+  const ancestorKey = comparablePath(ancestor);
+  return pathKey === ancestorKey || pathKey.startsWith(`${ancestorKey}/`);
+}
+
+export function replacePathPrefix(path: string, fromPath: string, toPath: string): string {
+  if (path === fromPath) return toPath;
+  return path.startsWith(`${fromPath}/`)
+    ? `${toPath}${path.slice(fromPath.length)}`
+    : path;
+}
+
+/** A same-path map is a sibling of the folder, not a child of it. */
+export function isMapPathInsideFolder(mapPath: string, folderPath: string): boolean {
+  return isSameOrDescendantPath(parentPath(mapPath), folderPath);
 }
 
 function normalizePath(input: string, normalizePart: (part: string) => string): string {
