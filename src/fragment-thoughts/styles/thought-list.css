@@ -6,6 +6,7 @@
 .ft-thought-card {
   min-width: 0;
   padding: 20px 21px 15px;
+  border-color: transparent;
   box-shadow: var(--ft-shadow-soft);
   transition:
     border-color 160ms ease,
@@ -14,16 +15,22 @@
 }
 
 .ft-thought-card:hover {
-  border-color: #d2dbe7;
+  border-color: transparent;
   box-shadow: 0 11px 30px rgb(31 46 75 / 7%);
 }
 
 .ft-thought-card.history-selected {
   background: linear-gradient(180deg, #fff 0%, #fbfdff 100%);
-  border-color: #b8caea;
-  box-shadow:
-    0 0 0 3px rgb(47 111 235 / 7%),
-    var(--ft-shadow-soft);
+  border-color: transparent;
+  box-shadow: var(--ft-shadow-soft);
+}
+
+.ft-thought-card.is-editing {
+  border-color: var(--ft-line-strong);
+}
+
+.ft-thought-card.is-editing:has(.ft-edit-input:focus) {
+  border-color: var(--ft-accent);
 }
 
 .ft-thought-highlight,
@@ -169,8 +176,7 @@
 .ft-edit-input:focus-visible {
   background: transparent;
   border: 0;
-  outline: 3px solid rgb(37 99 235 / 20%);
-  outline-offset: 2px;
+  outline: 0;
 }
 
 .ft-edit-input[aria-invalid="true"] {
