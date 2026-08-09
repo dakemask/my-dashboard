@@ -1,0 +1,160 @@
+.todo-graph {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid color-mix(in srgb, var(--status) 58%, #cbd5c9);
+  border-radius: 8px;
+  background-color: #fafcf9;
+  background-image:
+    linear-gradient(rgba(96, 118, 103, .055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(96, 118, 103, .055) 1px, transparent 1px);
+  background-size: 24px 24px;
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-inline: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
+  transform-origin: top center;
+  transition:
+    border-color .16s ease,
+    background-color .16s ease,
+    box-shadow .16s ease,
+    opacity .16s ease,
+    transform .22s cubic-bezier(.22, 1, .36, 1);
+}
+.todo-graph * { user-select: none; -webkit-user-select: none; }
+.todo-graph.is-expanding { animation: todo-graph-in .22s cubic-bezier(.22, 1, .36, 1) both; }
+.todo-graph.is-collapsing { opacity: 0; pointer-events: none; transform: translateY(-5px); }
+.todo-graph.is-panning { cursor: move; user-select: none; background-color: #f4f9f5; box-shadow: inset 0 0 0 2px rgba(22, 138, 83, .12); }
+.todo-graph-canvas { position: relative; width: max-content; min-width: 100%; padding: 18px 22px; }
+.todo-graph-lines { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.todo-graph-lines path { animation: none; shape-rendering: geometricPrecision; }
+.todo-graph-content { position: relative; z-index: 1; }
+.todo-task-groups { display: flex; align-items: center; gap: 52px; width: max-content; }
+.todo-task-chain { position: relative; display: flex; align-items: center; gap: 52px; border-radius: 10px; transition: transform .2s cubic-bezier(.22, 1, .36, 1), opacity .15s ease, filter .15s ease, box-shadow .15s ease, background-color .15s ease; }
+.todo-task-subtree { display: grid; justify-items: start; gap: 34px; }
+.todo-task-subtree.has-children { padding: 20px; border: 1px solid color-mix(in srgb, var(--status) 58%, #aeb9b1); border-radius: 7px; }
+.todo-task-chain.is-dragging { opacity: .42; filter: saturate(.65); }
+.todo-task-chain.is-drop-target { outline: 3px solid rgba(22, 138, 83, .32); outline-offset: 6px; background: rgba(232, 247, 238, .55); box-shadow: 0 10px 28px rgba(22, 138, 83, .16); }
+.todo-task-chain.is-drop-target::before {
+  content: "";
+  position: absolute;
+  top: 8%;
+  bottom: 8%;
+  left: -28px;
+  width: 3px;
+  border-radius: 999px;
+  background: #168a53;
+  box-shadow: 0 0 0 4px rgba(22, 138, 83, .12);
+  pointer-events: none;
+  animation: todo-drop-guide-in .14s ease-out both;
+}
+.todo-task-groups.is-drop-at-end { position: relative; }
+.todo-task-groups.is-drop-at-end::after {
+  content: "";
+  position: absolute;
+  top: 8%;
+  right: -28px;
+  bottom: 8%;
+  width: 3px;
+  border-radius: 999px;
+  background: #168a53;
+  box-shadow: 0 0 0 4px rgba(22, 138, 83, .12);
+  pointer-events: none;
+  animation: todo-drop-guide-in .14s ease-out both;
+}
+.todo-task-node { width: 188px; border: 1px solid var(--status); border-radius: 7px; background: #fff; overflow: hidden; box-shadow: 0 3px 10px color-mix(in srgb, var(--status) 11%, transparent); transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, opacity .15s ease; }
+.todo-task-node,
+.todo-task-node * { -webkit-tap-highlight-color: transparent; }
+.todo-task-node:hover { box-shadow: 0 8px 20px color-mix(in srgb, var(--status) 18%, transparent); }
+.todo-task-node[data-draggable="true"],
+.todo-task-node[data-draggable="true"] * { cursor: pointer; }
+.todo-task-node[data-draggable="true"] {
+  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
+  -webkit-touch-callout: none;
+}
+.todo-task-node-main { min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 7px 10px 6px 12px; }
+.todo-task-open { min-width: 0; height: 36px; flex: 1; display: flex; align-items: center; padding: 0 2px; border: 0; background: transparent; text-align: left; line-height: 21px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.todo-task-node[data-draggable="true"] .todo-checkbox:disabled { cursor: default; }
+.todo-task-children { padding-top: 0; }
+
+.todo-task-groups.is-reordering,
+.todo-graph.is-reordering .todo-task-groups {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.todo-task-groups.is-reordering > .todo-task-chain,
+.todo-graph.is-reordering .todo-task-chain {
+  transition: transform .2s cubic-bezier(.22, 1, .36, 1), opacity .15s ease, filter .15s ease, border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+  will-change: transform;
+}
+
+.todo-pointer-reorder-preview-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  overflow: visible;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.todo-pointer-reorder-preview {
+  overflow: visible;
+  opacity: .96;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: todo-pointer-preview-in .12s ease-out both;
+}
+
+.todo-pointer-reorder-preview-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 52px;
+  border-radius: 10px;
+  background: rgba(250, 253, 250, .96);
+  box-shadow: 0 18px 42px rgba(18, 62, 38, .24), 0 0 0 1px rgba(22, 138, 83, .28);
+  contain: layout paint style;
+}
+
+.todo-pointer-reorder-preview-content *,
+.todo-pointer-reorder-preview-content *::before,
+.todo-pointer-reorder-preview-content *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
+.todo-pointer-reorder-preview[data-kind="editor"] .todo-pointer-reorder-preview-content {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+@keyframes todo-graph-in {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes todo-pointer-preview-in {
+  from { opacity: 0; transform: scale(.985); }
+  to { opacity: .96; transform: scale(1); }
+}
+
+@keyframes todo-drop-guide-in {
+  from { opacity: 0; transform: scale(.8, 1); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.todos-rule-list { display: grid; gap: 12px; }
+.todo-rule-preview { --status: #4285d4; display: grid; gap: 8px; }
+.todo-rule-preview > .todo-card-summary > .todo-card-header { min-height: 59px; padding-left: 10px; }
+.todo-rule-task-node > .todo-task-node-main { min-height: 57px; padding-left: 12px; }
+.todo-rule-task-node .todo-task-open { cursor: pointer; }
+.todos-empty { margin: 0; padding: 14px; border: 1px dashed #cbd5c9; border-radius: 8px; background: rgba(255, 255, 255, .48); color: #748078; text-align: center; }

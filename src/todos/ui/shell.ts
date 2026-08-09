@@ -4,6 +4,7 @@ import {
   CloseSmall,
   Home,
 } from "@icon-park/svg";
+import { createIconOnlyButton } from "../../shared";
 import { createTodoIcon } from "./icons";
 
 export interface TodosShellElements {
@@ -69,8 +70,8 @@ export class TodosShell {
     addTodoButton.title = "添加待办";
     addTodoButton.setAttribute("aria-label", "添加待办");
     const openRulesButton = textButton(this.document, "周期待办", "todos-button subtle compact rules-toggle", Calendar);
-    openRulesButton.title = "打开周期待办模版";
-    openRulesButton.setAttribute("aria-label", "打开周期待办模版");
+    openRulesButton.title = "打开周期待办模板";
+    openRulesButton.setAttribute("aria-label", "打开周期待办模板");
     openRulesButton.setAttribute("aria-haspopup", "dialog");
     commandBar.append(addTodoButton, openRulesButton);
 
@@ -97,14 +98,18 @@ export class TodosShell {
   }
 
   showMessage(message: string, tone: "normal" | "success" | "error" = "normal"): void {
-    if (this.#toastTimer !== null) window.clearTimeout(this.#toastTimer);
+    const pageWindow = this.document.defaultView;
+    if (this.#toastTimer !== null) pageWindow?.clearTimeout(this.#toastTimer);
     this.elements.toast.textContent = message;
     this.elements.toast.dataset.tone = tone;
+    const isError = tone === "error";
+    this.elements.toast.setAttribute("role", isError ? "alert" : "status");
+    this.elements.toast.setAttribute("aria-live", isError ? "assertive" : "polite");
     this.elements.toast.hidden = false;
-    this.#toastTimer = window.setTimeout(() => {
+    this.#toastTimer = (pageWindow ?? window).setTimeout(() => {
       this.elements.toast.hidden = true;
       this.#toastTimer = null;
-    }, 4200);
+    }, isError ? 6200 : 4200);
   }
 
   setSaveFailure(failed: boolean): void {
@@ -112,7 +117,7 @@ export class TodosShell {
   }
 
   dispose(): void {
-    if (this.#toastTimer !== null) window.clearTimeout(this.#toastTimer);
+    if (this.#toastTimer !== null) this.document.defaultView?.clearTimeout(this.#toastTimer);
     this.elements.root.remove();
   }
 }
@@ -139,13 +144,9 @@ export function iconButton(
   icon: typeof Home,
   label: string,
 ): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "todos-icon-button";
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  button.append(createTodoIcon(document, icon));
-  return button;
+  return createIconOnlyButton(document, icon, label, {
+    classNames: "todos-icon-button",
+  });
 }
 
 export function textButton(

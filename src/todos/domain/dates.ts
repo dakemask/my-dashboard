@@ -1,4 +1,4 @@
-import { isTaskComplete } from "./model";
+import { isTaskComplete } from "./tasks";
 import type { TodoInstance, TodoStatus } from "./types";
 
 export type TodoDateRole = "reminder" | "deadline";
@@ -133,4 +133,3 @@ function clamp(value: number, minimum: number, maximum: number): number {
 function deadlineValue(instance: TodoInstance): number {
   return instance.deadlineAt === null ? Number.POSITIVE_INFINITY : Date.parse(instance.deadlineAt);
 }
-

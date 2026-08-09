@@ -1,14 +1,29 @@
 import {
   validateTodoInstance,
   validateTodoRule,
-  validateTodosEvent,
   validateTodosPayload,
-} from "./model";
+} from "./validation";
+import {
+  requireArray,
+  requireExactRecord,
+  requireId,
+  requireIndex,
+} from "./validationPrimitives";
 import type {
   TodoEntityChange,
   TodosEvent,
   TodosPayload,
 } from "./types";
+
+export function validateTodosEvent(value: unknown): TodosEvent {
+  const record = requireExactRecord(value, "Todos event", ["type", "instances", "rules"]);
+  if (record.type !== "change-entities") throw new TypeError("Invalid Todos event.");
+  return {
+    type: "change-entities",
+    instances: validateChanges(record.instances, "Todo instance change", validateTodoInstance),
+    rules: validateChanges(record.rules, "Todo rule change", validateTodoRule),
+  };
+}
 
 export function applyTodosEvent(
   payloadValue: TodosPayload,
@@ -27,8 +42,11 @@ export function invertTodosEvent(
   afterValue: TodosPayload,
 ): TodosEvent {
   const event = validateTodosEvent(eventValue);
-  validateTodosPayload(beforeValue);
-  validateTodosPayload(afterValue);
+  const before = validateTodosPayload(beforeValue);
+  const after = validateTodosPayload(afterValue);
+  if (!sameValue(applyTodosEvent(before, event), after)) {
+    throw new TypeError("Todos event does not produce the supplied after payload.");
+  }
   return validateTodosEvent({
     type: "change-entities",
     instances: [...event.instances].reverse().map(invertChange),
@@ -37,16 +55,52 @@ export function invertTodosEvent(
 }
 
 export function createTodosEvent(
-  before: TodosPayload,
-  after: TodosPayload,
+  beforeValue: TodosPayload,
+  afterValue: TodosPayload,
 ): TodosEvent {
-  const validBefore = validateTodosPayload(before);
-  const validAfter = validateTodosPayload(after);
-  return {
+  const before = validateTodosPayload(beforeValue);
+  const after = validateTodosPayload(afterValue);
+  return validateTodosEvent({
     type: "change-entities",
-    instances: diffEntities(validBefore.instances, validAfter.instances),
-    rules: diffEntities(validBefore.rules, validAfter.rules),
-  };
+    instances: diffEntities(before.instances, after.instances),
+    rules: diffEntities(before.rules, after.rules),
+  });
+}
+
+function validateChanges<T>(
+  value: unknown,
+  label: string,
+  validate: (value: unknown) => T,
+): readonly TodoEntityChange<T>[] {
+  const values = requireArray(value, `${label}s`);
+  const ids = new Set<string>();
+  return values.map((changeValue) => {
+    const record = requireExactRecord(changeValue, label, [
+      "id",
+      "before",
+      "after",
+      "beforeIndex",
+      "afterIndex",
+    ]);
+    const id = requireId(record.id, `${label} id`);
+    if (ids.has(id)) throw new TypeError(`${label} ids cannot repeat.`);
+    ids.add(id);
+    const before = record.before === null ? null : validate(record.before);
+    const after = record.after === null ? null : validate(record.after);
+    if (before === null && after === null) {
+      throw new TypeError(`${label} must change an entity.`);
+    }
+    if ((before !== null && entityId(before) !== id) || (after !== null && entityId(after) !== id)) {
+      throw new TypeError(`${label} entity id is inconsistent.`);
+    }
+    return {
+      id,
+      before,
+      after,
+      beforeIndex: requireIndex(record.beforeIndex, `${label} before index`, before !== null),
+      afterIndex: requireIndex(record.afterIndex, `${label} after index`, after !== null),
+    };
+  });
 }
 
 function applyChanges<T extends { readonly id: string }>(
@@ -54,23 +108,47 @@ function applyChanges<T extends { readonly id: string }>(
   changes: readonly TodoEntityChange<T>[],
   validate: (value: unknown) => T,
 ): readonly T[] {
-  const result = [...source];
+  const changedIds = new Set(changes.map((change) => change.id));
+  const additions = changes.filter((change) => change.after !== null).length;
+  const removals = changes.filter((change) => change.before !== null).length;
+  const targetLength = source.length - removals + additions;
+  if (targetLength < 0) throw new TypeError("Entity event removes more entities than exist.");
+  const target: Array<T | undefined> = Array.from({ length: targetLength });
+
   for (const change of changes) {
-    const index = result.findIndex((entity) => entity.id === change.id);
+    const sourceIndex = source.findIndex((entity) => entity.id === change.id);
     if (change.before === null) {
-      if (index >= 0) throw new TypeError(`Entity already exists: ${change.id}`);
-    } else {
-      if (index < 0 || JSON.stringify(result[index]) !== JSON.stringify(change.before)) {
-        throw new TypeError(`Entity event before value is stale: ${change.id}`);
-      }
-      result.splice(index, 1);
+      if (sourceIndex >= 0) throw new TypeError(`Entity already exists: ${change.id}`);
+    } else if (
+      sourceIndex !== change.beforeIndex
+      || !sameValue(source[sourceIndex], change.before)
+    ) {
+      throw new TypeError(`Entity event before value or index is stale: ${change.id}`);
     }
+
     if (change.after !== null) {
-      const insertAt = Math.min(change.afterIndex, result.length);
-      result.splice(insertAt, 0, validate(change.after));
+      if (change.afterIndex >= targetLength) {
+        throw new TypeError(`Entity event after index is out of bounds: ${change.id}`);
+      }
+      if (target[change.afterIndex] !== undefined) {
+        throw new TypeError(`Entity events cannot share an after index: ${change.afterIndex}`);
+      }
+      target[change.afterIndex] = validate(change.after);
     }
   }
-  return result;
+
+  const unchanged = source.filter((entity) => !changedIds.has(entity.id));
+  let unchangedIndex = 0;
+  for (let index = 0; index < target.length; index += 1) {
+    if (target[index] === undefined) {
+      target[index] = unchanged[unchangedIndex];
+      unchangedIndex += 1;
+    }
+  }
+  if (unchangedIndex !== unchanged.length || target.some((entity) => entity === undefined)) {
+    throw new TypeError("Entity event indexes do not describe a complete transaction.");
+  }
+  return target as T[];
 }
 
 function diffEntities<T extends { readonly id: string }>(
@@ -84,10 +162,7 @@ function diffEntities<T extends { readonly id: string }>(
     const afterIndex = after.findIndex((entity) => entity.id === id);
     const oldEntity = beforeIndex < 0 ? null : before[beforeIndex]!;
     const newEntity = afterIndex < 0 ? null : after[afterIndex]!;
-    if (
-      JSON.stringify(oldEntity) === JSON.stringify(newEntity)
-      && beforeIndex === afterIndex
-    ) continue;
+    if (sameValue(oldEntity, newEntity) && beforeIndex === afterIndex) continue;
     changes.push({
       id,
       before: oldEntity,
@@ -107,4 +182,12 @@ function invertChange<T>(change: TodoEntityChange<T>): TodoEntityChange<T> {
     beforeIndex: change.afterIndex,
     afterIndex: change.beforeIndex,
   };
+}
+
+function entityId(value: unknown): string {
+  return (value as { readonly id: string }).id;
+}
+
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

@@ -1,4 +1,4 @@
-import { validateTodosPayload } from "./model";
+import { validateTodosPayload } from "./validation";
 import type { TodosPayload } from "./types";
 
 export const TODOS_FILE_PATH = "todos.json";
@@ -22,4 +22,3 @@ export function decodeTodosPayload(files: ReadonlyMap<string, string>): unknown 
     throw new TypeError("Todos file is not valid JSON.");
   }
 }
-

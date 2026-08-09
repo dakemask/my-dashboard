@@ -1,21 +1,135 @@
-import { effectiveWeights, findTask, isTaskComplete, taskProgress } from "./model";
 import type { TodoInstance, TodoTask } from "./types";
 
-export { effectiveWeights, findTask, isTaskComplete, taskProgress };
+export interface TodoTaskLocation {
+  readonly task: TodoTask;
+  readonly parent: TodoTask | null;
+  readonly siblings: readonly TodoTask[];
+  readonly index: number;
+  readonly ancestors: readonly TodoTask[];
+}
+
+export type TodoTaskCompletionGate =
+  | {
+    readonly allowed: true;
+    readonly task: TodoTask;
+  }
+  | {
+    readonly allowed: false;
+    readonly reason: "not-found" | "derived" | "predecessor-incomplete";
+    readonly task: TodoTask | null;
+    readonly predecessor: TodoTask | null;
+  };
 
 export function createTodoTask(id: string, name = "新子任务", weight = -1): TodoTask {
   return { id, name, weight: weight < 0 ? -1 : weight, completed: false, predecessorId: null, children: [] };
 }
 
+export function visitTask(task: TodoTask, visitor: (task: TodoTask) => void): void {
+  visitor(task);
+  for (const child of task.children) visitTask(child, visitor);
+}
+
+export function findTask(task: TodoTask, id: string): TodoTask | null {
+  if (task.id === id) return task;
+  for (const child of task.children) {
+    const match = findTask(child, id);
+    if (match) return match;
+  }
+  return null;
+}
+
+export function findTaskLocation(root: TodoTask, id: string): TodoTaskLocation | null {
+  const path = findTaskPath(root, id);
+  if (!path) return null;
+  const current = path[path.length - 1]!;
+  return {
+    task: current.task,
+    parent: path.length > 1 ? path[path.length - 2]!.task : null,
+    siblings: current.siblings,
+    index: current.siblings.findIndex((task) => task.id === current.task.id),
+    ancestors: path.slice(0, -1).map((entry) => entry.task),
+  };
+}
+
+export function isTaskComplete(task: TodoTask): boolean {
+  return task.children.length === 0
+    ? task.completed
+    : task.children.every(isTaskComplete);
+}
+
+export function taskCompletionGate(root: TodoTask, taskId: string): TodoTaskCompletionGate {
+  const path = findTaskPath(root, taskId);
+  if (!path) {
+    return { allowed: false, reason: "not-found", task: null, predecessor: null };
+  }
+  const target = path[path.length - 1]!.task;
+  if (target.children.length > 0) {
+    return { allowed: false, reason: "derived", task: target, predecessor: null };
+  }
+  if (target.completed) return { allowed: true, task: target };
+
+  for (const entry of path) {
+    if (entry.task.predecessorId === null) continue;
+    const predecessor = entry.siblings.find((task) => task.id === entry.task.predecessorId) ?? null;
+    if (!predecessor || !isTaskComplete(predecessor)) {
+      return {
+        allowed: false,
+        reason: "predecessor-incomplete",
+        task: target,
+        predecessor,
+      };
+    }
+  }
+  return { allowed: true, task: target };
+}
+
+export function canToggleTodoTask(root: TodoTask, taskId: string): boolean {
+  return taskCompletionGate(root, taskId).allowed;
+}
+
+export function effectiveWeights(children: readonly TodoTask[]): readonly number[] {
+  if (children.length === 0) return [];
+  const automatic = children.filter((child) => child.weight < 0).length;
+  const fixed = children.reduce((sum, child) => sum + Math.max(0, child.weight), 0);
+  const automaticWeight = automatic > 0 ? Math.max(0, 1 - fixed) / automatic : 0;
+  return children.map((child) => child.weight < 0 ? automaticWeight : child.weight);
+}
+
+export function taskProgress(task: TodoTask): number {
+  if (task.children.length === 0) return task.completed ? 1 : 0;
+  const weights = effectiveWeights(task.children);
+  return Math.min(1, Math.max(0, task.children.reduce(
+    (sum, child, index) => sum + taskProgress(child) * (weights[index] ?? 0),
+    0,
+  )));
+}
+
 export function replaceTask(root: TodoTask, taskId: string, replacement: TodoTask): TodoTask {
   if (root.id === taskId) return replacement;
   let changed = false;
-  const children = root.children.map((child) => {
+  let children = root.children.map((child) => {
     const next = replaceTask(child, taskId, replacement);
     if (next !== child) changed = true;
     return next;
   });
+  if (changed) children = resetInvalidatedSuccessors(root.children, children);
   return changed ? { ...root, children } : root;
+}
+
+export function replaceTodoInstanceRoot(
+  instance: TodoInstance,
+  root: TodoTask,
+  now: Date,
+): TodoInstance {
+  const beforeComplete = isTaskComplete(instance.root);
+  const afterComplete = isTaskComplete(root);
+  return {
+    ...instance,
+    root,
+    completedAt: afterComplete
+      ? beforeComplete ? instance.completedAt : now.toISOString()
+      : null,
+  };
 }
 
 export function toggleTodoLeaf(
@@ -23,17 +137,14 @@ export function toggleTodoLeaf(
   taskId: string,
   now: Date,
 ): TodoInstance {
-  const beforeComplete = isTaskComplete(instance.root);
+  const gate = taskCompletionGate(instance.root, taskId);
+  if (!gate.allowed) {
+    if (gate.reason === "not-found") throw new TypeError("Todo leaf was not found.");
+    if (gate.reason === "derived") throw new TypeError("Parent task completion is derived.");
+    throw new TypeError("前置任务尚未完成。");
+  }
   const result = toggleInTree(instance.root, taskId);
-  if (!result.changed) throw new TypeError("Todo leaf was not found.");
-  const afterComplete = isTaskComplete(result.task);
-  return {
-    ...instance,
-    root: result.task,
-    completedAt: afterComplete
-      ? beforeComplete ? instance.completedAt : now.toISOString()
-      : null,
-  };
+  return replaceTodoInstanceRoot(instance, result.task, now);
 }
 
 export function insertParallelTask(
@@ -200,45 +311,61 @@ export function cloneTaskWithIds(
 
 function toggleInTree(task: TodoTask, taskId: string): { task: TodoTask; changed: boolean } {
   if (task.id === taskId) {
-    if (task.children.length > 0) throw new TypeError("Parent task completion is derived.");
     return { task: { ...task, completed: !task.completed }, changed: true };
-  }
-  const directIndex = task.children.findIndex((child) => child.id === taskId);
-  if (directIndex >= 0) {
-    const target = task.children[directIndex]!;
-    if (target.children.length > 0) throw new TypeError("Parent task completion is derived.");
-    if (!target.completed && target.predecessorId) {
-      const predecessor = task.children.find((child) => child.id === target.predecessorId);
-      if (!predecessor || !isTaskComplete(predecessor)) {
-        throw new TypeError("前置任务尚未完成。");
-      }
-    }
-    let children = task.children.map((child, index) => index === directIndex
-      ? { ...child, completed: !child.completed }
-      : child);
-    if (target.completed) {
-      let successor = children.find((child) => child.predecessorId === target.id);
-      while (successor) {
-        const id = successor.id;
-        children = children.map((child) => child.id === id ? resetTaskCompletion(child) : child);
-        successor = children.find((child) => child.predecessorId === id);
-      }
-    }
-    return { task: { ...task, children }, changed: true };
   }
   for (const child of task.children) {
     const nested = toggleInTree(child, taskId);
     if (nested.changed) {
+      let children = task.children.map((candidate) => candidate.id === child.id ? nested.task : candidate);
+      if (isTaskComplete(child) && !isTaskComplete(nested.task)) {
+        children = resetSuccessorChain(children, child.id);
+      }
       return {
         task: {
           ...task,
-          children: task.children.map((candidate) => candidate.id === child.id ? nested.task : candidate),
+          children,
         },
         changed: true,
       };
     }
   }
   return { task, changed: false };
+}
+
+interface TodoTaskPathEntry {
+  readonly task: TodoTask;
+  readonly siblings: readonly TodoTask[];
+}
+
+function findTaskPath(root: TodoTask, taskId: string): readonly TodoTaskPathEntry[] | null {
+  const visit = (
+    task: TodoTask,
+    siblings: readonly TodoTask[],
+    ancestors: readonly TodoTaskPathEntry[],
+  ): readonly TodoTaskPathEntry[] | null => {
+    const path = [...ancestors, { task, siblings }];
+    if (task.id === taskId) return path;
+    for (const child of task.children) {
+      const match = visit(child, task.children, path);
+      if (match) return match;
+    }
+    return null;
+  };
+  return visit(root, [root], []);
+}
+
+function resetSuccessorChain(
+  childrenValue: readonly TodoTask[],
+  predecessorId: string,
+): TodoTask[] {
+  let children = [...childrenValue];
+  let successor = children.find((child) => child.predecessorId === predecessorId);
+  while (successor) {
+    const id = successor.id;
+    children = children.map((child) => child.id === id ? resetTaskCompletion(child) : child);
+    successor = children.find((child) => child.predecessorId === id);
+  }
+  return children;
 }
 
 function updateSiblingList(
@@ -248,15 +375,23 @@ function updateSiblingList(
 ): TodoTask {
   const directIndex = root.children.findIndex((child) => child.id === selectedId);
   if (directIndex >= 0) {
-    return { ...root, completed: false, children: update(root.children, directIndex) };
+    const children = resetInvalidatedSuccessors(
+      root.children,
+      update(root.children, directIndex),
+    );
+    return { ...root, completed: false, children };
   }
   for (const child of root.children) {
     try {
       const next = updateSiblingList(child, selectedId, update);
       if (next !== child) {
+        const children = resetInvalidatedSuccessors(
+          root.children,
+          root.children.map((candidate) => candidate.id === child.id ? next : candidate),
+        );
         return {
           ...root,
-          children: root.children.map((candidate) => candidate.id === child.id ? next : candidate),
+          children,
         };
       }
     } catch (error) {
@@ -264,6 +399,31 @@ function updateSiblingList(
     }
   }
   throw new TaskNotFoundError();
+}
+
+function resetInvalidatedSuccessors(
+  before: readonly TodoTask[],
+  afterValue: readonly TodoTask[],
+): TodoTask[] {
+  let after = [...afterValue];
+  for (const previous of before) {
+    const current = after.find((task) => task.id === previous.id);
+    if (current && isTaskComplete(previous) && !isTaskComplete(current)) {
+      after = resetSuccessorChain(after, previous.id);
+    }
+  }
+  for (const task of after) {
+    if (task.predecessorId === null || !hasStoredCompletion(task)) continue;
+    const predecessor = after.find((candidate) => candidate.id === task.predecessorId);
+    if (predecessor && !isTaskComplete(predecessor)) {
+      after = resetSuccessorChain(after, predecessor.id);
+    }
+  }
+  return after;
+}
+
+function hasStoredCompletion(task: TodoTask): boolean {
+  return task.completed || task.children.some(hasStoredCompletion);
 }
 
 function chainTail(children: readonly TodoTask[], startId: string): string {

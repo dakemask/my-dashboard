@@ -30,5 +30,16 @@ describe("Todos codec", () => {
     ]))).toThrow();
     expect(() => decodeTodosPayload(new Map([[TODOS_FILE_PATH, "{"]]))).toThrow();
   });
-});
 
+  it("continues to decode schema-v1 records whose legacy dates need UI reconciliation", () => {
+    const legacy = payload([{
+      ...instance(task(1)),
+      reminderAt: "2026-08-02T00:00:00.000Z",
+      deadlineAt: "2026-08-01T00:00:00.000Z",
+    }]);
+    const decoded = decodeTodosPayload(new Map([
+      [TODOS_FILE_PATH, JSON.stringify(legacy)],
+    ]));
+    expect(todosDefinition.validate(decoded)).toEqual(legacy);
+  });
+});

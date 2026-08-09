@@ -1,0 +1,22 @@
+.todos-toast { position: fixed; z-index: 100; left: 50%; bottom: 26px; transform: translateX(-50%); max-width: min(560px, calc(100% - 28px)); padding: 12px 18px; border-radius: 12px; background: #26352b; color: #fff; box-shadow: 0 12px 34px rgba(0, 0, 0, .22); animation: todo-toast-in .2s cubic-bezier(.22, 1, .36, 1) both; }
+.todos-toast[data-tone="success"] { background: #166f46; }
+.todos-toast[data-tone="error"] { background: #932e2e; }
+.todos-startup-error { max-width: 620px; margin: 15vh auto; padding: 30px; }
+
+.todos-app.is-dragging,
+.todos-app.is-dragging * { cursor: pointer !important; }
+
+@keyframes todo-toast-in {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes todo-notice-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 620px) {
+  .todos-save-failure { align-items: stretch; flex-direction: column; }
+  .todos-save-failure .todos-button { width: 100%; }
+}
