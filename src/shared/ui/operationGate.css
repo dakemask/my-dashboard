@@ -254,6 +254,9 @@
   }
 
   .shared-module-sync-actions {
+    justify-self: end;
     justify-content: flex-end;
+    max-width: 100%;
+    width: max-content;
   }
 }
