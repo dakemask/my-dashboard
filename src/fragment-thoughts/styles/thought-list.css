@@ -66,6 +66,7 @@
 
 .ft-history-match {
   margin-top: 12px;
+  margin-inline: 10px;
   min-height: var(--ft-control-compact);
   padding: 5px 9px;
   color: var(--ft-accent);
@@ -83,6 +84,7 @@
 
 .ft-card-footer {
   margin-top: 18px;
+  margin-inline: 10px;
   padding-top: 13px;
   border-top: 1px solid #edf0f4;
 }
