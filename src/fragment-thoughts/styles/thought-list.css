@@ -26,21 +26,12 @@
 }
 
 .ft-thought-card.is-editing .ft-thought-text-region {
-  position: relative;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px var(--ft-line-strong);
 }
 
 .ft-thought-card.is-editing:has(.ft-edit-input:focus) .ft-thought-text-region {
-  --ft-edit-region-line: var(--ft-accent);
-}
-
-.ft-thought-card.is-editing .ft-thought-text-region::before {
-  position: absolute;
-  z-index: 2;
-  inset: -8px;
-  border: 1px solid var(--ft-edit-region-line, var(--ft-line-strong));
-  border-radius: 12px;
-  content: "";
-  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--ft-accent);
 }
 
 .ft-thought-highlight,
@@ -57,6 +48,7 @@
 .ft-thought-text-region {
   position: relative;
   min-width: 0;
+  padding: 8px 10px;
 }
 
 .ft-thought-highlight {
