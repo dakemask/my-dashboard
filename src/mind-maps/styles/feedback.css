@@ -1,0 +1,111 @@
+.mind-maps-toast {
+  position: fixed;
+  z-index: 80;
+  right: 24px;
+  bottom: 24px;
+  max-width: 430px;
+  padding: 12px 15px;
+  color: #fff;
+  background: #263245;
+  border-radius: 12px;
+  box-shadow: 0 14px 38px rgb(20 29 43 / 24%);
+  font-size: 14px;
+  line-height: 1.5;
+  animation: mm-toast-in 240ms var(--mm-ease) both;
+}
+
+.mind-maps-toast[data-tone="error"] {
+  background: #9f2f2f;
+}
+
+.mind-maps-toast[data-tone="success"] {
+  background: var(--mm-success);
+}
+
+.mind-maps-dialog {
+  width: min(480px, calc(100vw - 36px));
+  padding: 0;
+  color: var(--mm-text);
+  background: var(--mm-panel);
+  border: 1px solid var(--mm-line);
+  border-radius: 18px;
+  box-shadow: 0 28px 84px rgb(19 28 43 / 28%);
+}
+
+.dialog-surface {
+  padding: 24px;
+}
+
+.mind-maps-dialog[open] {
+  animation: mm-dialog-in 220ms var(--mm-ease) both;
+}
+
+.mind-maps-dialog::backdrop {
+  background: rgb(23 32 51 / 36%);
+  backdrop-filter: blur(4px);
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+}
+
+.dialog-message {
+  margin: 14px 0 23px;
+  color: var(--mm-muted);
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.dialog-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dialog-button {
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 680;
+}
+
+.dialog-button.primary {
+  color: #fff;
+  background: var(--mm-accent);
+  border-color: var(--mm-accent);
+}
+
+.dialog-button.primary:hover {
+  color: #fff;
+  background: var(--mm-accent-deep);
+  border-color: var(--mm-accent-deep);
+}
+
+.dialog-button.danger {
+  color: #fff;
+  background: var(--mm-danger);
+  border-color: var(--mm-danger);
+}
+
+.dialog-button.danger:hover {
+  color: #fff;
+  background: #9f1c13;
+  border-color: #9f1c13;
+}
+
+@keyframes mm-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+@keyframes mm-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}

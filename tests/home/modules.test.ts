@@ -25,14 +25,14 @@ describe("dashboard module catalog", () => {
       .toBe(persistentDashboardDefinitions.length);
   });
 
-  it("keeps the mind-map route distinct from the mind-maps data ID", () => {
+  it("uses mind-maps for both the route and persisted module ID", () => {
     const mindMap = dashboardModuleCatalog.find(
-      ({ routeSlug }) => routeSlug === "mind-map",
+      ({ routeSlug }) => routeSlug === "mind-maps",
     );
     expect(mindMap?.definition?.moduleId).toBe("mind-maps");
-    expect(dashboardModules.find(({ id }) => id === "mind-map")?.href)
-      .toBe("modules/mind-map/");
-    expect(getDashboardModuleTitle("mind-map")).toBe("思维导图");
+    expect(mindMap?.routeSlug).toBe(mindMap?.definition?.moduleId);
+    expect(dashboardModules.find(({ id }) => id === "mind-maps")?.href)
+      .toBe("modules/mind-maps/");
     expect(getDashboardModuleTitle("mind-maps")).toBe("思维导图");
   });
 });

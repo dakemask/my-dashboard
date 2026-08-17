@@ -1,5 +1,5 @@
 import { fragmentThoughtsDefinition } from "../fragment-thoughts/definition";
-import { mindMapDefinition } from "../mind-map/definition";
+import { mindMapDefinition } from "../mind-maps/definition";
 import type { ModuleDefinition } from "../shared/sync";
 import { todosDefinition } from "../todos/definition";
 
@@ -17,12 +17,7 @@ export interface DashboardModuleCatalogEntry {
   readonly definition?: ModuleDefinition<unknown, unknown>;
 }
 
-/**
- * The single inventory for the home page and persistent-module setup. Route
- * slugs are deliberately separate from data module IDs: the mind-map page has
- * always lived at `modules/mind-map/`, while its persisted moduleId is
- * `mind-maps`.
- */
+/** The single inventory for the home page and persistent-module setup. */
 export const dashboardModuleCatalog = [
   {
     routeSlug: "todos",
@@ -31,7 +26,7 @@ export const dashboardModuleCatalog = [
     definition: eraseDefinition(todosDefinition),
   },
   {
-    routeSlug: "mind-map",
+    routeSlug: "mind-maps",
     title: "思维导图",
     description: "管理多级导图库，在自由画布中整理文字并建立连接。",
     definition: eraseDefinition(mindMapDefinition),

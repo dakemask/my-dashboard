@@ -8,7 +8,7 @@ import {
   inspectFirstAccount,
 } from "../../src/home/accountSetup";
 import { fragmentThoughtsDefinition } from "../../src/fragment-thoughts/definition";
-import { mindMapDefinition } from "../../src/mind-map/definition";
+import { mindMapDefinition } from "../../src/mind-maps/definition";
 import {
   createModuleLocalEnvelope,
   ModuleLocalStore,

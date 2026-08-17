@@ -1,0 +1,222 @@
+.mind-maps-canvas-area,
+.mind-maps-canvas-mount {
+  width: 100%;
+  height: 100%;
+}
+
+.mind-maps-canvas-area {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 18%, rgb(255 255 255 / 96%), rgb(248 250 253 / 92%) 42rem),
+    #f8fafd;
+}
+
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+}
+
+/* SVG canvas. Dynamic geometry is written through SVG attributes, never inline CSS. */
+.mind-maps-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+  touch-action: none;
+  cursor: default;
+}
+
+.mind-maps-canvas.is-marquee,
+.mind-maps-canvas.is-arrow-mode {
+  cursor: crosshair;
+}
+
+.mind-maps-canvas.is-moving,
+.mind-maps-canvas.is-moving *,
+.mind-maps-canvas.is-panning,
+.mind-maps-canvas.is-panning * {
+  cursor: move !important;
+}
+
+.mind-maps-canvas.is-resizing,
+.mind-maps-canvas.is-resizing * {
+  cursor: nwse-resize !important;
+}
+
+.mind-maps-canvas__grid-dot {
+  fill: #c8d2df;
+  opacity: 0.7;
+}
+
+.mind-maps-canvas__node-body {
+  fill: #fff;
+  stroke: #c4cedb;
+  stroke-width: 1;
+  rx: 6;
+  ry: 6;
+  filter: none;
+  transition:
+    fill 150ms ease,
+    stroke 150ms ease,
+    stroke-width 150ms ease;
+}
+
+.mind-maps-canvas__node.is-selected .mind-maps-canvas__node-body,
+.mind-maps-canvas__node.is-moving .mind-maps-canvas__node-body {
+  fill: #fbfdff;
+  stroke: var(--mm-accent);
+  stroke-width: 1.35;
+  filter: none;
+}
+
+.mind-maps-canvas.is-moving .mind-maps-canvas__node-body {
+  filter: none;
+}
+
+.mind-maps-canvas__node.is-resizing {
+  opacity: 0.58;
+}
+
+.mind-maps-canvas__node.is-resizing .mind-maps-canvas__node-body {
+  fill: #fff;
+  stroke: var(--mm-accent-deep);
+  stroke-width: 1;
+  filter: none;
+}
+
+.mind-maps-canvas__node.is-editing .mind-maps-canvas__node-body {
+  fill: #fbfdff;
+  stroke: var(--mm-accent);
+  stroke-width: 1.35;
+  filter: none;
+}
+
+.mind-maps-canvas.is-arrow-mode .mind-maps-canvas__node-body {
+  stroke: var(--mm-accent);
+  stroke-width: 1.35;
+}
+
+.mind-maps-canvas__node-editor-host {
+  overflow: visible;
+}
+
+.mind-maps-canvas__node-editor {
+  width: 100%;
+  height: 100%;
+  display: block;
+  padding: 7px 9px;
+  overflow: hidden;
+  color: #202b3d;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.42;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  caret-color: var(--mm-accent);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.mind-maps-canvas__node-editor[readonly] {
+  cursor: text;
+}
+
+.mind-maps-canvas__node-editor:focus-visible {
+  outline: 0;
+}
+
+.mind-maps-canvas__node-move-hit {
+  cursor: move;
+}
+
+.mind-maps-canvas__resize-control,
+.mind-maps-canvas__resize-hit {
+  cursor: nwse-resize;
+}
+
+.mind-maps-canvas__resize-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
+.mind-maps-canvas__resize-handle {
+  fill: #fff;
+  stroke: var(--mm-accent);
+  stroke-width: 1.25;
+  rx: 1.75;
+  ry: 1.75;
+  filter: none;
+}
+
+.mind-maps-canvas__resize-control:hover .mind-maps-canvas__resize-handle {
+  fill: var(--mm-accent-soft);
+  stroke: var(--mm-accent-deep);
+}
+
+.mind-maps-canvas__connector {
+  fill: #fff;
+  stroke: var(--mm-accent);
+  stroke-width: 1.4;
+  cursor: crosshair;
+  filter: none;
+}
+
+.mind-maps-canvas__connector.is-target,
+.mind-maps-canvas__connector.is-source {
+  fill: var(--mm-accent);
+}
+
+.mind-maps-canvas__arrow-line {
+  fill: none;
+  stroke: #7b8798;
+  stroke-width: 1.4;
+  transition:
+    stroke 140ms ease,
+    stroke-width 140ms ease;
+}
+
+.mind-maps-canvas__arrow:hover .mind-maps-canvas__arrow-line {
+  stroke: #53647b;
+}
+
+.mind-maps-canvas__arrow.is-selected .mind-maps-canvas__arrow-line {
+  stroke: var(--mm-accent);
+  stroke-width: 1.4;
+}
+
+.mind-maps-canvas__arrow-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+.mind-maps-canvas__arrow-head {
+  fill: #7b8798;
+}
+
+.mind-maps-canvas__arrow-head.is-selected {
+  fill: var(--mm-accent);
+}
+
+.mind-maps-canvas__marquee {
+  fill: rgb(47 111 235 / 9%);
+  stroke: var(--mm-accent);
+  stroke-width: 1.4;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+.mind-maps-canvas__arrow-preview {
+  fill: none;
+  stroke: var(--mm-accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  pointer-events: none;
+}
