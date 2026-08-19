@@ -1,16 +1,55 @@
 # Mind Maps
 
-## 模块概览
+## 概览
 
 Mind Maps 是一个由“分层资料库”和“空间画布”组成的思维导图模块。资料库负责组织多张脑图，画布负责编辑当前脑图中的节点和有向连线。整个模块的业务真值是一个 `MindMapPayload`；当前打开项、选择、视口、编辑草稿等都属于页面期状态，不写入业务数据。
 
 模块通过 `MindMapController` 接入 Shared 运行时。Controller 是业务数据、资料库 UI、画布 UI 和同步 UI 的汇合点，也是 mind-maps 内唯一直接访问 Shared 的类。业务修改先表示为可逆事件，经运行时更新 payload，再投影回资料库和画布；本机保存、撤销重做及云端同步仍由 Shared 提供。
 
-## 数据的两级结构
+## 核心模型
 
-`MindMapPayload` 只有两类顶层数据：文件夹路径集合和脑图集合。文件夹没有独立对象，其层级由规范化路径推导；脑图由稳定 `id` 标识，并用 `path` 同时表达名称和资料库位置。因此脑图改名或移动只改变路径，打开记录和其他页面期引用仍以 `id` 为准。
+当前 schema 版本为 1，业务 payload 的真实结构是：
 
-每张脑图包含节点和有向箭头。节点保存文本、世界坐标、尺寸和自动宽度标记；箭头连接两个节点的方位连接点。路径层级、标识、节点几何和连线引用等跨对象关系由 domain 统一校验并规范化。
+```ts
+type ConnectorSide = "top" | "right" | "bottom" | "left";
+
+interface MindMapPayload {
+  readonly folders: readonly string[];
+  readonly maps: readonly MindMapDocument[];
+}
+
+interface MindMapDocument {
+  readonly id: string;
+  readonly path: string;
+  readonly nodes: readonly MindMapNode[];
+  readonly arrows: readonly MindMapArrow[];
+}
+
+interface MindMapNode {
+  readonly id: string;
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly autoWidth: boolean;
+}
+
+interface MindMapArrow {
+  readonly id: string;
+  readonly from: MindMapEndpoint;
+  readonly to: MindMapEndpoint;
+}
+
+interface MindMapEndpoint {
+  readonly nodeId: string;
+  readonly side: ConnectorSide;
+}
+```
+
+文件夹没有独立对象，其层级由规范化路径推导；脑图用 `path` 同时表达名称和资料库位置，用稳定 `id` 承载页面期引用。因此脑图改名或移动只改变路径。
+
+节点坐标是与屏幕视口无关的世界坐标，尺寸属于业务数据；箭头连接两个节点的方位连接点。路径层级、标识、节点几何和连线引用等跨对象关系由 domain 统一校验并规范化。
 
 ## 资料库与当前脑图
 
@@ -41,9 +80,14 @@ Mind Maps 是一个由“分层资料库”和“空间画布”组成的思维�
 
 这些手势共享边缘自动平移，只在完成时生成业务命令，取消时丢弃预览。箭头模式位于状态机之外，`connecting` 只表示一次已开始的连线手势。
 
-## 事件、历史与保存节奏
+## 事件模型
 
-mind-maps 的业务事件分为资料库结构、节点、连线和对象集合四类，覆盖创建、迁移、删除、恢复以及节点内容与几何变化。
+mind-maps 当前的业务事件分为四组：
+
+- 文件夹：`create-folder { path }`、`delete-folder { path }`、`restore-folder { rootPath, folders, maps }`、`relocate-folder { fromPath, toPath }`。
+- 脑图：`create-map { map }`、`delete-map { mapId }`、`restore-map { map }`、`relocate-map { mapId, path }`。
+- 节点：`add-node { mapId, node }`、`set-node-text { mapId, nodeId, text, frame, autoWidth }`、`set-node-frame { mapId, nodeId, frame, autoWidth }`、`move-nodes { mapId, positions }`。
+- 连线与对象集合：`add-arrow { mapId, arrow }`、`delete-objects { mapId, nodeIds, arrowIds }`、`restore-objects { mapId, nodes, arrows }`。
 
 `applyMindMapEvent` 是事件到新 payload 的唯一领域变换，`invertMindMapEvent` 根据变更前后数据生成逆事件。恢复类事件主要承载删除操作的完整逆数据，例如删除节点时一并消失的关联箭头。模块历史是覆盖整个 payload 的单一页面期历史，容量为 100，不按资料库项目或脑图拆分。
 
@@ -52,8 +96,6 @@ Controller dispatch 后立即刷新界面并合并触发本机保存，最近一
 ## 文件化表示
 
 远端编码不是把整个 payload 写进一个 JSON。每张脑图编码为 `<脑图路径>.json`，文件正文只保存脑图 ID、节点和箭头，路径由文件名提供。文件夹结构主要由这些文件的父路径重建；没有子项的叶子文件夹使用空 `.gitkeep` 表示。解码时会补齐祖先文件夹，再由统一 payload 校验恢复内存模型。
-
-当前业务 schema 版本为 1。模块定义同时提供空 payload、严格校验、编解码以及事件历史策略，`main.ts` 只负责创建 Controller、启动 Shared 运行时并挂接初始 payload。
 
 ## 代码入口
 

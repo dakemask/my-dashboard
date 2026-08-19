@@ -4,9 +4,54 @@
 
 Todos 是待办管理模块。它管理普通待办实例、周期模板以及由模板生成的待办实例；每一项待办都可以继续拆成任务树，并在同一层级内表达先后依赖和进度权重。
 
-模块的业务数据集中在一个 `TodosPayload` 中，由 `instances` 和 `rules` 两组顶层实体组成。Todos 自身负责业务模型、事件、编辑流程和页面投影，本地保存、撤销重做、远端同步与冲突处理接入 Shared 提供的模块运行时。远端内容编码为单个 `todos.json`，当前业务 schema 版本为 1，页面期历史容量为 200 个事件。
+Todos 自身负责业务模型、事件、编辑流程和页面投影，本地保存、撤销重做、远端同步与冲突处理接入 Shared 提供的模块运行时。远端业务内容编码为 `todos.json`。
 
-## 实例与周期规则
+## 核心模型
+
+当前 schema 版本为 1，业务 payload 的真实结构是：
+
+```ts
+type TodoCadence = "weekly" | "monthly";
+
+interface TodosPayload {
+  readonly instances: readonly TodoInstance[];
+  readonly rules: readonly TodoRecurrenceRule[];
+}
+
+interface TodoInstance {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly reminderAt: string;
+  readonly deadlineAt: string | null;
+  readonly completedAt: string | null;
+  readonly expanded: boolean;
+  readonly sourceRuleId: string | null;
+  readonly sourcePeriodKey: string | null;
+  readonly root: TodoTask;
+}
+
+interface TodoRecurrenceRule {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly cadence: TodoCadence;
+  readonly template: TodoTask;
+  readonly generatedThrough: TodoGenerationCursor;
+}
+
+interface TodoGenerationCursor {
+  readonly weekly: string | null;
+  readonly monthly: string | null;
+}
+
+interface TodoTask {
+  readonly id: string;
+  readonly name: string;
+  readonly weight: number;
+  readonly completed: boolean;
+  readonly predecessorId: string | null;
+  readonly children: readonly TodoTask[];
+}
+```
 
 `TodoInstance` 是用户实际执行的待办，包含时间、来源信息和一棵任务树。普通待办没有来源；周期实例记录生成它的规则与周期。
 
@@ -47,9 +92,27 @@ Todos 是待办管理模块。它管理普通待办实例、周期模板以及�
 
 生成检查在运行时接入后和页面重新活跃时执行。实例生成与游标推进在同一次 payload 修改中提交。
 
-## 修改、历史与保存
+## 事件模型
 
-Todos 的历史不是任务节点级命令集合，而是单一的 `change-entities` 事件。事件分别记录实例和规则的实体变更；每项变更携带实体 ID、修改前后完整值以及修改前后索引。一次事件可以原子地同时改变实例和规则，例如创建周期规则并生成首个实例，或用周期实例覆盖模板。
+Todos 当前只有一种业务事件：
+
+```ts
+interface TodosEvent {
+  readonly type: "change-entities";
+  readonly instances: readonly TodoEntityChange<TodoInstance>[];
+  readonly rules: readonly TodoEntityChange<TodoRecurrenceRule>[];
+}
+
+interface TodoEntityChange<T> {
+  readonly id: string;
+  readonly before: T | null;
+  readonly after: T | null;
+  readonly beforeIndex: number;
+  readonly afterIndex: number;
+}
+```
+
+事件分别记录实例和规则的实体变更，一次事件可以原子地同时改变两者。模块使用容量为 200 的单一页面会话历史，而不是为任务节点分别建立命令历史。
 
 任务树内部修改先形成新的完整 payload，再由前后 payload 计算实体变更；逆事件通过交换变更前后状态得到。
 
@@ -61,4 +124,9 @@ Todos 的历史不是任务节点级命令集合，而是单一的 `change-entit
 
 `TodosController` 汇合运行时 payload、同步快照、编辑器和临时交互状态，并把业务修改收敛到同一提交路径。实例编辑器和规则编辑器复用任务结构编辑器；卡片和模板预览共用只负责投影的任务图。
 
-业务语义位于 `src/todos/domain/`，页面流程从 `src/todos/app/controller.ts` 进入，编辑器和任务图位于 `src/todos/ui/`。
+## 代码入口
+
+- `src/todos/definition.ts`：模块定义。
+- `src/todos/domain/`：payload、任务与周期规则、事件和编解码。
+- `src/todos/app/`：页面编排及业务修改的提交路径。
+- `src/todos/ui/`：实例与规则编辑器、任务结构和任务图。

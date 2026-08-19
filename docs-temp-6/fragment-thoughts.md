@@ -1,28 +1,48 @@
 # Fragment Thoughts
 
-## 模块概览
+## 概览
 
 Fragment Thoughts 是用于记录短文本想法的持久化模块。它把每条想法建模为一个稳定实体，把每次有效修改追加为新版本；列表显示最新版本，历史面板展示完整版本序列，搜索同时覆盖当前内容和历史内容。
 
-模块通过 Shared 运行时接入账户、本地持久化、云端同步、冲突处理和页面会话内的撤销重做。Fragment Thoughts 自身负责数据语义、事件、草稿、查询投影和页面交互。持久化数据的当前 schema 版本为 1，远端托管内容只有 `thoughts.json`。
+模块通过 Shared 运行时接入账户、本地持久化、云端同步、冲突处理和页面会话内的撤销重做。Fragment Thoughts 自身负责数据语义、事件、草稿、查询投影和页面交互。远端业务内容编码为 `thoughts.json`。
 
-## 想法与版本
+## 核心模型
 
-核心数据关系是：payload 包含多条 thought；每条 thought 包含有序的 version 序列，以及一组已折叠版本 ID；每个 version 保存独立的 ID、文本和创建时间。最后一个 version 就是想法的当前内容，因此当前内容不是一份与历史并列维护的重复状态。
+当前 schema 版本为 1，业务 payload 的真实结构是：
+
+```ts
+interface FragmentThoughtsPayload {
+  readonly thoughts: readonly FragmentThought[];
+}
+
+interface FragmentThought {
+  readonly id: string;
+  readonly versions: readonly FragmentThoughtVersion[];
+  readonly collapsedVersionIds: readonly string[];
+}
+
+interface FragmentThoughtVersion {
+  readonly id: string;
+  readonly content: string;
+  readonly createdAt: string;
+}
+```
+
+最后一个 version 是想法的当前内容，因此当前内容不是一份与历史并列维护的重复状态。
 
 编辑只追加版本，不覆盖旧版本；`collapsedVersionIds` 只记录历史面板的持久化折叠选择，不参与当前版本判断。domain 统一保证实体标识、版本顺序和文本有效性。payload 中的数组顺序不表达页面顺序，列表由投影层按当前版本时间生成。
 
-## 变化模型与会话历史
+## 事件模型
 
 所有持久化变化都表示为可逆事件。事件共有五种：
 
-- `insert-thought`：加入一条带首个版本的想法。
-- `delete-thought`：删除整条想法及其全部版本。
-- `append-version`：向现有想法追加版本，并记录该版本的初始折叠状态。
-- `remove-last-version`：移除指定的最后版本，主要作为追加版本的逆事件；唯一版本不能移除。
-- `set-version-collapsed`：改变某个版本的折叠状态。
+- `insert-thought { thought }`：加入一条带首个版本的想法。
+- `delete-thought { thoughtId }`：删除整条想法及其全部版本。
+- `append-version { thoughtId, version, collapsed }`：追加版本，并记录其初始折叠状态。
+- `remove-last-version { thoughtId, versionId }`：移除指定的最后版本。
+- `set-version-collapsed { thoughtId, versionId, collapsed }`：改变版本的折叠状态。
 
-这些事件都能由变更前后的 payload 生成逆事件。Shared 在单一页面会话历史中应用它们；业务事件先更新运行时 payload，再由控制器请求本地保存，保存失败不会回退已经进入页面状态的变化。
+这些事件都能由变更前后的 payload 生成逆事件。Shared 在容量为 100 的单一页面会话历史中应用它们；业务事件先更新运行时 payload，再由控制器请求本地保存，保存失败不会回退已经进入页面状态的变化。
 
 ## 草稿提交协议
 
@@ -42,4 +62,11 @@ Shared 检测到远端 revision 变化时会调用模块的 settle hook。Fragme
 
 ## 页面编排
 
-`FragmentThoughtsController` 汇合 payload、Shared 快照、草稿、搜索和历史选择，把 DOM 回调转换为草稿变化或业务事件。`app` 中的草稿与投影逻辑不依赖 DOM，`domain` 负责数据模型、事件和编解码，`ui` 负责页面骨架、列表、历史与反馈。
+`FragmentThoughtsController` 汇合 payload、Shared 快照、草稿、搜索和历史选择，把 DOM 回调转换为草稿变化或业务事件。
+
+## 代码入口
+
+- `src/fragment-thoughts/definition.ts`：模块定义。
+- `src/fragment-thoughts/domain/`：payload、领域规则、事件和编解码。
+- `src/fragment-thoughts/app/`：页面编排、草稿与投影逻辑。
+- `src/fragment-thoughts/ui/`：页面骨架、列表、历史与反馈组件。
