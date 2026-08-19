@@ -124,7 +124,8 @@ Shared 在返回 `ready` 前完成 profile 选择、编辑租约、本地记录�
 1. 在 `modules/<module-id>/index.html` 建立独立页面，沿用模块页 CSP，挂载 `#app` 并加载模块的 `main.ts`；`connect-src` 保留 GitHub API。
 2. 在 `vite.config.ts` 的 `build.rollupOptions.input` 中加入该 HTML 页面。
 3. 在 `src/home/modules.ts` 导入模块定义，并向 `dashboardModuleCatalog` 添加 `routeSlug`、标题、描述和 `definition: eraseDefinition(moduleDefinition)`。
-4. 在 `docs-temp-6/AGENTS.md` 中加入新模块概述和文档路由。
-5. 在 `docs-temp-6/<module-id>.md` 中编写模块文档，包含“概览”“核心模型”“事件模型”和“代码入口”。
+4. 更新项目文档前读取 `docs-temp-6/documentation-maintenance.md`。
+5. 在 `docs-temp-6/AGENTS.md` 中加入新模块概述和文档路由。
+6. 在 `docs-temp-6/<module-id>.md` 中编写模块文档，包含“概览”“核心模型”“事件模型”和“代码入口”。
 
 带有 `definition` 的目录项会同时进入 `persistentDashboardDefinitions`，首页首次账户接入、profile 数据建立和清理流程会据此覆盖该模块。只加入页面链接而不加入 definition，不会形成完整的持久化模块接入。
