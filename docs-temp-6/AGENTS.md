@@ -18,6 +18,7 @@ My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应�
 - 涉及特殊开发注意事项时读 `special-development-notes.md`。
 - 涉及 UI、样式或交互时读 `ui-guidelines.md`。
 - 更新或新增项目文档时读 `documentation-maintenance.md`。
+- 需要在未明文规定的情况下修改文档时读 `documentation-architecture.md`。
 - 修改或分析任一持久化业务模块时，先读 `shared-for-modules.md`，了解项目、模块与 Shared 的关系；再读该模块自己的文档。
 - 处理 `fragment-thoughts` 时读 `fragment-thoughts.md`。
 - 处理 `mind-maps` 时读 `mind-maps.md`。
