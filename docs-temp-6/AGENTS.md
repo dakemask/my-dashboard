@@ -35,10 +35,10 @@ Agent 可进行的修改与开发限制在以下内容中：
 - 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
 - 需要新增持久化模块时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
 - 需要更新持久化模块 schema 时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `schema-updates.md`。之后按照 `schema-updates.md` 指引更新相关文档。
-- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档。
+- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
 
 - 根据代码变化更新文档信息前，请读取 `documentation-maintenance.md`。
-- 修改约束内容或重构文档体系前，请读取 `documentation-architecture.md`，然后读取`documentation-maintenance.md`。
+- 修改约束内容或重构文档体系前，请读取 `documentation-architecture.md`，然后读取 `documentation-maintenance.md`。
 
 - 需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
 
