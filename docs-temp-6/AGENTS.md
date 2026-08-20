@@ -1,6 +1,6 @@
 # 项目概述
 
-My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应用。根页面负责模块入口和账户管理；各业务模块拥有独立页面，并在 `src/<module-id>/` 中维护自己的领域模型、应用编排和 UI。
+My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应用。根页面 home 负责模块入口和账户管理；各业务模块拥有独立页面，并在 `src/<module-id>/` 中维护自己的领域模型、应用编排和 UI。
 
 项目的模块可以是持久化模块，也可以是非持久化模块。持久化模块的重要数据在 GitHub 远端私人仓库进行存储，在本地也有存放。持久化模块的非重要数据和非持久化模块的数据都存放在本地。
 
@@ -33,19 +33,21 @@ Agent 可进行的修改与开发限制在以下内容中：
 
 - 需要修改非持久化模块时，读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
 - 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
-- 需要新增持久化模块时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
+- 需要修改首页时，读取 `home.md`。必要时更新 `home.md` 文档。
+- 需要新增非持久化模块时，读取 `module-integration.md`。之后按照 `module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
+- 需要新增持久化模块时，依次读取 `shared-for-modules.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
 - 需要更新持久化模块 schema 时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `schema-updates.md`。之后按照 `schema-updates.md` 指引更新相关文档。
-- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
+- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档、`shared-for-modules.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
 
 - 根据代码变化更新文档信息前，请读取 `documentation-maintenance.md`。
 - 修改约束内容或重构文档体系前，请读取 `documentation-architecture.md`，然后读取 `documentation-maintenance.md`。
 
 - 需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
 
-- `special-development-notes.md` 中包含以下内容，请按需读取：
+- `special-development-notes.md` 中包含以下约束，请按需读取：
 
 （暂无）
 
-- `things-you-must-not-do.md` 中包含以下内容，请按需读取：
+- `things-you-must-not-do.md` 中包含以下约束，请按需读取：
 
 （暂无）
