@@ -2,6 +2,10 @@
 
 My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应用。根页面负责模块入口和账户管理；各业务模块拥有独立页面，并在 `src/<module-id>/` 中维护自己的领域模型、应用编排和 UI。
 
+项目的模块可以是持久化模块，也可以是非持久化模块。持久化模块的重要数据在 GitHub 远端私人仓库进行存储，在本地也有存放。持久化模块的非重要数据和非持久化模块的数据都存放在本地。
+
+未指定远端仓库时，项目中的各模块依然可以以本地模式运行。此时所有数据均储存在本地。
+
 包含持久化数据的模块自行定义 payload schema、业务事件和页面行为。`src/shared` 为这些模块提供公共运行基础，使模块数据接入统一的本地持久化、账户隔离和云端同步流程。
 
 当前持久化业务模块包括：
@@ -10,20 +14,38 @@ My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应�
 - `mind-maps`：分层资料库与空间画布。
 - `todos`：待办实例、周期规则与任务树。
 
-# 文档路由
+当前非持久化模块包括：
 
-只读取与当前任务直接相关的文档：
+（暂无）
 
-- 所有任务均先读 `things-you-must-not-do.md`。
-- 涉及特殊开发注意事项时读 `special-development-notes.md`。
-- 涉及 UI、样式或交互时读 `ui-guidelines.md`。
-- 更新或新增项目文档时读 `documentation-maintenance.md`。
-- 需要在未明文规定的情况下修改文档时读 `documentation-architecture.md`。
-- 修改或分析任一持久化业务模块时，先读 `shared-for-modules.md`，了解项目、模块与 Shared 的关系；再读该模块自己的文档。
-- 处理 `fragment-thoughts` 时读 `fragment-thoughts.md`。
-- 处理 `mind-maps` 时读 `mind-maps.md`。
-- 处理 `todos` 时读 `todos.md`。
-- 新增持久化模块时读 `persistent-module-integration.md`，并同时读 `shared-for-modules.md`。
-- 修改或分析 Shared 自身实现时读 `shared.md`。模块内部的小改动不需要读取该文档。
+# Agent 能力范围
 
-`docs-temp-6` 是当前文档目录。不要读取 `docs-backup`、`docs-temp-1`、`docs-temp-2`、`docs-temp-3`、`docs-temp-4` 或 `docs-temp-5`。
+Agent 可进行的修改与开发限制在以下内容中：
+
+- 已有模块的普通修改。
+- 更新已有持久化模块 schema。
+- 创建新模块，包括持久化模块和非持久化模块。
+- 修改 shared 相关代码。
+- **根据代码变化更新文档中的信息**，此条只涉及代码信息压缩，不涉及约束内容。当前可更新的文档是 `AGENTS.md`、`<module-id>.md`、`shared.md`。
+- 修改针对 Agent 行为的**约束内容**，或**重构当前文档体系**。
+
+# 文档路由与基本行为
+
+- 需要修改非持久化模块时，读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
+- 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
+- 需要新增持久化模块时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
+- 需要更新持久化模块 schema 时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `schema-updates.md`。之后按照 `schema-updates.md` 指引更新相关文档。
+- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档。
+
+- 根据代码变化更新文档信息前，请读取 `documentation-maintenance.md`。
+- 修改约束内容或重构文档体系前，请读取 `documentation-architecture.md`，然后读取`documentation-maintenance.md`。
+
+- 需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
+
+- `special-development-notes.md` 中包含以下内容，请按需读取：
+
+（暂无）
+
+- `things-you-must-not-do.md` 中包含以下内容，请按需读取：
+
+（暂无）
