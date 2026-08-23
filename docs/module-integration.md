@@ -22,4 +22,4 @@ modules/<module-id>/index.html
 2. 在 `vite.config.ts` 的 `build.rollupOptions.input` 中加入该 HTML 页面。
 3. 在 `src/home/modules.ts` 的 `dashboardModuleCatalog` 中添加 `routeSlug`、标题和描述，不提供 `definition`。该目录项会显示在首页，但不会进入 `persistentDashboardDefinitions`。
 4. 在 `AGENTS.md` 的非持久化模块清单中加入模块概述。
-5. 编写对应的 `<module-id>.md` 模块文档，统一包含“概览”和“代码入口”；其余章节只按模块的真实架构和行为添加。
+5. 编写对应的 `docs/<module-id>.md` 模块文档，统一包含“概览”和“代码入口”；其余章节只按模块的真实架构和行为添加。

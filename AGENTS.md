@@ -41,21 +41,21 @@ Agent 须根据该文档（`AGENTS.md`）的路由，在对应的节点阅读所
 
 # 文档路由与文档更新范围
 
-- 需要修改非持久化模块时，读取对应的 `<module-id>.md`。按需更新对应 `<module-id>.md` 文档。
-- 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。按需更新对应 `<module-id>.md` 文档。
-- 需要修改首页时，读取 `home.md`。按需更新 `home.md` 文档。
-- 需要新增非持久化模块时，读取 `module-integration.md`。之后按照 `module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
-- 需要新增持久化模块时，依次读取 `shared-for-modules.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
-- 需要更新持久化模块 schema 时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `schema-updates.md`。之后按照 `schema-updates.md` 指引更新相关文档。
-- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。按需更新 `shared.md` 文档、`shared-for-modules.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
+- 需要修改非持久化模块时，读取对应的 `docs/<module-id>.md`。按需更新对应 `docs/<module-id>.md` 文档。
+- 需要普通修改持久化模块时，先读取 `docs/shared-for-modules.md`，然后读取对应的 `docs/<module-id>.md`。按需更新对应 `docs/<module-id>.md` 文档。
+- 需要修改首页时，读取 `docs/home.md`。按需更新 `docs/home.md` 文档。
+- 需要新增非持久化模块时，读取 `docs/module-integration.md`。之后按照 `docs/module-integration.md` 指引更新相关文档，并创建对应 `docs/<module-id>.md` 文档。
+- 需要新增持久化模块时，依次读取 `docs/shared-for-modules.md` 和 `docs/persistent-module-integration.md`。之后按照 `docs/persistent-module-integration.md` 指引更新相关文档，并创建对应 `docs/<module-id>.md` 文档。
+- 需要更新持久化模块 schema 时，依次读取 `docs/shared-for-modules.md`、对应的 `docs/<module-id>.md` 和 `docs/schema-updates.md`。之后按照 `docs/schema-updates.md` 指引更新相关文档。
+- 修改 shared 自身时，先读取 `docs/shared-for-modules.md`，然后读取 `docs/shared.md`。按需更新 `docs/shared.md` 文档、`docs/shared-for-modules.md` 文档、`docs/persistent-module-integration.md` 文档和 `docs/schema-updates.md` 文档。
 
-- 更新文档前，请读取 `documentation-maintenance.md`。
-- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `documentation-system.md`，然后读取 `documentation-maintenance.md`。
+- 更新文档前，请读取 `docs/documentation-maintenance.md`。
+- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `docs/documentation-system.md`，然后读取 `docs/documentation-maintenance.md`。
 
-- 创建新模块或其他情况有需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
+- 创建新模块或其他情况有需要修改 UI、样式或交互时，读取并遵守 `docs/ui-guidelines.md`。
 
-- 每次开发流程前，查看 `special-development-notes.md`。（此文档的内容依开发环境和开发者的偏好而不同，可能不存在或内容为空）
+- 每次开发流程前，查看 `docs/special-development-notes.md`。（此文档的内容依开发环境和开发者的偏好而不同，可能不存在或内容为空）
 
-- 每次开发流程前，查看 `universal-constraint.md`。
+- 每次开发流程前，查看 `docs/universal-constraint.md`。
 
-**改动涉及多个目标时，取各目标路由文档的并集，并先读 `shared-for-modules.md`。**
+**改动涉及多个目标时，取各目标路由文档的并集，并先读 `docs/shared-for-modules.md`。**
