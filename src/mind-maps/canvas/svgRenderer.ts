@@ -8,21 +8,21 @@ import {
 } from "../domain";
 import {
   arrowLine,
-  bracketCenterPoint,
   bracketPathData,
   connectorMidpoint,
   normalizeRect,
   type Point,
   type Rect,
 } from "./geometry";
-import type { BracketHandle, PointerInteraction } from "./interactionController";
+import type { BracketInteractionTarget, PointerInteraction } from "./interactionController";
 import { KeyedSvgRenderer } from "./keyedSvgRenderer";
 import type { CanvasViewport } from "./viewport";
 
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const GRID_EXTENT = 100_000;
-const BRACKET_HANDLES = ["from", "center", "to"] as const satisfies readonly BracketHandle[];
+type BracketEndpoint = Exclude<BracketInteractionTarget, "body">;
+const BRACKET_ENDPOINTS = ["from", "to"] as const satisfies readonly BracketEndpoint[];
 
 export interface CanvasRendererProjection {
   readonly arrowMode: boolean;
@@ -51,7 +51,7 @@ export interface CanvasSvgRendererCallbacks {
   readonly onBracketHandlePointerDown: (
     event: PointerEvent,
     bracketId: string,
-    handle: BracketHandle,
+    handle: BracketEndpoint,
   ) => void;
   readonly onConnectorPointerDown: (event: PointerEvent, endpoint: MindMapEndpoint) => void;
 }
@@ -363,7 +363,7 @@ export class MindMapSvgRenderer {
     hit.classList.add("mind-maps-canvas__bracket-hit");
     hit.setAttribute("fill", "none");
     hit.setAttribute("stroke", "transparent");
-    hit.setAttribute("stroke-width", "22");
+    hit.setAttribute("stroke-width", "32");
     hit.setAttribute("pointer-events", "stroke");
     hit.addEventListener("pointerdown", (event) => {
       this.#callbacks.onBracketPointerDown(event, id);
@@ -383,26 +383,21 @@ export class MindMapSvgRenderer {
     group.querySelector<SVGPathElement>(".mind-maps-canvas__bracket-hit")
       ?.setAttribute("d", path);
 
-    const controls = new Map<BracketHandle, SVGGElement>();
+    const controls = new Map<BracketEndpoint, SVGGElement>();
     for (const control of group.querySelectorAll<SVGGElement>(
       ".mind-maps-canvas__bracket-control",
     )) {
       const handle = control.dataset.handle;
-      if (handle === "from" || handle === "center" || handle === "to") {
+      if (handle === "from" || handle === "to") {
         controls.set(handle, control);
       }
     }
-    if (!selected) {
-      for (const control of controls.values()) control.remove();
-      return;
-    }
 
-    const points: Record<BracketHandle, Point> = {
+    const points: Record<BracketEndpoint, Point> = {
       from: bracket.from,
-      center: bracketCenterPoint(bracket),
       to: bracket.to,
     };
-    for (const handle of BRACKET_HANDLES) {
+    for (const handle of BRACKET_ENDPOINTS) {
       let control = controls.get(handle);
       if (!control) {
         control = this.#createBracketHandle(bracket.id, handle);
@@ -415,7 +410,7 @@ export class MindMapSvgRenderer {
     for (const control of controls.values()) control.remove();
   }
 
-  #createBracketHandle(bracketId: string, handle: BracketHandle): SVGGElement {
+  #createBracketHandle(bracketId: string, handle: BracketEndpoint): SVGGElement {
     const control = createSvg(this.#ownerDocument, "g");
     control.classList.add(
       "mind-maps-canvas__bracket-control",
@@ -424,13 +419,13 @@ export class MindMapSvgRenderer {
     control.dataset.handle = handle;
     const hit = createSvg(this.#ownerDocument, "circle");
     hit.classList.add("mind-maps-canvas__bracket-control-hit");
-    hit.setAttribute("r", "14");
+    hit.setAttribute("r", "20");
     hit.addEventListener("pointerdown", (event) => {
       this.#callbacks.onBracketHandlePointerDown(event, bracketId, handle);
     });
     const marker = createSvg(this.#ownerDocument, "circle");
     marker.classList.add("mind-maps-canvas__bracket-control-marker");
-    marker.setAttribute("r", handle === "center" ? "5.5" : "5");
+    marker.setAttribute("r", "5");
     marker.setAttribute("pointer-events", "none");
     control.append(hit, marker);
     return control;

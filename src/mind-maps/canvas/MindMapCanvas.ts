@@ -25,7 +25,7 @@ import {
 import { BrowserTextMeasurement } from "./browserTextMeasurement";
 import {
   CanvasInteractionController,
-  type BracketHandle,
+  type BracketInteractionTarget,
   type MutableCanvasSelection,
   type PointerInteraction,
   usesAutoPan,
@@ -83,7 +83,7 @@ const DEFAULT_CONNECTOR_HIT_RADIUS = 18;
 const RESIZE_PREVIEW_MINIMUM_SIZE = 2;
 const RESIZE_PREVIEW_MOVE_EPSILON = 2;
 const MOVE_DRAG_THRESHOLD = 4;
-const MINIMUM_BRACKET_LENGTH = 80;
+const MINIMUM_BRACKET_LENGTH = 48;
 
 interface TextCommitResult {
   readonly change: CanvasTextChange | null;
@@ -137,7 +137,9 @@ export class MindMapCanvas {
       onTextInput: (nodeId) => this.#previewTextEdit(nodeId),
       onNodeMovePointerDown: (event, nodeId) => this.#beginNodeMove(event, nodeId),
       onResizePointerDown: (event, nodeId) => this.#beginResize(event, nodeId),
-      onBracketPointerDown: (event, bracketId) => this.#selectBracket(event, bracketId),
+      onBracketPointerDown: (event, bracketId) => {
+        this.#beginBracketAdjustment(event, bracketId, "body");
+      },
       onBracketHandlePointerDown: (event, bracketId, handle) => {
         this.#beginBracketAdjustment(event, bracketId, handle);
       },
@@ -613,9 +615,13 @@ export class MindMapCanvas {
   #beginBracketAdjustment(
     event: PointerEvent,
     bracketId: string,
-    handle: BracketHandle,
+    target: BracketInteractionTarget,
   ): void {
     if (event.button !== 0 || this.#arrowMode) return;
+    if (event.ctrlKey) {
+      this.#selectBracket(event, bracketId);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     this.commitActiveTextEdit();
@@ -632,7 +638,7 @@ export class MindMapCanvas {
       kind: "adjusting-bracket",
       pointerId: pointerId(event),
       bracketId,
-      handle,
+      target,
       startBracket,
       startWorld: this.#toWorld(client),
       startClient: client,
@@ -779,7 +785,7 @@ export class MindMapCanvas {
       interaction.moved ||= squaredDistance(interaction.lastClient, interaction.startClient)
         > MOVE_DRAG_THRESHOLD * MOVE_DRAG_THRESHOLD;
       if (!interaction.moved) return;
-      interaction.currentBracket = interaction.handle === "center"
+      interaction.currentBracket = interaction.target === "body"
         ? translateBracket(
             interaction.startBracket,
             world.x - interaction.startWorld.x,
@@ -787,7 +793,7 @@ export class MindMapCanvas {
           )
         : moveBracketEndpoint(
             interaction.startBracket,
-            interaction.handle,
+            interaction.target,
             world,
             MINIMUM_BRACKET_LENGTH,
           );

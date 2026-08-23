@@ -10,7 +10,7 @@ export type MutableCanvasSelection = {
   arrowIds: Set<string>;
 };
 
-export type BracketHandle = "from" | "center" | "to";
+export type BracketInteractionTarget = "from" | "body" | "to";
 
 interface PointerInteractionBase {
   readonly pointerId: number;
@@ -48,7 +48,7 @@ export type PointerInteraction =
   | (PointerInteractionBase & {
       readonly kind: "adjusting-bracket";
       readonly bracketId: string;
-      readonly handle: BracketHandle;
+      readonly target: BracketInteractionTarget;
       readonly startBracket: MindMapBracket;
       readonly startWorld: Point;
       readonly startClient: Point;

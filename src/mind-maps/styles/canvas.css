@@ -177,7 +177,7 @@
 .mind-maps-canvas__bracket-line {
   fill: none;
   stroke: #5f6c7d;
-  stroke-width: 7;
+  stroke-width: 4;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
@@ -193,16 +193,12 @@
 }
 
 .mind-maps-canvas__bracket-hit {
-  cursor: pointer;
+  cursor: move;
 }
 
 .mind-maps-canvas__bracket-control--from,
 .mind-maps-canvas__bracket-control--to {
   cursor: crosshair;
-}
-
-.mind-maps-canvas__bracket-control--center {
-  cursor: move;
 }
 
 .mind-maps-canvas__bracket-control-hit {
@@ -215,22 +211,16 @@
   fill: #fff;
   stroke: var(--mm-accent);
   stroke-width: 1.5;
+  opacity: 0;
 }
 
-.mind-maps-canvas__bracket-control--center .mind-maps-canvas__bracket-control-marker {
-  fill: var(--mm-accent);
-  stroke: #fff;
-  stroke-width: 2;
+.mind-maps-canvas__bracket.is-selected .mind-maps-canvas__bracket-control-marker {
+  opacity: 1;
 }
 
 .mind-maps-canvas__bracket-control:hover .mind-maps-canvas__bracket-control-marker {
   fill: var(--mm-accent-soft);
   stroke: var(--mm-accent-deep);
-}
-
-.mind-maps-canvas__bracket-control--center:hover .mind-maps-canvas__bracket-control-marker {
-  fill: var(--mm-accent-deep);
-  stroke: #fff;
 }
 
 .mind-maps-canvas__arrow-line {
