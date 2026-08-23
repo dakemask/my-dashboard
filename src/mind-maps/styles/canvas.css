@@ -34,6 +34,8 @@
 
 .mind-maps-canvas.is-moving,
 .mind-maps-canvas.is-moving *,
+.mind-maps-canvas.is-adjusting-bracket,
+.mind-maps-canvas.is-adjusting-bracket *,
 .mind-maps-canvas.is-panning,
 .mind-maps-canvas.is-panning * {
   cursor: move !important;
@@ -170,6 +172,65 @@
 .mind-maps-canvas__connector.is-target,
 .mind-maps-canvas__connector.is-source {
   fill: var(--mm-accent);
+}
+
+.mind-maps-canvas__bracket-line {
+  fill: none;
+  stroke: #5f6c7d;
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+  transition: stroke 140ms ease;
+}
+
+.mind-maps-canvas__bracket:hover .mind-maps-canvas__bracket-line {
+  stroke: #43536a;
+}
+
+.mind-maps-canvas__bracket.is-selected .mind-maps-canvas__bracket-line {
+  stroke: var(--mm-accent);
+}
+
+.mind-maps-canvas__bracket-hit {
+  cursor: pointer;
+}
+
+.mind-maps-canvas__bracket-control--from,
+.mind-maps-canvas__bracket-control--to {
+  cursor: crosshair;
+}
+
+.mind-maps-canvas__bracket-control--center {
+  cursor: move;
+}
+
+.mind-maps-canvas__bracket-control-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+}
+
+.mind-maps-canvas__bracket-control-marker {
+  fill: #fff;
+  stroke: var(--mm-accent);
+  stroke-width: 1.5;
+}
+
+.mind-maps-canvas__bracket-control--center .mind-maps-canvas__bracket-control-marker {
+  fill: var(--mm-accent);
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.mind-maps-canvas__bracket-control:hover .mind-maps-canvas__bracket-control-marker {
+  fill: var(--mm-accent-soft);
+  stroke: var(--mm-accent-deep);
+}
+
+.mind-maps-canvas__bracket-control--center:hover .mind-maps-canvas__bracket-control-marker {
+  fill: var(--mm-accent-deep);
+  stroke: #fff;
 }
 
 .mind-maps-canvas__arrow-line {

@@ -11,15 +11,36 @@ import {
 } from "./names";
 import type {
   MindMapArrow,
+  MindMapBracket,
   MindMapDocument,
   MindMapEndpoint,
   MindMapNode,
   MindMapPayload,
+  MindMapPoint,
   NodeFrame,
 } from "./types";
 
 export function createEmptyMindMapPayload(): MindMapPayload {
   return { folders: [], maps: [] };
+}
+
+export function migrateMindMapV1ToV2(value: unknown): unknown {
+  const record = requireExactRecord(value, ["folders", "maps"], "Mind Map v1 payload");
+  if (!Array.isArray(record.folders) || !Array.isArray(record.maps)) {
+    throw new TypeError("Mind Map v1 payload folders and maps must be arrays.");
+  }
+
+  return validateMindMapPayload({
+    folders: record.folders,
+    maps: record.maps.map((mapValue, index) => {
+      const map = requireExactRecord(
+        mapValue,
+        ["id", "path", "nodes", "arrows"],
+        `Mind Map v1 map at index ${index}`,
+      );
+      return { ...map, brackets: [] };
+    }),
+  });
 }
 
 /** Validates every invariant and returns a detached, deterministically ordered payload. */
@@ -107,20 +128,44 @@ export function validateMindMapArrow(value: unknown): MindMapArrow {
   };
 }
 
+export function validateMindMapBracket(value: unknown): MindMapBracket {
+  const record = requireExactRecord(value, ["id", "from", "to"], "bracket");
+  const from = validatePoint(record.from, "bracket from");
+  const to = validatePoint(record.to, "bracket to");
+  if (from.x === to.x && from.y === to.y) {
+    throw new TypeError("Bracket endpoints must be distinct.");
+  }
+  return {
+    id: requireIdentifier(record.id, "bracket id"),
+    from,
+    to,
+  };
+}
+
 function validateDocument(value: unknown, index?: number): MindMapDocument {
   const label = index === undefined ? "map" : `map at index ${index}`;
-  const record = requireExactRecord(value, ["id", "path", "nodes", "arrows"], label);
+  const record = requireExactRecord(
+    value,
+    ["id", "path", "nodes", "brackets", "arrows"],
+    label,
+  );
   const id = requireIdentifier(record.id, "map id");
   if (typeof record.path !== "string" || normalizeMapPath(record.path) !== record.path) {
     throw new TypeError(`Map path is not normalized: ${String(record.path)}`);
   }
-  if (!Array.isArray(record.nodes) || !Array.isArray(record.arrows)) {
-    throw new TypeError("Map nodes and arrows must be arrays.");
+  if (
+    !Array.isArray(record.nodes)
+    || !Array.isArray(record.brackets)
+    || !Array.isArray(record.arrows)
+  ) {
+    throw new TypeError("Map nodes, brackets, and arrows must be arrays.");
   }
 
   const nodes = record.nodes.map(validateMindMapNode);
+  const brackets = record.brackets.map(validateMindMapBracket);
   const arrows = record.arrows.map(validateMindMapArrow);
   assertUnique(nodes.map((node) => node.id), "node id");
+  assertUnique(brackets.map((bracket) => bracket.id), "bracket id");
   assertUnique(arrows.map((arrow) => arrow.id), "arrow id");
   const acceptedArrows: MindMapArrow[] = [];
 
@@ -149,7 +194,16 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
     id,
     path: record.path,
     nodes: [...nodes].sort(compareIds),
+    brackets: [...brackets].sort(compareIds),
     arrows: [...arrows].sort(compareIds),
+  };
+}
+
+function validatePoint(value: unknown, label: string): MindMapPoint {
+  const record = requireExactRecord(value, ["x", "y"], label);
+  return {
+    x: requireFiniteNumber(record.x, `${label} x`),
+    y: requireFiniteNumber(record.y, `${label} y`),
   };
 }
 

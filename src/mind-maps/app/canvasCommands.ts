@@ -1,5 +1,6 @@
 import {
   canConnect,
+  type MindMapBracket,
   type MindMapDocument,
   type MindMapEndpoint,
   type MindMapEvent,
@@ -9,9 +10,12 @@ import {
 
 export const DEFAULT_NODE_WIDTH = 260;
 export const DEFAULT_NODE_HEIGHT = 92;
+export const DEFAULT_BRACKET_LENGTH = 300;
+const DEFAULT_BRACKET_AXIS_OFFSET = 50;
 
 export interface CanvasSelectionPlanInput {
   readonly nodeIds: readonly string[];
+  readonly bracketIds: readonly string[];
   readonly arrowIds: readonly string[];
 }
 
@@ -57,6 +61,35 @@ export function planMoveNodes(
     : null;
 }
 
+export function planAddBracket(
+  mapId: string,
+  bracketId: string,
+  position: { readonly x: number; readonly y: number },
+): Extract<MindMapEvent, { readonly type: "add-bracket" }> {
+  return {
+    type: "add-bracket",
+    mapId,
+    bracket: {
+      id: bracketId,
+      from: {
+        x: position.x + DEFAULT_BRACKET_AXIS_OFFSET,
+        y: position.y - DEFAULT_BRACKET_LENGTH / 2,
+      },
+      to: {
+        x: position.x + DEFAULT_BRACKET_AXIS_OFFSET,
+        y: position.y + DEFAULT_BRACKET_LENGTH / 2,
+      },
+    },
+  };
+}
+
+export function planSetBracket(
+  mapId: string | null,
+  bracket: MindMapBracket,
+): Extract<MindMapEvent, { readonly type: "set-bracket" }> | null {
+  return mapId ? { type: "set-bracket", mapId, bracket } : null;
+}
+
 export function planNodeText(
   mapId: string | null,
   change: CanvasTextPlanInput,
@@ -95,11 +128,19 @@ export function planDeleteCanvasSelection(
   mapId: string | null,
   selection: CanvasSelectionPlanInput,
 ): Extract<MindMapEvent, { readonly type: "delete-objects" }> | null {
-  if (!mapId || (selection.nodeIds.length === 0 && selection.arrowIds.length === 0)) return null;
+  if (
+    !mapId
+    || (
+      selection.nodeIds.length === 0
+      && selection.bracketIds.length === 0
+      && selection.arrowIds.length === 0
+    )
+  ) return null;
   return {
     type: "delete-objects",
     mapId,
     nodeIds: selection.nodeIds,
+    bracketIds: selection.bracketIds,
     arrowIds: selection.arrowIds,
   };
 }

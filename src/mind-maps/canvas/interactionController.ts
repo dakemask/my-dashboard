@@ -1,4 +1,4 @@
-import type { MindMapEndpoint, NodeFrame } from "../domain";
+import type { MindMapBracket, MindMapEndpoint, NodeFrame } from "../domain";
 import { EdgeAutoPan, type AnimationFrameScheduler } from "./autoPan";
 import type { Point } from "./geometry";
 import type { PointerCaptureAdapter } from "./types";
@@ -6,8 +6,11 @@ import type { CanvasViewport, ClientRectLike } from "./viewport";
 
 export type MutableCanvasSelection = {
   nodeIds: Set<string>;
+  bracketIds: Set<string>;
   arrowIds: Set<string>;
 };
+
+export type BracketHandle = "from" | "center" | "to";
 
 interface PointerInteractionBase {
   readonly pointerId: number;
@@ -40,6 +43,16 @@ export type PointerInteraction =
       readonly startClient: Point;
       currentFrame: NodeFrame;
       textPaintHeight: number;
+      moved: boolean;
+    })
+  | (PointerInteractionBase & {
+      readonly kind: "adjusting-bracket";
+      readonly bracketId: string;
+      readonly handle: BracketHandle;
+      readonly startBracket: MindMapBracket;
+      readonly startWorld: Point;
+      readonly startClient: Point;
+      currentBracket: MindMapBracket;
       moved: boolean;
     })
   | (PointerInteractionBase & {
@@ -93,7 +106,11 @@ export class CanvasInteractionController {
   get autoPanPointer(): Point | null {
     const interaction = this.#current;
     if (
-      (interaction.kind === "resizing" || interaction.kind === "moving")
+      (
+        interaction.kind === "resizing"
+        || interaction.kind === "moving"
+        || interaction.kind === "adjusting-bracket"
+      )
       && !interaction.moved
     ) return null;
     return usesAutoPan(interaction) ? interaction.lastClient : null;
@@ -139,11 +156,15 @@ export class CanvasInteractionController {
 
 export function usesAutoPan(
   interaction: PointerInteraction,
-): interaction is Extract<PointerInteraction, { kind: "marquee" | "moving" | "resizing" | "connecting" }> {
+): interaction is Extract<
+  PointerInteraction,
+  { kind: "marquee" | "moving" | "resizing" | "adjusting-bracket" | "connecting" }
+> {
   return (
     interaction.kind === "marquee"
     || interaction.kind === "moving"
     || interaction.kind === "resizing"
+    || interaction.kind === "adjusting-bracket"
     || interaction.kind === "connecting"
   );
 }

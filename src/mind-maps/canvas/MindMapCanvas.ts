@@ -1,14 +1,23 @@
-import type { MindMapDocument, MindMapEndpoint, MindMapNode, NodeFrame } from "../domain";
+import type {
+  MindMapBracket,
+  MindMapDocument,
+  MindMapEndpoint,
+  MindMapNode,
+  NodeFrame,
+} from "../domain";
 import { CONNECTOR_SIDES, canConnect } from "../domain";
 import {
   arrowLine,
+  bracketBounds,
   connectorMidpoint,
+  moveBracketEndpoint,
   nodeFrame,
   normalizeRect,
   rectFullyContainsLine,
   rectFullyContainsRect,
   resizeFrameFromSouthEast,
   squaredDistance,
+  translateBracket,
   translateFrame,
   type Point,
   type Rect,
@@ -16,6 +25,7 @@ import {
 import { BrowserTextMeasurement } from "./browserTextMeasurement";
 import {
   CanvasInteractionController,
+  type BracketHandle,
   type MutableCanvasSelection,
   type PointerInteraction,
   usesAutoPan,
@@ -73,6 +83,7 @@ const DEFAULT_CONNECTOR_HIT_RADIUS = 18;
 const RESIZE_PREVIEW_MINIMUM_SIZE = 2;
 const RESIZE_PREVIEW_MOVE_EPSILON = 2;
 const MOVE_DRAG_THRESHOLD = 4;
+const MINIMUM_BRACKET_LENGTH = 80;
 
 interface TextCommitResult {
   readonly change: CanvasTextChange | null;
@@ -91,6 +102,7 @@ export class MindMapCanvas {
   readonly #svg: SVGSVGElement;
   readonly #viewportsByDocumentId = new Map<string, CanvasViewport>();
   readonly #frameOverrides = new Map<string, NodeFrame>();
+  readonly #bracketOverrides = new Map<string, MindMapBracket>();
   readonly #textEditor = new CanvasTextEditor();
   readonly #interactions: CanvasInteractionController;
 
@@ -125,6 +137,10 @@ export class MindMapCanvas {
       onTextInput: (nodeId) => this.#previewTextEdit(nodeId),
       onNodeMovePointerDown: (event, nodeId) => this.#beginNodeMove(event, nodeId),
       onResizePointerDown: (event, nodeId) => this.#beginResize(event, nodeId),
+      onBracketPointerDown: (event, bracketId) => this.#selectBracket(event, bracketId),
+      onBracketHandlePointerDown: (event, bracketId, handle) => {
+        this.#beginBracketAdjustment(event, bracketId, handle);
+      },
       onConnectorPointerDown: (event, endpoint) => this.#beginConnectorDrag(event, endpoint),
     });
     this.#svg = this.#renderer.element;
@@ -181,6 +197,7 @@ export class MindMapCanvas {
     this.#map = map;
     this.#selection = emptySelection();
     this.#frameOverrides.clear();
+    this.#bracketOverrides.clear();
 
     if (options.viewport) {
       this.#viewport = normalizeViewport(options.viewport);
@@ -209,9 +226,13 @@ export class MindMapCanvas {
     }
     this.#map = map;
     const nodeIds = new Set(map.nodes.map((node) => node.id));
+    const bracketIds = new Set(map.brackets.map((bracket) => bracket.id));
     const arrowIds = new Set(map.arrows.map((arrow) => arrow.id));
     const nextSelection: MutableCanvasSelection = {
       nodeIds: new Set([...this.#selection.nodeIds].filter((id) => nodeIds.has(id))),
+      bracketIds: new Set(
+        [...this.#selection.bracketIds].filter((id) => bracketIds.has(id)),
+      ),
       arrowIds: new Set([...this.#selection.arrowIds].filter((id) => arrowIds.has(id))),
     };
     const selectionChanged = !selectionsEqual(this.#selection, nextSelection);
@@ -233,9 +254,11 @@ export class MindMapCanvas {
       return;
     }
     const nodeIds = new Set(map.nodes.map((node) => node.id));
+    const bracketIds = new Set(map.brackets.map((bracket) => bracket.id));
     const arrowIds = new Set(map.arrows.map((arrow) => arrow.id));
     this.#setSelection({
       nodeIds: new Set(selection.nodeIds.filter((id) => nodeIds.has(id))),
+      bracketIds: new Set(selection.bracketIds.filter((id) => bracketIds.has(id))),
       arrowIds: new Set(selection.arrowIds.filter((id) => arrowIds.has(id))),
     });
   }
@@ -299,6 +322,20 @@ export class MindMapCanvas {
     });
   }
 
+  requestAddBracket(): void {
+    this.#assertAlive();
+    if (!this.#map) return;
+    this.commitActiveTextEdit();
+    this.#cancelPointerInteraction();
+    this.#setArrowModeState(false);
+    this.clearSelection();
+    const rect = this.#visibleCanvasRect();
+    const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    this.#callbacks.onAddBracketRequest?.({
+      position: clientToWorld(center, this.#canvasRect(), this.#viewport),
+    });
+  }
+
   editNode(nodeId: string): void {
     this.#assertAlive();
     const node = this.#findNode(nodeId);
@@ -310,7 +347,11 @@ export class MindMapCanvas {
     this.commitActiveTextEdit();
     this.#cancelPointerInteraction();
     this.#setArrowModeState(false);
-    this.#selection = { nodeIds: new Set([nodeId]), arrowIds: new Set() };
+    this.#selection = {
+      nodeIds: new Set([nodeId]),
+      bracketIds: new Set(),
+      arrowIds: new Set(),
+    };
     const frame = this.#effectiveFrame(node);
     this.#textEditor.begin(node, frame);
     this.#render();
@@ -361,6 +402,7 @@ export class MindMapCanvas {
     this.#setArrowModeState(false);
     this.#interactions.destroy();
     this.#frameOverrides.clear();
+    this.#bracketOverrides.clear();
     this.#discardTextEdit();
     this.#svg.removeEventListener("pointerdown", this.#onRootPointerDown);
     this.#svg.removeEventListener("pointermove", this.#onPointerMove);
@@ -479,7 +521,11 @@ export class MindMapCanvas {
       this.#setSelection(next);
     }
     if (!this.#selection.nodeIds.has(nodeId)) {
-      this.#setSelection({ nodeIds: new Set([nodeId]), arrowIds: new Set() });
+      this.#setSelection({
+        nodeIds: new Set([nodeId]),
+        bracketIds: new Set(),
+        arrowIds: new Set(),
+      });
     }
 
     const nodeIds = [...this.#selection.nodeIds].sort();
@@ -510,7 +556,11 @@ export class MindMapCanvas {
     this.commitActiveTextEdit();
     const node = this.#findNode(nodeId);
     if (!node) return;
-    this.#setSelection({ nodeIds: new Set([nodeId]), arrowIds: new Set() });
+    this.#setSelection({
+      nodeIds: new Set([nodeId]),
+      bracketIds: new Set(),
+      arrowIds: new Set(),
+    });
     const startFrame = this.#effectiveFrame(node);
     const client = eventPoint(event);
     this.#beginPointerInteraction({
@@ -541,6 +591,57 @@ export class MindMapCanvas {
     });
   }
 
+  #selectBracket(event: PointerEvent, bracketId: string): void {
+    if (event.button !== 0 || this.#arrowMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.commitActiveTextEdit();
+    if (event.ctrlKey) {
+      const next = cloneSelection(this.#selection);
+      if (next.bracketIds.has(bracketId)) next.bracketIds.delete(bracketId);
+      else next.bracketIds.add(bracketId);
+      this.#setSelection(next);
+      return;
+    }
+    this.#setSelection({
+      nodeIds: new Set(),
+      bracketIds: new Set([bracketId]),
+      arrowIds: new Set(),
+    });
+  }
+
+  #beginBracketAdjustment(
+    event: PointerEvent,
+    bracketId: string,
+    handle: BracketHandle,
+  ): void {
+    if (event.button !== 0 || this.#arrowMode) return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.commitActiveTextEdit();
+    const bracket = this.#findBracket(bracketId);
+    if (!bracket) return;
+    this.#setSelection({
+      nodeIds: new Set(),
+      bracketIds: new Set([bracketId]),
+      arrowIds: new Set(),
+    });
+    const startBracket = this.#effectiveBracket(bracket);
+    const client = eventPoint(event);
+    this.#beginPointerInteraction({
+      kind: "adjusting-bracket",
+      pointerId: pointerId(event),
+      bracketId,
+      handle,
+      startBracket,
+      startWorld: this.#toWorld(client),
+      startClient: client,
+      currentBracket: startBracket,
+      moved: false,
+      lastClient: client,
+    });
+  }
+
   #selectArrow(event: PointerEvent, arrowId: string): void {
     if (event.button !== 0 || this.#arrowMode) return;
     event.preventDefault();
@@ -553,7 +654,11 @@ export class MindMapCanvas {
       this.#setSelection(next);
       return;
     }
-    this.#setSelection({ nodeIds: new Set(), arrowIds: new Set([arrowId]) });
+    this.#setSelection({
+      nodeIds: new Set(),
+      bracketIds: new Set(),
+      arrowIds: new Set([arrowId]),
+    });
   }
 
   #handleTextPointerDown(
@@ -588,7 +693,11 @@ export class MindMapCanvas {
     this.#cancelPointerInteraction();
     const node = this.#findNode(nodeId);
     if (!node || !textarea.isConnected) return;
-    this.#selection = { nodeIds: new Set([nodeId]), arrowIds: new Set() };
+    this.#selection = {
+      nodeIds: new Set([nodeId]),
+      bracketIds: new Set(),
+      arrowIds: new Set(),
+    };
     const frame = this.#effectiveFrame(node);
     this.#textEditor.begin(node, frame);
     this.#syncInteractionChromeInPlace();
@@ -666,6 +775,26 @@ export class MindMapCanvas {
       this.#updateArrowsForNodeIds([interaction.nodeId]);
       return;
     }
+    if (interaction.kind === "adjusting-bracket") {
+      interaction.moved ||= squaredDistance(interaction.lastClient, interaction.startClient)
+        > MOVE_DRAG_THRESHOLD * MOVE_DRAG_THRESHOLD;
+      if (!interaction.moved) return;
+      interaction.currentBracket = interaction.handle === "center"
+        ? translateBracket(
+            interaction.startBracket,
+            world.x - interaction.startWorld.x,
+            world.y - interaction.startWorld.y,
+          )
+        : moveBracketEndpoint(
+            interaction.startBracket,
+            interaction.handle,
+            world,
+            MINIMUM_BRACKET_LENGTH,
+          );
+      this.#bracketOverrides.set(interaction.bracketId, interaction.currentBracket);
+      this.#updateBracketPreview(interaction.bracketId);
+      return;
+    }
     interaction.currentWorld = world;
     const previousTarget = interaction.target;
     interaction.target = this.#findConnectorAtClient(interaction.lastClient, interaction.from);
@@ -714,6 +843,10 @@ export class MindMapCanvas {
           autoWidth: finalized.autoWidth,
         });
       }
+    } else if (interaction.kind === "adjusting-bracket") {
+      if (interaction.moved) {
+        this.#callbacks.onSetBracket?.({ bracket: interaction.currentBracket });
+      }
     } else if (interaction.kind === "connecting") {
       const target = interaction.target;
       this.#setArrowModeState(false);
@@ -723,6 +856,7 @@ export class MindMapCanvas {
     }
 
     this.#frameOverrides.clear();
+    this.#bracketOverrides.clear();
     this.#render();
     if (selectionChanged) this.#emitSelection();
   }
@@ -731,6 +865,7 @@ export class MindMapCanvas {
     const interaction = this.#interactions.cancel();
     if (!interaction) return;
     this.#frameOverrides.clear();
+    this.#bracketOverrides.clear();
   }
 
   #takeTextChange(): CanvasTextChange | null {
@@ -826,15 +961,21 @@ export class MindMapCanvas {
     if (!map) return emptySelection();
     const nodes = new Map(map.nodes.map((node) => [node.id, node]));
     const nodeIds = new Set<string>();
+    const bracketIds = new Set<string>();
     const arrowIds = new Set<string>();
     for (const node of map.nodes) {
       if (rectFullyContainsRect(rect, this.#effectiveFrame(node))) nodeIds.add(node.id);
+    }
+    for (const bracket of map.brackets) {
+      if (rectFullyContainsRect(rect, bracketBounds(this.#effectiveBracket(bracket)))) {
+        bracketIds.add(bracket.id);
+      }
     }
     for (const arrow of map.arrows) {
       const line = arrowLine(arrow, nodes, (node) => this.#effectiveFrame(node));
       if (line && rectFullyContainsLine(rect, line)) arrowIds.add(arrow.id);
     }
-    return { nodeIds, arrowIds };
+    return { nodeIds, bracketIds, arrowIds };
   }
 
   #findConnectorAtClient(client: Point, from: MindMapEndpoint): MindMapEndpoint | null {
@@ -894,7 +1035,10 @@ export class MindMapCanvas {
   }
 
   #fitMap(map: MindMapDocument): CanvasViewport {
-    return fitFramesInViewport(map.nodes.map(nodeFrame), {
+    return fitFramesInViewport([
+      ...map.nodes.map(nodeFrame),
+      ...map.brackets.map(bracketBounds),
+    ], {
       canvasRect: this.#canvasRect(),
       sidebarRect: this.#measurements.getSidebarRect?.(),
     });
@@ -916,8 +1060,16 @@ export class MindMapCanvas {
     return this.#frameOverrides.get(node.id) ?? nodeFrame(node);
   }
 
+  #effectiveBracket(bracket: MindMapBracket): MindMapBracket {
+    return this.#bracketOverrides.get(bracket.id) ?? bracket;
+  }
+
   #findNode(id: string): MindMapNode | null {
     return this.#map?.nodes.find((node) => node.id === id) ?? null;
+  }
+
+  #findBracket(id: string): MindMapBracket | null {
+    return this.#map?.brackets.find((bracket) => bracket.id === id) ?? null;
   }
 
   #findTextarea(nodeId: string): HTMLTextAreaElement | null {
@@ -933,10 +1085,12 @@ export class MindMapCanvas {
     return {
       arrowMode: this.#arrowMode,
       selectedNodeIds: this.#selection.nodeIds,
+      selectedBracketIds: this.#selection.bracketIds,
       selectedArrowIds: this.#selection.arrowIds,
       interaction: this.#interaction,
       editingNodeId: this.#editing?.nodeId ?? null,
       frameForNode: (node) => this.#effectiveFrame(node),
+      bracketFor: (bracket) => this.#effectiveBracket(bracket),
     };
   }
 
@@ -948,6 +1102,11 @@ export class MindMapCanvas {
   #updateNodePreview(nodeId: string): void {
     const map = this.#map;
     if (map) this.#renderer.updateNodePreview(map, nodeId, this.#rendererProjection());
+  }
+
+  #updateBracketPreview(bracketId: string): void {
+    const map = this.#map;
+    if (map) this.#renderer.updateBracketPreview(map, bracketId, this.#rendererProjection());
   }
 
   #updateArrowsForNodeIds(nodeIds: readonly string[]): void {
@@ -1025,16 +1184,21 @@ function pointerId(event: PointerEvent): number {
 }
 
 function emptySelection(): MutableCanvasSelection {
-  return { nodeIds: new Set(), arrowIds: new Set() };
+  return { nodeIds: new Set(), bracketIds: new Set(), arrowIds: new Set() };
 }
 
 function cloneSelection(selection: MutableCanvasSelection): MutableCanvasSelection {
-  return { nodeIds: new Set(selection.nodeIds), arrowIds: new Set(selection.arrowIds) };
+  return {
+    nodeIds: new Set(selection.nodeIds),
+    bracketIds: new Set(selection.bracketIds),
+    arrowIds: new Set(selection.arrowIds),
+  };
 }
 
 function selectionSnapshot(selection: MutableCanvasSelection): CanvasSelection {
   return {
     nodeIds: [...selection.nodeIds].sort(),
+    bracketIds: [...selection.bracketIds].sort(),
     arrowIds: [...selection.arrowIds].sort(),
   };
 }
@@ -1048,6 +1212,10 @@ function toggleSelection(
     if (result.nodeIds.has(id)) result.nodeIds.delete(id);
     else result.nodeIds.add(id);
   }
+  for (const id of candidates.bracketIds) {
+    if (result.bracketIds.has(id)) result.bracketIds.delete(id);
+    else result.bracketIds.add(id);
+  }
   for (const id of candidates.arrowIds) {
     if (result.arrowIds.has(id)) result.arrowIds.delete(id);
     else result.arrowIds.add(id);
@@ -1056,7 +1224,9 @@ function toggleSelection(
 }
 
 function selectionsEqual(left: MutableCanvasSelection, right: MutableCanvasSelection): boolean {
-  return setsEqual(left.nodeIds, right.nodeIds) && setsEqual(left.arrowIds, right.arrowIds);
+  return setsEqual(left.nodeIds, right.nodeIds)
+    && setsEqual(left.bracketIds, right.bracketIds)
+    && setsEqual(left.arrowIds, right.arrowIds);
 }
 
 function setsEqual(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {

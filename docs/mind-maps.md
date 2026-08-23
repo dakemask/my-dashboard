@@ -8,7 +8,7 @@ Mind Maps 是一个由“分层资料库”和“空间画布”组成的思维�
 
 ## 核心模型
 
-当前 schema 版本为 1，业务 payload 的真实结构是：
+当前 schema 版本为 2，业务 payload 的真实结构是：
 
 ```ts
 type ConnectorSide = "top" | "right" | "bottom" | "left";
@@ -22,6 +22,7 @@ interface MindMapDocument {
   readonly id: string;
   readonly path: string;
   readonly nodes: readonly MindMapNode[];
+  readonly brackets: readonly MindMapBracket[];
   readonly arrows: readonly MindMapArrow[];
 }
 
@@ -41,6 +42,17 @@ interface MindMapArrow {
   readonly to: MindMapEndpoint;
 }
 
+interface MindMapBracket {
+  readonly id: string;
+  readonly from: MindMapPoint;
+  readonly to: MindMapPoint;
+}
+
+interface MindMapPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 interface MindMapEndpoint {
   readonly nodeId: string;
   readonly side: ConnectorSide;
@@ -49,7 +61,7 @@ interface MindMapEndpoint {
 
 文件夹没有独立对象，其层级由规范化路径推导；脑图用 `path` 同时表达名称和资料库位置，用稳定 `id` 承载页面期引用。因此脑图改名或移动只改变路径。
 
-节点坐标是与屏幕视口无关的世界坐标，尺寸属于业务数据；箭头连接两个节点的方位连接点。路径层级、标识、节点几何和连线引用等跨对象关系由 domain 统一校验并规范化。
+节点坐标是与屏幕视口无关的世界坐标，尺寸属于业务数据；括号由两个世界坐标端点确定位置、长度和方向；箭头连接两个节点的方位连接点。路径层级、标识、画布对象几何和连线引用等跨对象关系由 domain 统一校验并规范化。
 
 ## 资料库与当前脑图
 
@@ -61,7 +73,7 @@ interface MindMapEndpoint {
 
 ## 画布的提交数据与临时数据
 
-`MindMapCanvas` 持有当前脑图的页面会话，但不拥有业务真值。选择、每张脑图的视口、箭头模式、文本草稿和手势预览都留在画布会话中，手势完成后才由 Controller 生成领域事件。
+`MindMapCanvas` 持有当前脑图的页面会话，但不拥有业务真值。选择、每张脑图的视口、箭头模式、文本草稿和手势预览都留在画布会话中，手势完成后才由 Controller 生成领域事件。括号的圆弧、短臂和三个控制点均由端点临时推导；中点手势平移两个端点，任一端点手势固定另一端并改变长度和方向。
 
 画布有两种数据更新方式。`project` 用于初始化、切换脑图以及撤销重做等完整投影，会终止临时交互并重建会话状态；`render` 用于当前脑图正常 dispatch 后的增量刷新，会保留仍然有效的选择和编辑上下文。这个区分使运行时投影与普通编辑刷新不共享同一套重置语义。
 
@@ -72,9 +84,10 @@ interface MindMapEndpoint {
 画布的指针手势由 `CanvasInteractionController` 统一管理 pointer capture 和边缘自动平移。状态机包含：
 
 - `idle`：没有捕获中的指针手势。
-- `marquee`：框选节点。
+- `marquee`：框选画布对象。
 - `moving`：预览一组节点的统一位移。
 - `resizing`：预览单个节点的尺寸变化。
+- `adjusting-bracket`：预览括号的整体平移或单端点调整。
 - `connecting`：从起点连接到当前可接受的目标连接点。
 - `panning`：根据指针位移更新视口。
 
@@ -82,12 +95,13 @@ interface MindMapEndpoint {
 
 ## 事件模型
 
-mind-maps 当前的业务事件分为四组：
+mind-maps 当前的业务事件分为五组：
 
 - 文件夹：`create-folder { path }`、`delete-folder { path }`、`restore-folder { rootPath, folders, maps }`、`relocate-folder { fromPath, toPath }`。
 - 脑图：`create-map { map }`、`delete-map { mapId }`、`restore-map { map }`、`relocate-map { mapId, path }`。
 - 节点：`add-node { mapId, node }`、`set-node-text { mapId, nodeId, text, frame, autoWidth }`、`set-node-frame { mapId, nodeId, frame, autoWidth }`、`move-nodes { mapId, positions }`。
-- 连线与对象集合：`add-arrow { mapId, arrow }`、`delete-objects { mapId, nodeIds, arrowIds }`、`restore-objects { mapId, nodes, arrows }`。
+- 括号：`add-bracket { mapId, bracket }`、`set-bracket { mapId, bracket }`。
+- 连线与对象集合：`add-arrow { mapId, arrow }`、`delete-objects { mapId, nodeIds, bracketIds, arrowIds }`、`restore-objects { mapId, nodes, brackets, arrows }`。
 
 `applyMindMapEvent` 是事件到新 payload 的唯一领域变换，`invertMindMapEvent` 根据变更前后数据生成逆事件。恢复类事件主要承载删除操作的完整逆数据，例如删除节点时一并消失的关联箭头。模块历史是覆盖整个 payload 的单一页面期历史，容量为 100，不按资料库项目或脑图拆分。
 
@@ -95,7 +109,7 @@ Controller dispatch 后立即刷新界面并合并触发本机保存，最近一
 
 ## 文件化表示
 
-远端编码不是把整个 payload 写进一个 JSON。每张脑图编码为 `<脑图路径>.json`，文件正文只保存脑图 ID、节点和箭头，路径由文件名提供。文件夹结构主要由这些文件的父路径重建；没有子项的叶子文件夹使用空 `.gitkeep` 表示。解码时会补齐祖先文件夹，再由统一 payload 校验恢复内存模型。
+远端编码不是把整个 payload 写进一个 JSON。每张脑图编码为 `<脑图路径>.json`，文件正文只保存脑图 ID、节点、括号和箭头，路径由文件名提供。文件夹结构主要由这些文件的父路径重建；没有子项的叶子文件夹使用空 `.gitkeep` 表示。解码时会补齐祖先文件夹，再由统一 payload 校验恢复内存模型。
 
 ## 代码入口
 

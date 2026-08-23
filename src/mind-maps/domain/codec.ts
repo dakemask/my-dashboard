@@ -8,6 +8,7 @@ const JSON_SUFFIX = ".json";
 interface StoredMapDocument {
   readonly id: string;
   readonly nodes: MindMapDocument["nodes"];
+  readonly brackets: MindMapDocument["brackets"];
   readonly arrows: MindMapDocument["arrows"];
 }
 
@@ -19,6 +20,7 @@ export function encodeMindMapPayload(payloadValue: MindMapPayload): ReadonlyMap<
     const stored: StoredMapDocument = {
       id: map.id,
       nodes: map.nodes,
+      brackets: map.brackets,
       arrows: map.arrows,
     };
     files.set(`${map.path}${JSON_SUFFIX}`, `${JSON.stringify(stored, null, 2)}\n`);
@@ -31,12 +33,12 @@ export function encodeMindMapPayload(payloadValue: MindMapPayload): ReadonlyMap<
   return new Map([...files].sort(([left], [right]) => compareStrings(left, right)));
 }
 
-export function decodeMindMapPayload(files: ReadonlyMap<string, string>): MindMapPayload {
+export function decodeMindMapPayload(files: ReadonlyMap<string, string>): unknown {
   if (!files || typeof files.entries !== "function") {
     throw new TypeError("Mind Map files must be a ReadonlyMap.");
   }
   const folders = new Set<string>();
-  const maps: MindMapDocument[] = [];
+  const maps: unknown[] = [];
 
   for (const [filePath, text] of files) {
     if (typeof filePath !== "string" || typeof text !== "string") {
@@ -63,7 +65,7 @@ export function decodeMindMapPayload(files: ReadonlyMap<string, string>): MindMa
   return { folders: [...folders], maps };
 }
 
-function parseStoredMap(text: string, path: string, filePath: string): MindMapDocument {
+function parseStoredMap(text: string, path: string, filePath: string): unknown {
   let value: unknown;
   try {
     value = JSON.parse(text) as unknown;
@@ -75,15 +77,25 @@ function parseStoredMap(text: string, path: string, filePath: string): MindMapDo
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (keys.length !== 3 || keys[0] !== "arrows" || keys[1] !== "id" || keys[2] !== "nodes") {
+  const isV1 = keys.length === 3
+    && keys[0] === "arrows"
+    && keys[1] === "id"
+    && keys[2] === "nodes";
+  const isV2 = keys.length === 4
+    && keys[0] === "arrows"
+    && keys[1] === "brackets"
+    && keys[2] === "id"
+    && keys[3] === "nodes";
+  if (!isV1 && !isV2) {
     throw new TypeError(`Mind Map file has unexpected or missing properties: ${filePath}`);
   }
-  return {
+  const map = {
     id: record.id as string,
     path,
     nodes: record.nodes as MindMapDocument["nodes"],
     arrows: record.arrows as MindMapDocument["arrows"],
   };
+  return isV2 ? { ...map, brackets: record.brackets } : map;
 }
 
 function emptyLeafFolders(payload: MindMapPayload): readonly string[] {

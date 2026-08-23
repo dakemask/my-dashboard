@@ -1,10 +1,16 @@
-import type { MindMapDocument, MindMapEndpoint, NodeFrame } from "../domain";
+import type {
+  MindMapBracket,
+  MindMapDocument,
+  MindMapEndpoint,
+  NodeFrame,
+} from "../domain";
 import type { AnimationFrameScheduler } from "./autoPan";
 import type { Point } from "./geometry";
 import type { CanvasViewport, ClientRectLike } from "./viewport";
 
 export interface CanvasSelection {
   readonly nodeIds: readonly string[];
+  readonly bracketIds: readonly string[];
   readonly arrowIds: readonly string[];
 }
 
@@ -24,6 +30,7 @@ export type CanvasTextCommitResult =
 export interface MindMapCanvasCallbacks {
   onSelectionChange?(selection: CanvasSelection): void;
   onAddNodeRequest?(command: { readonly position: Point }): void;
+  onAddBracketRequest?(command: { readonly position: Point }): void;
   onMoveNodes?(command: {
     readonly nodeIds: readonly string[];
     readonly dx: number;
@@ -34,6 +41,7 @@ export interface MindMapCanvasCallbacks {
     readonly frame: NodeFrame;
     readonly autoWidth: boolean;
   }): void;
+  onSetBracket?(command: { readonly bracket: MindMapBracket }): void;
   onChangeNodeText?(
     command: CanvasTextChange,
     mode: CanvasTextCommitMode,

@@ -11,6 +11,7 @@ import {
 } from "./names";
 import {
   validateMindMapArrow,
+  validateMindMapBracket,
   validateMindMapDocument,
   validateMindMapNode,
   validateMindMapPayload,
@@ -18,6 +19,7 @@ import {
 } from "./model";
 import type {
   MindMapArrow,
+  MindMapBracket,
   MindMapDocument,
   MindMapEvent,
   MindMapNode,
@@ -142,6 +144,25 @@ export function applyMindMapEvent(
         };
       });
     }
+    case "add-bracket": {
+      const bracket = validateMindMapBracket(event.bracket);
+      return replaceMap(payload, event.mapId, (map) => ({
+        ...map,
+        brackets: [...map.brackets, bracket],
+      }));
+    }
+    case "set-bracket": {
+      const bracket = validateMindMapBracket(event.bracket);
+      return replaceMap(payload, event.mapId, (map) => {
+        requireBracket(map, bracket.id);
+        return {
+          ...map,
+          brackets: map.brackets.map((candidate) => candidate.id === bracket.id
+            ? bracket
+            : candidate),
+        };
+      });
+    }
     case "add-arrow": {
       const arrow = validateMindMapArrow(event.arrow);
       return replaceMap(payload, event.mapId, (map) => {
@@ -163,15 +184,19 @@ export function applyMindMapEvent(
     }
     case "delete-objects": {
       const nodeIds = uniqueIdentifiers(event.nodeIds, "node id");
+      const bracketIds = uniqueIdentifiers(event.bracketIds, "bracket id");
       const arrowIds = uniqueIdentifiers(event.arrowIds, "arrow id");
       return replaceMap(payload, event.mapId, (map) => {
         for (const id of nodeIds) requireNode(map, id);
+        for (const id of bracketIds) requireBracket(map, id);
         for (const id of arrowIds) requireArrow(map, id);
         const removedNodes = new Set(nodeIds);
+        const removedBrackets = new Set(bracketIds);
         const removedArrows = new Set(arrowIds);
         return {
           ...map,
           nodes: map.nodes.filter((node) => !removedNodes.has(node.id)),
+          brackets: map.brackets.filter((bracket) => !removedBrackets.has(bracket.id)),
           arrows: map.arrows.filter((arrow) =>
             !removedArrows.has(arrow.id)
             && !removedNodes.has(arrow.from.nodeId)
@@ -181,10 +206,12 @@ export function applyMindMapEvent(
     }
     case "restore-objects": {
       const nodes = event.nodes.map(validateMindMapNode);
+      const brackets = event.brackets.map(validateMindMapBracket);
       const arrows = event.arrows.map(validateMindMapArrow);
       return replaceMap(payload, event.mapId, (map) => ({
         ...map,
         nodes: [...map.nodes, ...nodes],
+        brackets: [...map.brackets, ...brackets],
         arrows: [...map.arrows, ...arrows],
       }));
     }
@@ -236,6 +263,7 @@ export function invertMindMapEvent(
         type: "delete-objects",
         mapId: event.mapId,
         nodeIds: [event.node.id],
+        bracketIds: [],
         arrowIds: [],
       };
     case "set-node-text":
@@ -266,22 +294,38 @@ export function invertMindMapEvent(
         }),
       };
     }
+    case "add-bracket":
+      return {
+        type: "delete-objects",
+        mapId: event.mapId,
+        nodeIds: [],
+        bracketIds: [event.bracket.id],
+        arrowIds: [],
+      };
+    case "set-bracket":
+      return {
+        ...event,
+        bracket: requireBracket(requireMap(before, event.mapId), event.bracket.id),
+      };
     case "add-arrow":
       return {
         type: "delete-objects",
         mapId: event.mapId,
         nodeIds: [],
+        bracketIds: [],
         arrowIds: [event.arrow.id],
       };
     case "delete-objects": {
       const beforeMap = requireMap(before, event.mapId);
       const afterMap = requireMap(after, event.mapId);
       const remainingNodeIds = new Set(afterMap.nodes.map((node) => node.id));
+      const remainingBracketIds = new Set(afterMap.brackets.map((bracket) => bracket.id));
       const remainingArrowIds = new Set(afterMap.arrows.map((arrow) => arrow.id));
       return {
         type: "restore-objects",
         mapId: event.mapId,
         nodes: beforeMap.nodes.filter((node) => !remainingNodeIds.has(node.id)),
+        brackets: beforeMap.brackets.filter((bracket) => !remainingBracketIds.has(bracket.id)),
         arrows: beforeMap.arrows.filter((arrow) => !remainingArrowIds.has(arrow.id)),
       };
     }
@@ -290,6 +334,7 @@ export function invertMindMapEvent(
         type: "delete-objects",
         mapId: event.mapId,
         nodeIds: event.nodes.map((node) => node.id),
+        bracketIds: event.brackets.map((bracket) => bracket.id),
         arrowIds: event.arrows.map((arrow) => arrow.id),
       };
   }
@@ -332,6 +377,12 @@ function requireNode(map: MindMapDocument, nodeId: string): MindMapNode {
   const node = map.nodes.find((candidate) => candidate.id === nodeId);
   if (!node) throw new TypeError(`Node does not exist: ${nodeId}`);
   return node;
+}
+
+function requireBracket(map: MindMapDocument, bracketId: string): MindMapBracket {
+  const bracket = map.brackets.find((candidate) => candidate.id === bracketId);
+  if (!bracket) throw new TypeError(`Bracket does not exist: ${bracketId}`);
+  return bracket;
 }
 
 function requireArrow(map: MindMapDocument, arrowId: string): MindMapArrow {

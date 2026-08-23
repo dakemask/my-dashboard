@@ -94,7 +94,7 @@ export function planLibraryDraft(
   if (draft.kind === "new-map") {
     const id = createId();
     const path = joinPath(draft.parentPath, name);
-    const map: MindMapDocument = { id, path, nodes: [], arrows: [] };
+    const map: MindMapDocument = { id, path, nodes: [], brackets: [], arrows: [] };
     return {
       event: { type: "create-map", map },
       effect: { type: "open-map", mapId: id, path, parentPath: draft.parentPath },

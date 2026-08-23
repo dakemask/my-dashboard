@@ -18,6 +18,7 @@ import {
   baseName,
   canConnect,
   createEmptyMindMapPayload,
+  type MindMapBracket,
   type MindMapDocument,
   type MindMapEndpoint,
   type MindMapEvent,
@@ -32,12 +33,14 @@ import {
 import { MindMapShell } from "../ui/shell";
 import {
   mapReflectsTextChange,
+  planAddBracket,
   planAddNode,
   planCreateArrow,
   planDeleteCanvasSelection,
   planMoveNodes,
   planNodeFrame,
   planNodeText,
+  planSetBracket,
 } from "./canvasCommands";
 import {
   hasPendingLibraryChange,
@@ -143,11 +146,13 @@ export class MindMapController {
         onArrowModeChange: (enabled) => this.shell.setArrowMode(enabled),
         onSelectionChange: (selection) => this.#onCanvasSelectionChange(selection),
         onAddNodeRequest: ({ position }) => this.#addNode(position),
+        onAddBracketRequest: ({ position }) => this.#addBracket(position),
         onMoveNodes: ({ nodeIds, dx, dy }) => this.#moveNodes(nodeIds, dx, dy),
         onResizeNode: ({ nodeId, frame, autoWidth }) => {
           const event = planNodeFrame(this.#currentMapId, nodeId, frame, autoWidth);
           if (event) this.#dispatch(event);
         },
+        onSetBracket: ({ bracket }) => this.#setBracket(bracket),
         onChangeNodeText: (change, mode) => this.#commitTextChange(change, mode),
         onCreateArrow: ({ from, to }) => this.#createArrow(from, to),
         isArrowTargetValid: (from, to) => this.#isArrowTargetValid(from, to),
@@ -211,6 +216,7 @@ export class MindMapController {
     this.#listen(elements.homeButton, "click", () => void this.#returnHome());
     this.#listen(elements.retrySaveButton, "click", () => void this.#retryLocalSave());
     this.#listen(elements.addNodeButton, "click", () => this.#requestAddNode());
+    this.#listen(elements.addBracketButton, "click", () => this.#requestAddBracket());
     this.#listen(elements.addArrowButton, "click", () => this.#toggleArrowMode());
     this.#listen(elements.resetViewButton, "click", () => this.canvas.resetViewport());
     this.#listen(elements.newFolderButton, "click", () => this.#beginCreate("folder"));
@@ -571,6 +577,27 @@ export class MindMapController {
     if (added) this.canvas.editNode(nodeId);
   }
 
+  #requestAddBracket(): void {
+    this.#commitPendingUi();
+    this.#clearLibrarySelection();
+    this.canvas.requestAddBracket();
+  }
+
+  #addBracket(position: { readonly x: number; readonly y: number }): void {
+    const mapId = this.#currentMapId;
+    if (!mapId) return;
+    const bracketId = this.#createId();
+    const added = this.#dispatch(planAddBracket(mapId, bracketId, position));
+    if (added) {
+      this.canvas.setSelection({ nodeIds: [], bracketIds: [bracketId], arrowIds: [] });
+    }
+  }
+
+  #setBracket(bracket: MindMapBracket): void {
+    const event = planSetBracket(this.#currentMapId, bracket);
+    if (event) this.#dispatch(event);
+  }
+
   #moveNodes(nodeIds: readonly string[], dx: number, dy: number): void {
     const map = this.#currentMap();
     if (!map) return;
@@ -778,7 +805,9 @@ export class MindMapController {
       textEditing: isTextEditingTarget(event.target),
       withinLibrary: targetIsNode && this.shell.elements.sidebar.contains(event.target as Node),
       hasLibrarySelection: this.#librarySelection !== null,
-      hasCanvasSelection: selection.nodeIds.length > 0 || selection.arrowIds.length > 0,
+      hasCanvasSelection: selection.nodeIds.length > 0
+        || selection.bracketIds.length > 0
+        || selection.arrowIds.length > 0,
     });
     if (!command) return;
     event.preventDefault();
@@ -797,6 +826,11 @@ export class MindMapController {
         this.#commitPendingUi();
         this.#clearLibrarySelection();
         this.canvas.requestAddNode();
+        return;
+      case "add-bracket":
+        this.#commitPendingUi();
+        this.#clearLibrarySelection();
+        this.canvas.requestAddBracket();
         return;
       case "add-arrow":
         this.#commitPendingUi();

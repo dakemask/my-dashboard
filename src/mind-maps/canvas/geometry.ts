@@ -1,6 +1,7 @@
 import type {
   ConnectorSide,
   MindMapArrow,
+  MindMapBracket,
   MindMapEndpoint,
   MindMapNode,
   NodeFrame,
@@ -21,6 +22,17 @@ export interface Rect {
 export interface Line {
   readonly from: Point;
   readonly to: Point;
+}
+
+interface BracketGeometry {
+  readonly topApproach: Point;
+  readonly topCorner: Point;
+  readonly topExit: Point;
+  readonly bottomEntry: Point;
+  readonly bottomCorner: Point;
+  readonly bottomExit: Point;
+  readonly center: Point;
+  readonly centerTip: Point;
 }
 
 export function nodeFrame(node: MindMapNode): NodeFrame {
@@ -98,6 +110,81 @@ export function arrowLine(
   return from && to ? { from, to } : null;
 }
 
+export function bracketCenterPoint(bracket: MindMapBracket): Point {
+  return bracketGeometry(bracket).center;
+}
+
+export function bracketPathData(bracket: MindMapBracket): string {
+  const geometry = bracketGeometry(bracket);
+  return [
+    `M ${pathPoint(bracket.from)}`,
+    `L ${pathPoint(geometry.topApproach)}`,
+    `Q ${pathPoint(geometry.topCorner)} ${pathPoint(geometry.topExit)}`,
+    `L ${pathPoint(geometry.bottomEntry)}`,
+    `Q ${pathPoint(geometry.bottomCorner)} ${pathPoint(geometry.bottomExit)}`,
+    `L ${pathPoint(bracket.to)}`,
+    `M ${pathPoint(geometry.center)}`,
+    `L ${pathPoint(geometry.centerTip)}`,
+  ].join(" ");
+}
+
+export function bracketBounds(bracket: MindMapBracket): Rect {
+  const geometry = bracketGeometry(bracket);
+  const points = [
+    bracket.from,
+    bracket.to,
+    geometry.topCorner,
+    geometry.bottomCorner,
+    geometry.centerTip,
+  ];
+  const margin = 5;
+  const left = Math.min(...points.map((point) => point.x)) - margin;
+  const top = Math.min(...points.map((point) => point.y)) - margin;
+  const right = Math.max(...points.map((point) => point.x)) + margin;
+  const bottom = Math.max(...points.map((point) => point.y)) + margin;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+export function translateBracket(
+  bracket: MindMapBracket,
+  dx: number,
+  dy: number,
+): MindMapBracket {
+  return {
+    ...bracket,
+    from: { x: bracket.from.x + dx, y: bracket.from.y + dy },
+    to: { x: bracket.to.x + dx, y: bracket.to.y + dy },
+  };
+}
+
+export function moveBracketEndpoint(
+  bracket: MindMapBracket,
+  endpoint: "from" | "to",
+  pointer: Point,
+  minimumLength: number,
+): MindMapBracket {
+  const fixed = endpoint === "from" ? bracket.to : bracket.from;
+  const original = endpoint === "from" ? bracket.from : bracket.to;
+  const dx = pointer.x - fixed.x;
+  const dy = pointer.y - fixed.y;
+  const distance = Math.hypot(dx, dy);
+  const originalDx = original.x - fixed.x;
+  const originalDy = original.y - fixed.y;
+  const originalDistance = Math.hypot(originalDx, originalDy);
+  const scale = minimumLength / (distance || originalDistance || 1);
+  const point = distance >= minimumLength
+    ? pointer
+    : distance > 0
+      ? { x: fixed.x + dx * scale, y: fixed.y + dy * scale }
+      : {
+          x: fixed.x + originalDx * scale,
+          y: fixed.y + originalDy * scale,
+        };
+  return endpoint === "from"
+    ? { ...bracket, from: point }
+    : { ...bracket, to: point };
+}
+
 export function boundsOfFrames(frames: readonly NodeFrame[]): Rect | null {
   if (frames.length === 0) return null;
 
@@ -147,4 +234,43 @@ export function squaredDistance(left: Point, right: Point): number {
   const dx = left.x - right.x;
   const dy = left.y - right.y;
   return dx * dx + dy * dy;
+}
+
+function bracketGeometry(bracket: MindMapBracket): BracketGeometry {
+  const dx = bracket.to.x - bracket.from.x;
+  const dy = bracket.to.y - bracket.from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const along = { x: dx / length, y: dy / length };
+  const outward = { x: -along.y, y: along.x };
+  const depth = Math.min(56, Math.max(32, length * 0.14));
+  const radius = Math.min(12, depth * 0.35, length / 4);
+  const centerArm = depth * 1.35;
+  const topCorner = add(bracket.from, outward, depth);
+  const bottomCorner = add(bracket.to, outward, depth);
+  const center = add(midpoint(bracket.from, bracket.to), outward, depth);
+  return {
+    topApproach: add(bracket.from, outward, depth - radius),
+    topCorner,
+    topExit: add(topCorner, along, radius),
+    bottomEntry: add(bottomCorner, along, -radius),
+    bottomCorner,
+    bottomExit: add(bracket.to, outward, depth - radius),
+    center,
+    centerTip: add(center, outward, centerArm),
+  };
+}
+
+function midpoint(from: Point, to: Point): Point {
+  return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+}
+
+function add(origin: Point, direction: Point, distance: number): Point {
+  return {
+    x: origin.x + direction.x * distance,
+    y: origin.y + direction.y * distance,
+  };
+}
+
+function pathPoint(point: Point): string {
+  return `${point.x} ${point.y}`;
 }
