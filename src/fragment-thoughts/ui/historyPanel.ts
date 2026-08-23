@@ -58,7 +58,6 @@ export class HistoryPanel {
   };
   #callbacks: FragmentThoughtsShellCallbacks | null = null;
   #closeTimer: number | null = null;
-  #draftLocked = false;
   #returnFocus: HTMLElement | null = null;
   #mobileQuery: MediaQueryList | null;
 
@@ -209,21 +208,11 @@ export class HistoryPanel {
         elements,
         history.thoughtId,
         version,
-        this.#draftLocked,
       );
       if (elements.item !== reference) list.insertBefore(elements.item, reference);
       reference = elements.item.nextElementSibling;
     }
     empty.hidden = history.versions.length !== 0;
-  }
-
-  setDraftLocked(locked: boolean): void {
-    this.#draftLocked = locked;
-    for (const toggle of this.elements.list.querySelectorAll<HTMLButtonElement>(
-      'button[data-action="toggle-history-version"]',
-    )) {
-      updateToggleLock(toggle, locked);
-    }
   }
 
   focusClose(): void {
@@ -317,7 +306,6 @@ function updateHistoryVersion(
   elements: HistoryVersionElements,
   thoughtId: string,
   version: ThoughtHistoryVersionView,
-  draftLocked: boolean,
 ): void {
   elements.toggle.dataset.thoughtId = thoughtId;
   elements.toggle.dataset.versionId = version.id;
@@ -336,13 +324,11 @@ function updateHistoryVersion(
     version.highlightRanges
       ?? findLegacyHighlightRanges(version.content, version.highlightQuery ?? ""),
   );
-  updateToggleLock(elements.toggle, draftLocked);
+  updateToggleLock(elements.toggle);
 }
 
-function updateToggleLock(toggle: HTMLButtonElement, draftLocked: boolean): void {
-  const lockedMessage = draftLocked
-    ? "请先保存、清空或取消当前草稿，再修改折叠状态。"
-    : toggle.dataset.searchLockedMessage;
+function updateToggleLock(toggle: HTMLButtonElement): void {
+  const lockedMessage = toggle.dataset.searchLockedMessage;
   if (lockedMessage) {
     toggle.setAttribute("aria-disabled", "true");
     toggle.dataset.lockedMessage = lockedMessage;

@@ -87,6 +87,7 @@ export class FragmentThoughtsController {
   #pendingDraft: PendingDraftSettlement | null = null;
   #searchQuery = "";
   #selectedHistoryId: string | null = null;
+  readonly #collapsedVersionIds = new Set<string>();
   #localSaveFailed = false;
   #disposed = false;
 
@@ -169,7 +170,7 @@ export class FragmentThoughtsController {
         this.#renderContent();
       },
       onToggleHistoryVersion: (thoughtId, versionId) => {
-        void this.#toggleVersionCollapsed(thoughtId, versionId);
+        this.#toggleVersionCollapsed(thoughtId, versionId);
       },
     };
     this.#removeListeners.push(this.#shell.bindCallbacks(callbacks));
@@ -417,17 +418,14 @@ export class FragmentThoughtsController {
     if (this.#selectedHistoryId) this.#shell.focusHistoryClose();
   }
 
-  async #toggleVersionCollapsed(
+  #toggleVersionCollapsed(
     thoughtId: string,
     versionId: string,
-  ): Promise<void> {
-    if (getDraftGate(this.#draft).status === "blocked") {
-      this.#showDraftGateMessage();
-      return;
-    }
+  ): void {
     const presentation = projectFragmentThoughts(this.#payload, {
       query: this.#searchQuery,
       selectedHistoryId: thoughtId,
+      collapsedVersionIds: this.#collapsedVersionIds,
     });
     const projectedVersion = presentation.history?.versions.find(
       (version) => version.version.id === versionId,
@@ -438,29 +436,20 @@ export class FragmentThoughtsController {
       );
       return;
     }
-    const runtime = this.#runtime;
     const thought = this.#findThought(thoughtId);
     if (
-      !runtime
-      || !thought
+      !thought
       || !thought.versions.some((version) => version.id === versionId)
     ) {
       return;
     }
 
-    try {
-      this.#payload = runtime.dispatch({
-        type: "set-version-collapsed",
-        thoughtId,
-        versionId,
-        collapsed: !thought.collapsedVersionIds.includes(versionId),
-      });
-    } catch {
-      this.#shell.showMessage("折叠状态未能保存，请稍后重试。", "error", 6200);
-      return;
+    if (this.#collapsedVersionIds.has(versionId)) {
+      this.#collapsedVersionIds.delete(versionId);
+    } else {
+      this.#collapsedVersionIds.add(versionId);
     }
     this.#renderContent();
-    await this.#saveAfterMutation(null);
   }
 
   async #retryLocalSave(): Promise<void> {
@@ -586,6 +575,7 @@ export class FragmentThoughtsController {
     const presentation = projectFragmentThoughts(this.#payload, {
       query: this.#searchQuery,
       selectedHistoryId: this.#selectedHistoryId,
+      collapsedVersionIds: this.#collapsedVersionIds,
     });
     this.#selectedHistoryId = presentation.selectedHistoryId;
     this.#renderThoughts(presentation);
@@ -669,7 +659,6 @@ export class FragmentThoughtsController {
     this.#shell.setMutationLocked(
       hasActiveDraft(this.#draft) || this.#runtime === null,
     );
-    this.#shell.setHistoryCollapseDraftLocked(hasActiveDraft(this.#draft));
     this.#shell.setDraftNotice(
       editing
         ? "正在编辑想法。请先保存或取消修改，再执行其他数据操作。"
@@ -716,7 +705,6 @@ export class FragmentThoughtsController {
     return {
       id: thoughtId,
       versions: [this.#createVersion(content, undefined, new Set([thoughtId]))],
-      collapsedVersionIds: [],
     };
   }
 

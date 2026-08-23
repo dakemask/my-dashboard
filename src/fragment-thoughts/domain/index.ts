@@ -1,5 +1,6 @@
 export {
   createEmptyFragmentThoughtsPayload,
+  migrateFragmentThoughtsV1ToV2,
   normalizeFragmentThoughtContent,
   validateFragmentThought,
   validateFragmentThoughtId,

@@ -191,10 +191,6 @@ export class FragmentThoughtsShell {
     this.#thoughtList.setEditError(thoughtId, message);
   }
 
-  setHistoryCollapseDraftLocked(locked: boolean): void {
-    this.#history.setDraftLocked(locked);
-  }
-
   renderThoughts(
     thoughts: readonly ThoughtCardView[],
     emptyMessage?: string,

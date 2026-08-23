@@ -25,9 +25,7 @@ export interface ThoughtListItemPresentation {
 
 export interface ThoughtHistoryVersionPresentation
   extends ThoughtVersionPresentation {
-  readonly persistedCollapsed: boolean;
   readonly collapsed: boolean;
-  readonly temporarilyExpanded: boolean;
   readonly collapseLocked: boolean;
 }
 
@@ -73,6 +71,7 @@ export function projectFragmentThoughts(
   options: {
     readonly query: string;
     readonly selectedHistoryId: string | null;
+    readonly collapsedVersionIds: ReadonlySet<string>;
   },
 ): FragmentThoughtsPresentation {
   const query = normalizeSearchQuery(options.query);
@@ -88,7 +87,7 @@ export function projectFragmentThoughts(
     ) ?? null;
   const history = selected === null
     ? null
-    : projectHistory(selected, query);
+    : projectHistory(selected, query, options.collapsedVersionIds);
 
   return {
     query,
@@ -157,8 +156,8 @@ function compareThoughtPresentations(
 function projectHistory(
   thought: ThoughtListItemPresentation,
   query: string,
+  collapsedVersionIds: ReadonlySet<string>,
 ): ThoughtHistoryPresentation {
-  const collapsedIds = new Set(thought.thought.collapsedVersionIds);
   const versionsById = new Map(
     [...thought.historicalVersions, thought.current].map(
       (version) => [version.version.id, version] as const,
@@ -168,13 +167,10 @@ function projectHistory(
     thoughtId: thought.thought.id,
     versions: thought.thought.versions.map((version) => {
       const projected = versionsById.get(version.id) ?? projectVersion(version, query);
-      const persistedCollapsed = collapsedIds.has(version.id);
       const collapseLocked = query.length > 0 && projected.matchCount > 0;
       return {
         ...projected,
-        persistedCollapsed,
-        collapsed: persistedCollapsed && !collapseLocked,
-        temporarilyExpanded: persistedCollapsed && collapseLocked,
+        collapsed: collapsedVersionIds.has(version.id) && !collapseLocked,
         collapseLocked,
       };
     }),

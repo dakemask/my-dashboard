@@ -5,6 +5,7 @@ import {
   decodeFragmentThoughtsPayload,
   encodeFragmentThoughtsPayload,
   invertFragmentThoughtsEvent,
+  migrateFragmentThoughtsV1ToV2,
   validateFragmentThoughtsPayload,
   type FragmentThoughtsEvent,
   type FragmentThoughtsPayload,
@@ -17,9 +18,10 @@ export const fragmentThoughtsDefinition = defineJsonModule<
   moduleId: "fragment-thoughts",
   createEmpty: createEmptyFragmentThoughtsPayload,
   migration: {
-    currentVersion: 1,
-    migrate: () => {
-      throw new TypeError("Fragment Thoughts has no schema migration below version 1.");
+    currentVersion: 2,
+    migrate: (value, fromVersion) => {
+      if (fromVersion === 1) return migrateFragmentThoughtsV1ToV2(value);
+      throw new TypeError(`Unsupported Fragment Thoughts schema version: ${fromVersion}`);
     },
   },
   validate: validateFragmentThoughtsPayload,

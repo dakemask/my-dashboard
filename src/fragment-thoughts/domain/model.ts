@@ -13,6 +13,36 @@ export function createEmptyFragmentThoughtsPayload(): FragmentThoughtsPayload {
   };
 }
 
+export function migrateFragmentThoughtsV1ToV2(value: unknown): unknown {
+  const record = requireExactRecord(
+    value,
+    ["thoughts"],
+    "Fragment Thoughts v1 payload",
+  );
+  if (!Array.isArray(record.thoughts)) {
+    throw new TypeError("Fragment Thoughts v1 payload thoughts must be an array.");
+  }
+
+  return validateFragmentThoughtsPayload({
+    thoughts: record.thoughts.map((thoughtValue) => {
+      const thoughtRecord = requireExactRecord(
+        thoughtValue,
+        ["id", "versions", "collapsedVersionIds"],
+        "Fragment Thought v1",
+      );
+      const thought = validateFragmentThought({
+        id: thoughtRecord.id,
+        versions: thoughtRecord.versions,
+      });
+      validateV1CollapsedVersionIds(
+        thoughtRecord.collapsedVersionIds,
+        thought.versions,
+      );
+      return thought;
+    }),
+  });
+}
+
 /**
  * Converts browser and imported text line endings to the persisted LF form.
  * All other whitespace is retained exactly.
@@ -44,14 +74,11 @@ export function validateFragmentThoughtVersion(value: unknown): FragmentThoughtV
 export function validateFragmentThought(value: unknown): FragmentThought {
   const record = requireExactRecord(
     value,
-    ["id", "versions", "collapsedVersionIds"],
+    ["id", "versions"],
     "Fragment Thought",
   );
   if (!Array.isArray(record.versions) || record.versions.length === 0) {
     throw new TypeError("A Fragment Thought must contain at least one version.");
-  }
-  if (!Array.isArray(record.collapsedVersionIds)) {
-    throw new TypeError("Fragment Thought collapsedVersionIds must be an array.");
   }
 
   const versions = record.versions.map(validateFragmentThoughtVersion);
@@ -62,25 +89,10 @@ export function validateFragmentThought(value: unknown): FragmentThought {
       throw new TypeError("Fragment Thought version timestamps must be strictly increasing.");
     }
   }
-  const versionIds = new Set(versions.map((version) => version.id));
-  const collapsedIds = new Set<string>();
-  for (const value of record.collapsedVersionIds) {
-    const id = validateFragmentThoughtId(value, "Collapsed Fragment Thought version id");
-    if (!versionIds.has(id)) {
-      throw new TypeError(`Collapsed Fragment Thought version does not exist: ${id}`);
-    }
-    if (collapsedIds.has(id)) {
-      throw new TypeError(`Duplicate collapsed Fragment Thought version id: ${id}`);
-    }
-    collapsedIds.add(id);
-  }
 
   return {
     id: validateFragmentThoughtId(record.id, "Fragment Thought id"),
     versions,
-    collapsedVersionIds: versions
-      .filter((version) => collapsedIds.has(version.id))
-      .map((version) => version.id),
   };
 }
 
@@ -151,6 +163,30 @@ function requireExactRecord(
 function claimUniqueId(ids: Set<string>, id: string): void {
   if (ids.has(id)) throw new TypeError(`Duplicate Fragment Thought id: ${id}`);
   ids.add(id);
+}
+
+function validateV1CollapsedVersionIds(
+  value: unknown,
+  versions: readonly FragmentThoughtVersion[],
+): void {
+  if (!Array.isArray(value)) {
+    throw new TypeError("Fragment Thought v1 collapsedVersionIds must be an array.");
+  }
+  const versionIds = new Set(versions.map((version) => version.id));
+  const collapsedIds = new Set<string>();
+  for (const candidate of value) {
+    const id = validateFragmentThoughtId(
+      candidate,
+      "Collapsed Fragment Thought version id",
+    );
+    if (!versionIds.has(id)) {
+      throw new TypeError(`Collapsed Fragment Thought version does not exist: ${id}`);
+    }
+    if (collapsedIds.has(id)) {
+      throw new TypeError(`Duplicate collapsed Fragment Thought version id: ${id}`);
+    }
+    collapsedIds.add(id);
+  }
 }
 
 function compareThoughtIds(left: FragmentThought, right: FragmentThought): number {

@@ -245,7 +245,6 @@ export function settleDraft(
       type: "append-version",
       thoughtId: thought.id,
       version,
-      collapsed: false,
     },
     pending: {
       kind: "edit",

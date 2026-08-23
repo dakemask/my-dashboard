@@ -8,7 +8,7 @@ Fragment Thoughts 是用于记录短文本想法的持久化模块。它把每�
 
 ## 核心模型
 
-当前 schema 版本为 1，业务 payload 的真实结构是：
+当前 schema 版本为 2，业务 payload 的真实结构是：
 
 ```ts
 interface FragmentThoughtsPayload {
@@ -18,7 +18,6 @@ interface FragmentThoughtsPayload {
 interface FragmentThought {
   readonly id: string;
   readonly versions: readonly FragmentThoughtVersion[];
-  readonly collapsedVersionIds: readonly string[];
 }
 
 interface FragmentThoughtVersion {
@@ -30,17 +29,16 @@ interface FragmentThoughtVersion {
 
 最后一个 version 是想法的当前内容，因此当前内容不是一份与历史并列维护的重复状态。
 
-编辑只追加版本，不覆盖旧版本；`collapsedVersionIds` 只记录历史面板的持久化折叠选择，不参与当前版本判断。domain 统一保证实体标识、版本顺序和文本有效性。payload 中的数组顺序不表达页面顺序，列表由投影层按当前版本时间生成。
+编辑只追加版本，不覆盖旧版本。domain 统一保证实体标识、版本顺序和文本有效性。payload 中的数组顺序不表达页面顺序，列表由投影层按当前版本时间生成。v1 到 v2 的迁移会移除旧的 `collapsedVersionIds`，保留想法及其全部版本。
 
 ## 事件模型
 
-所有持久化变化都表示为可逆事件。事件共有五种：
+所有持久化变化都表示为可逆事件。事件共有四种：
 
 - `insert-thought { thought }`：加入一条带首个版本的想法。
 - `delete-thought { thoughtId }`：删除整条想法及其全部版本。
-- `append-version { thoughtId, version, collapsed }`：追加版本，并记录其初始折叠状态。
+- `append-version { thoughtId, version }`：追加版本。
 - `remove-last-version { thoughtId, versionId }`：移除指定的最后版本。
-- `set-version-collapsed { thoughtId, versionId, collapsed }`：改变版本的折叠状态。
 
 这些事件都能由变更前后的 payload 生成逆事件。Shared 在容量为 100 的单一页面会话历史中应用它们；业务事件先更新运行时 payload，再由控制器请求本地保存，保存失败不会回退已经进入页面状态的变化。
 
@@ -58,7 +56,7 @@ Shared 检测到远端 revision 变化时会调用模块的 settle hook。Fragme
 
 ## 查询与版本展示
 
-搜索由纯投影层完成，不修改 payload。当前版本或任一历史版本命中都会保留该想法，筛选、高亮和历史命中数量共用同一份匹配结果。搜索期间命中的历史版本会临时展开；搜索词、历史选择和临时展开均为页面期状态，清除搜索后重新使用持久化折叠状态。
+搜索由纯投影层完成，不修改 payload。当前版本或任一历史版本命中都会保留该想法，筛选、高亮和历史命中数量共用同一份匹配结果。搜索期间命中的历史版本会展开。
 
 ## 页面编排
 
