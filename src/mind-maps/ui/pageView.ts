@@ -9,6 +9,7 @@ import {
   FolderPlus,
   Home,
   MindmapList,
+  RectangleOne,
   Save,
 } from "@icon-park/svg";
 import {
@@ -25,6 +26,7 @@ export interface MindMapPageElements {
   readonly syncMount: HTMLElement;
   readonly retrySaveButton: HTMLButtonElement;
   readonly addNodeButton: HTMLButtonElement;
+  readonly addBoxButton: HTMLButtonElement;
   readonly addBracketButton: HTMLButtonElement;
   readonly addArrowButton: HTMLButtonElement;
   readonly resetViewButton: HTMLButtonElement;
@@ -92,6 +94,12 @@ export class MindMapPageView {
       "添加文本节点（Alt+1）",
       "toolbar-button toolbar-icon-button",
     );
+    const addBoxButton = iconButton(
+      document,
+      RectangleOne,
+      "添加虚线框（Alt+4）",
+      "toolbar-button toolbar-icon-button",
+    );
     const addBracketButton = iconButton(
       document,
       CodeBrackets,
@@ -110,7 +118,13 @@ export class MindMapPageView {
       "适配并居中全部内容",
       "toolbar-button toolbar-icon-button",
     );
-    canvasActions.append(addNodeButton, addArrowButton, addBracketButton, resetViewButton);
+    canvasActions.append(
+      addNodeButton,
+      addArrowButton,
+      addBracketButton,
+      addBoxButton,
+      resetViewButton,
+    );
     actions.append(retrySaveButton, canvasActions);
     toolbar.append(left, syncMount, actions);
 
@@ -196,6 +210,7 @@ export class MindMapPageView {
       syncMount,
       retrySaveButton,
       addNodeButton,
+      addBoxButton,
       addBracketButton,
       addArrowButton,
       resetViewButton,
@@ -225,6 +240,7 @@ export class MindMapPageView {
     this.elements.canvasEmpty.hidden = title !== null;
     this.elements.canvasMount.hidden = title === null;
     this.elements.addNodeButton.disabled = title === null;
+    this.elements.addBoxButton.disabled = title === null;
     this.elements.addBracketButton.disabled = title === null;
     this.elements.addArrowButton.disabled = title === null;
     this.elements.resetViewButton.disabled = title === null;

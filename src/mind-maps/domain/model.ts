@@ -11,6 +11,7 @@ import {
 } from "./names";
 import type {
   MindMapArrow,
+  MindMapBox,
   MindMapBracket,
   MindMapDocument,
   MindMapEndpoint,
@@ -30,15 +31,40 @@ export function migrateMindMapV1ToV2(value: unknown): unknown {
     throw new TypeError("Mind Map v1 payload folders and maps must be arrays.");
   }
 
-  return validateMindMapPayload({
-    folders: record.folders,
+  return {
+    folders: [...record.folders],
     maps: record.maps.map((mapValue, index) => {
       const map = requireExactRecord(
         mapValue,
         ["id", "path", "nodes", "arrows"],
         `Mind Map v1 map at index ${index}`,
       );
-      return { ...map, brackets: [] };
+      return {
+        id: map.id,
+        path: map.path,
+        nodes: map.nodes,
+        brackets: [],
+        arrows: map.arrows,
+      };
+    }),
+  };
+}
+
+export function migrateMindMapV2ToV3(value: unknown): unknown {
+  const record = requireExactRecord(value, ["folders", "maps"], "Mind Map v2 payload");
+  if (!Array.isArray(record.folders) || !Array.isArray(record.maps)) {
+    throw new TypeError("Mind Map v2 payload folders and maps must be arrays.");
+  }
+
+  return validateMindMapPayload({
+    folders: record.folders,
+    maps: record.maps.map((mapValue, index) => {
+      const map = requireExactRecord(
+        mapValue,
+        ["id", "path", "nodes", "brackets", "arrows"],
+        `Mind Map v2 map at index ${index}`,
+      );
+      return { ...map, boxes: [] };
     }),
   });
 }
@@ -106,6 +132,14 @@ export function validateMindMapNode(value: unknown): MindMapNode {
   return { id, text: record.text, ...frame, autoWidth: record.autoWidth };
 }
 
+export function validateMindMapBox(value: unknown): MindMapBox {
+  const record = requireExactRecord(value, ["id", "x", "y", "width", "height"], "box");
+  return {
+    id: requireIdentifier(record.id, "box id"),
+    ...validateFrameFields(record),
+  };
+}
+
 export function validateNodeFrame(value: unknown): NodeFrame {
   const record = requireExactRecord(value, ["x", "y", "width", "height"], "node frame");
   return validateFrameFields(record);
@@ -146,7 +180,7 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
   const label = index === undefined ? "map" : `map at index ${index}`;
   const record = requireExactRecord(
     value,
-    ["id", "path", "nodes", "brackets", "arrows"],
+    ["id", "path", "nodes", "boxes", "brackets", "arrows"],
     label,
   );
   const id = requireIdentifier(record.id, "map id");
@@ -155,16 +189,19 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
   }
   if (
     !Array.isArray(record.nodes)
+    || !Array.isArray(record.boxes)
     || !Array.isArray(record.brackets)
     || !Array.isArray(record.arrows)
   ) {
-    throw new TypeError("Map nodes, brackets, and arrows must be arrays.");
+    throw new TypeError("Map nodes, boxes, brackets, and arrows must be arrays.");
   }
 
   const nodes = record.nodes.map(validateMindMapNode);
+  const boxes = record.boxes.map(validateMindMapBox);
   const brackets = record.brackets.map(validateMindMapBracket);
   const arrows = record.arrows.map(validateMindMapArrow);
   assertUnique(nodes.map((node) => node.id), "node id");
+  assertUnique(boxes.map((box) => box.id), "box id");
   assertUnique(brackets.map((bracket) => bracket.id), "bracket id");
   assertUnique(arrows.map((arrow) => arrow.id), "arrow id");
   const acceptedArrows: MindMapArrow[] = [];
@@ -194,6 +231,7 @@ function validateDocument(value: unknown, index?: number): MindMapDocument {
     id,
     path: record.path,
     nodes: [...nodes].sort(compareIds),
+    boxes: [...boxes].sort(compareIds),
     brackets: [...brackets].sort(compareIds),
     arrows: [...arrows].sort(compareIds),
   };

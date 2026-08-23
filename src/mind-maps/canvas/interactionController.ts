@@ -1,4 +1,4 @@
-import type { MindMapBracket, MindMapEndpoint, NodeFrame } from "../domain";
+import type { MindMapBox, MindMapBracket, MindMapEndpoint, NodeFrame } from "../domain";
 import { EdgeAutoPan, type AnimationFrameScheduler } from "./autoPan";
 import type { Point } from "./geometry";
 import type { PointerCaptureAdapter } from "./types";
@@ -6,11 +6,13 @@ import type { CanvasViewport, ClientRectLike } from "./viewport";
 
 export type MutableCanvasSelection = {
   nodeIds: Set<string>;
+  boxIds: Set<string>;
   bracketIds: Set<string>;
   arrowIds: Set<string>;
 };
 
 export type BracketInteractionTarget = "from" | "body" | "to";
+export type BoxInteractionTarget = "body" | "resize";
 
 interface PointerInteractionBase {
   readonly pointerId: number;
@@ -43,6 +45,16 @@ export type PointerInteraction =
       readonly startClient: Point;
       currentFrame: NodeFrame;
       textPaintHeight: number;
+      moved: boolean;
+    })
+  | (PointerInteractionBase & {
+      readonly kind: "adjusting-box";
+      readonly boxId: string;
+      readonly target: BoxInteractionTarget;
+      readonly startBox: MindMapBox;
+      readonly startWorld: Point;
+      readonly startClient: Point;
+      currentBox: MindMapBox;
       moved: boolean;
     })
   | (PointerInteractionBase & {
@@ -109,6 +121,7 @@ export class CanvasInteractionController {
       (
         interaction.kind === "resizing"
         || interaction.kind === "moving"
+        || interaction.kind === "adjusting-box"
         || interaction.kind === "adjusting-bracket"
       )
       && !interaction.moved
@@ -158,12 +171,21 @@ export function usesAutoPan(
   interaction: PointerInteraction,
 ): interaction is Extract<
   PointerInteraction,
-  { kind: "marquee" | "moving" | "resizing" | "adjusting-bracket" | "connecting" }
+  {
+    kind:
+      | "marquee"
+      | "moving"
+      | "resizing"
+      | "adjusting-box"
+      | "adjusting-bracket"
+      | "connecting";
+  }
 > {
   return (
     interaction.kind === "marquee"
     || interaction.kind === "moving"
     || interaction.kind === "resizing"
+    || interaction.kind === "adjusting-box"
     || interaction.kind === "adjusting-bracket"
     || interaction.kind === "connecting"
   );

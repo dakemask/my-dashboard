@@ -3,6 +3,7 @@ export type MindMapPageCommand =
   | "undo"
   | "redo"
   | "add-node"
+  | "add-box"
   | "add-bracket"
   | "add-arrow"
   | "delete-library"
@@ -34,6 +35,7 @@ export function routePageKeyCommand(input: PageKeyCommandInput): MindMapPageComm
   if (exactAlt && input.key === "1") return "add-node";
   if (exactAlt && input.key === "2") return "add-arrow";
   if (exactAlt && input.key === "3") return "add-bracket";
+  if (exactAlt && input.key === "4") return "add-box";
 
   const unmodifiedDelete = input.key === "Delete"
     && !input.ctrlKey

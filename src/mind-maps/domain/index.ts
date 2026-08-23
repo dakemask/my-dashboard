@@ -35,7 +35,9 @@ export {
 export {
   createEmptyMindMapPayload,
   migrateMindMapV1ToV2,
+  migrateMindMapV2ToV3,
   validateMindMapArrow,
+  validateMindMapBox,
   validateMindMapBracket,
   validateMindMapDocument,
   validateMindMapNode,
@@ -47,6 +49,7 @@ export { decodeMindMapPayload, encodeMindMapPayload } from "./codec";
 export type {
   ConnectorSide,
   MindMapArrow,
+  MindMapBox,
   MindMapBracket,
   MindMapDocument,
   MindMapEndpoint,

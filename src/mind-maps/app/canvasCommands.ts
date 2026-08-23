@@ -1,5 +1,6 @@
 import {
   canConnect,
+  type MindMapBox,
   type MindMapBracket,
   type MindMapDocument,
   type MindMapEndpoint,
@@ -10,11 +11,14 @@ import {
 
 export const DEFAULT_NODE_WIDTH = 260;
 export const DEFAULT_NODE_HEIGHT = 92;
+export const DEFAULT_BOX_WIDTH = 360;
+export const DEFAULT_BOX_HEIGHT = 220;
 export const DEFAULT_BRACKET_LENGTH = 300;
 const DEFAULT_BRACKET_AXIS_OFFSET = 24;
 
 export interface CanvasSelectionPlanInput {
   readonly nodeIds: readonly string[];
+  readonly boxIds: readonly string[];
   readonly bracketIds: readonly string[];
   readonly arrowIds: readonly string[];
 }
@@ -59,6 +63,31 @@ export function planMoveNodes(
   return positions.length > 0
     ? { type: "move-nodes", mapId: map.id, positions }
     : null;
+}
+
+export function planAddBox(
+  mapId: string,
+  boxId: string,
+  position: { readonly x: number; readonly y: number },
+): Extract<MindMapEvent, { readonly type: "add-box" }> {
+  return {
+    type: "add-box",
+    mapId,
+    box: {
+      id: boxId,
+      x: position.x - DEFAULT_BOX_WIDTH / 2,
+      y: position.y - DEFAULT_BOX_HEIGHT / 2,
+      width: DEFAULT_BOX_WIDTH,
+      height: DEFAULT_BOX_HEIGHT,
+    },
+  };
+}
+
+export function planSetBox(
+  mapId: string | null,
+  box: MindMapBox,
+): Extract<MindMapEvent, { readonly type: "set-box" }> | null {
+  return mapId ? { type: "set-box", mapId, box } : null;
 }
 
 export function planAddBracket(
@@ -135,6 +164,7 @@ export function planDeleteCanvasSelection(
   if (
     !mapId ||
     (selection.nodeIds.length === 0 &&
+      selection.boxIds.length === 0 &&
       selection.bracketIds.length === 0 &&
       selection.arrowIds.length === 0)
   )
@@ -143,6 +173,7 @@ export function planDeleteCanvasSelection(
     type: "delete-objects",
     mapId,
     nodeIds: selection.nodeIds,
+    boxIds: selection.boxIds,
     bracketIds: selection.bracketIds,
     arrowIds: selection.arrowIds,
   };

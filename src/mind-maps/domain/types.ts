@@ -18,6 +18,10 @@ export interface MindMapNode extends NodeFrame {
   readonly autoWidth: boolean;
 }
 
+export interface MindMapBox extends NodeFrame {
+  readonly id: string;
+}
+
 export interface MindMapPoint {
   readonly x: number;
   readonly y: number;
@@ -40,6 +44,7 @@ export interface MindMapDocument {
   readonly id: string;
   readonly path: string;
   readonly nodes: readonly MindMapNode[];
+  readonly boxes: readonly MindMapBox[];
   readonly brackets: readonly MindMapBracket[];
   readonly arrows: readonly MindMapArrow[];
 }
@@ -98,6 +103,8 @@ export type MindMapEvent =
       readonly mapId: string;
       readonly positions: readonly NodePosition[];
     }
+  | { readonly type: "add-box"; readonly mapId: string; readonly box: MindMapBox }
+  | { readonly type: "set-box"; readonly mapId: string; readonly box: MindMapBox }
   | {
       readonly type: "add-bracket";
       readonly mapId: string;
@@ -113,6 +120,7 @@ export type MindMapEvent =
       readonly type: "delete-objects";
       readonly mapId: string;
       readonly nodeIds: readonly string[];
+      readonly boxIds: readonly string[];
       readonly bracketIds: readonly string[];
       readonly arrowIds: readonly string[];
     }
@@ -120,6 +128,7 @@ export type MindMapEvent =
       readonly type: "restore-objects";
       readonly mapId: string;
       readonly nodes: readonly MindMapNode[];
+      readonly boxes: readonly MindMapBox[];
       readonly brackets: readonly MindMapBracket[];
       readonly arrows: readonly MindMapArrow[];
     };

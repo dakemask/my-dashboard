@@ -6,6 +6,7 @@ export interface MindMapShellElements {
   readonly syncMount: HTMLElement;
   readonly retrySaveButton: HTMLButtonElement;
   readonly addNodeButton: HTMLButtonElement;
+  readonly addBoxButton: HTMLButtonElement;
   readonly addBracketButton: HTMLButtonElement;
   readonly addArrowButton: HTMLButtonElement;
   readonly resetViewButton: HTMLButtonElement;

@@ -8,6 +8,7 @@ const JSON_SUFFIX = ".json";
 interface StoredMapDocument {
   readonly id: string;
   readonly nodes: MindMapDocument["nodes"];
+  readonly boxes: MindMapDocument["boxes"];
   readonly brackets: MindMapDocument["brackets"];
   readonly arrows: MindMapDocument["arrows"];
 }
@@ -20,6 +21,7 @@ export function encodeMindMapPayload(payloadValue: MindMapPayload): ReadonlyMap<
     const stored: StoredMapDocument = {
       id: map.id,
       nodes: map.nodes,
+      boxes: map.boxes,
       brackets: map.brackets,
       arrows: map.arrows,
     };
@@ -86,7 +88,13 @@ function parseStoredMap(text: string, path: string, filePath: string): unknown {
     && keys[1] === "brackets"
     && keys[2] === "id"
     && keys[3] === "nodes";
-  if (!isV1 && !isV2) {
+  const isV3 = keys.length === 5
+    && keys[0] === "arrows"
+    && keys[1] === "boxes"
+    && keys[2] === "brackets"
+    && keys[3] === "id"
+    && keys[4] === "nodes";
+  if (!isV1 && !isV2 && !isV3) {
     throw new TypeError(`Mind Map file has unexpected or missing properties: ${filePath}`);
   }
   const map = {
@@ -95,6 +103,7 @@ function parseStoredMap(text: string, path: string, filePath: string): unknown {
     nodes: record.nodes as MindMapDocument["nodes"],
     arrows: record.arrows as MindMapDocument["arrows"],
   };
+  if (isV3) return { ...map, boxes: record.boxes, brackets: record.brackets };
   return isV2 ? { ...map, brackets: record.brackets } : map;
 }
 

@@ -34,6 +34,8 @@
 
 .mind-maps-canvas.is-moving,
 .mind-maps-canvas.is-moving *,
+.mind-maps-canvas.is-moving-box,
+.mind-maps-canvas.is-moving-box *,
 .mind-maps-canvas.is-adjusting-bracket,
 .mind-maps-canvas.is-adjusting-bracket *,
 .mind-maps-canvas.is-panning,
@@ -42,13 +44,43 @@
 }
 
 .mind-maps-canvas.is-resizing,
-.mind-maps-canvas.is-resizing * {
+.mind-maps-canvas.is-resizing *,
+.mind-maps-canvas.is-resizing-box,
+.mind-maps-canvas.is-resizing-box * {
   cursor: nwse-resize !important;
 }
 
 .mind-maps-canvas__grid-dot {
   fill: #c8d2df;
   opacity: 0.7;
+}
+
+.mind-maps-canvas__box-outline {
+  fill: none;
+  stroke: #8c99aa;
+  stroke-width: 1.5;
+  stroke-dasharray: 9 7;
+  rx: 4;
+  ry: 4;
+  pointer-events: none;
+  transition:
+    stroke 140ms ease,
+    stroke-width 140ms ease;
+}
+
+.mind-maps-canvas__box:hover .mind-maps-canvas__box-outline {
+  stroke: #68788f;
+}
+
+.mind-maps-canvas__box.is-selected .mind-maps-canvas__box-outline,
+.mind-maps-canvas__box.is-moving .mind-maps-canvas__box-outline,
+.mind-maps-canvas__box.is-resizing .mind-maps-canvas__box-outline {
+  stroke: var(--mm-accent);
+  stroke-width: 1.7;
+}
+
+.mind-maps-canvas__box-hit {
+  cursor: move;
 }
 
 .mind-maps-canvas__node-body {

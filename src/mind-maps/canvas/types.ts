@@ -1,4 +1,5 @@
 import type {
+  MindMapBox,
   MindMapBracket,
   MindMapDocument,
   MindMapEndpoint,
@@ -10,6 +11,7 @@ import type { CanvasViewport, ClientRectLike } from "./viewport";
 
 export interface CanvasSelection {
   readonly nodeIds: readonly string[];
+  readonly boxIds: readonly string[];
   readonly bracketIds: readonly string[];
   readonly arrowIds: readonly string[];
 }
@@ -30,6 +32,7 @@ export type CanvasTextCommitResult =
 export interface MindMapCanvasCallbacks {
   onSelectionChange?(selection: CanvasSelection): void;
   onAddNodeRequest?(command: { readonly position: Point }): void;
+  onAddBoxRequest?(command: { readonly position: Point }): void;
   onAddBracketRequest?(command: { readonly position: Point }): void;
   onMoveNodes?(command: {
     readonly nodeIds: readonly string[];
@@ -41,6 +44,7 @@ export interface MindMapCanvasCallbacks {
     readonly frame: NodeFrame;
     readonly autoWidth: boolean;
   }): void;
+  onSetBox?(command: { readonly box: MindMapBox }): void;
   onSetBracket?(command: { readonly bracket: MindMapBracket }): void;
   onChangeNodeText?(
     command: CanvasTextChange,
