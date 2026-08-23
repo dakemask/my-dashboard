@@ -94,14 +94,16 @@ export function planNodeText(
   mapId: string | null,
   change: CanvasTextPlanInput,
 ): Extract<MindMapEvent, { readonly type: "set-node-text" }> | null {
-  return mapId ? {
-    type: "set-node-text",
-    mapId,
-    nodeId: change.nodeId,
-    text: change.text,
-    frame: change.frame,
-    autoWidth: change.autoWidth,
-  } : null;
+  return mapId
+    ? {
+        type: "set-node-text",
+        mapId,
+        nodeId: change.nodeId,
+        text: change.text,
+        frame: change.frame,
+        autoWidth: change.autoWidth,
+      }
+    : null;
 }
 
 export function planNodeFrame(
@@ -110,7 +112,9 @@ export function planNodeFrame(
   frame: NodeFrame,
   autoWidth: boolean,
 ): Extract<MindMapEvent, { readonly type: "set-node-frame" }> | null {
-  return mapId ? { type: "set-node-frame", mapId, nodeId, frame, autoWidth } : null;
+  return mapId
+    ? { type: "set-node-frame", mapId, nodeId, frame, autoWidth }
+    : null;
 }
 
 export function planCreateArrow(
@@ -129,13 +133,12 @@ export function planDeleteCanvasSelection(
   selection: CanvasSelectionPlanInput,
 ): Extract<MindMapEvent, { readonly type: "delete-objects" }> | null {
   if (
-    !mapId
-    || (
-      selection.nodeIds.length === 0
-      && selection.bracketIds.length === 0
-      && selection.arrowIds.length === 0
-    )
-  ) return null;
+    !mapId ||
+    (selection.nodeIds.length === 0 &&
+      selection.bracketIds.length === 0 &&
+      selection.arrowIds.length === 0)
+  )
+    return null;
   return {
     type: "delete-objects",
     mapId,
@@ -149,14 +152,16 @@ export function mapReflectsTextChange(
   map: MindMapDocument,
   change: CanvasTextPlanInput,
 ): boolean {
-  const node = map.nodes.find((candidate: MindMapNode) => candidate.id === change.nodeId);
+  const node = map.nodes.find(
+    (candidate: MindMapNode) => candidate.id === change.nodeId,
+  );
   return Boolean(
-    node
-    && node.text === change.text
-    && node.x === change.frame.x
-    && node.y === change.frame.y
-    && node.width === change.frame.width
-    && node.height === change.frame.height
-    && node.autoWidth === change.autoWidth,
+    node &&
+    node.text === change.text &&
+    node.x === change.frame.x &&
+    node.y === change.frame.y &&
+    node.width === change.frame.width &&
+    node.height === change.frame.height &&
+    node.autoWidth === change.autoWidth,
   );
 }

@@ -238,8 +238,8 @@ function bracketGeometry(bracket: MindMapBracket): BracketGeometry {
   const length = Math.hypot(dx, dy) || 1;
   const along = { x: dx / length, y: dy / length };
   const outward = { x: -along.y, y: along.x };
-  const depth = Math.min(30, Math.max(18, length * 0.08));
-  const radius = Math.min(8, depth * 0.35, length / 4);
+  const depth = Math.min(24, Math.max(14, length * 0.06));
+  const radius = Math.min(6, depth * 0.35, length / 4);
   const topCorner = add(bracket.from, outward, depth);
   const bottomCorner = add(bracket.to, outward, depth);
   const center = add(midpoint(bracket.from, bracket.to), outward, depth);
