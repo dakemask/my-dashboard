@@ -1,6 +1,6 @@
 import type { MindMapBox, MindMapBracket, MindMapEndpoint, NodeFrame } from "../domain";
 import { EdgeAutoPan, type AnimationFrameScheduler } from "./autoPan";
-import type { Point } from "./geometry";
+import type { FrameCorner, Point } from "./geometry";
 import type { PointerCaptureAdapter } from "./types";
 import type { CanvasViewport, ClientRectLike } from "./viewport";
 
@@ -12,7 +12,7 @@ export type MutableCanvasSelection = {
 };
 
 export type BracketInteractionTarget = "from" | "body" | "to";
-export type BoxInteractionTarget = "body" | "resize";
+export type BoxInteractionTarget = "body" | FrameCorner;
 
 interface PointerInteractionBase {
   readonly pointerId: number;

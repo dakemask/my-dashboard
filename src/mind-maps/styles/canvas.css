@@ -45,9 +45,14 @@
 
 .mind-maps-canvas.is-resizing,
 .mind-maps-canvas.is-resizing *,
-.mind-maps-canvas.is-resizing-box,
-.mind-maps-canvas.is-resizing-box * {
+.mind-maps-canvas.is-resizing-box-nwse,
+.mind-maps-canvas.is-resizing-box-nwse * {
   cursor: nwse-resize !important;
+}
+
+.mind-maps-canvas.is-resizing-box-nesw,
+.mind-maps-canvas.is-resizing-box-nesw * {
+  cursor: nesw-resize !important;
 }
 
 .mind-maps-canvas__grid-dot {
@@ -171,6 +176,13 @@
 .mind-maps-canvas__resize-control,
 .mind-maps-canvas__resize-hit {
   cursor: nwse-resize;
+}
+
+.mind-maps-canvas__box-resize-control--north-east,
+.mind-maps-canvas__box-resize-control--north-east .mind-maps-canvas__resize-hit,
+.mind-maps-canvas__box-resize-control--south-west,
+.mind-maps-canvas__box-resize-control--south-west .mind-maps-canvas__resize-hit {
+  cursor: nesw-resize;
 }
 
 .mind-maps-canvas__resize-hit {

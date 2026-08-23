@@ -19,6 +19,8 @@ export interface Rect {
   readonly height: number;
 }
 
+export type FrameCorner = "north-west" | "north-east" | "south-east" | "south-west";
+
 export interface Line {
   readonly from: Point;
   readonly to: Point;
@@ -212,17 +214,28 @@ export function translateFrame(frame: NodeFrame, dx: number, dy: number): NodeFr
   };
 }
 
-export function resizeFrameFromSouthEast(
+export function resizeFrameFromCorner(
   frame: NodeFrame,
   pointer: Point,
+  corner: FrameCorner,
   minimumWidth: number,
   minimumHeight: number,
 ): NodeFrame {
+  const west = corner === "north-west" || corner === "south-west";
+  const north = corner === "north-west" || corner === "north-east";
+  const fixedX = west ? frame.x + frame.width : frame.x;
+  const fixedY = north ? frame.y + frame.height : frame.y;
+  const draggedX = west
+    ? Math.min(pointer.x, fixedX - minimumWidth)
+    : Math.max(pointer.x, fixedX + minimumWidth);
+  const draggedY = north
+    ? Math.min(pointer.y, fixedY - minimumHeight)
+    : Math.max(pointer.y, fixedY + minimumHeight);
   return {
-    x: frame.x,
-    y: frame.y,
-    width: Math.max(minimumWidth, pointer.x - frame.x),
-    height: Math.max(minimumHeight, pointer.y - frame.y),
+    x: Math.min(fixedX, draggedX),
+    y: Math.min(fixedY, draggedY),
+    width: Math.abs(draggedX - fixedX),
+    height: Math.abs(draggedY - fixedY),
   };
 }
 

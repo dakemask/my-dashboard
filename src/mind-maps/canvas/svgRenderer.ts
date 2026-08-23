@@ -15,7 +15,11 @@ import {
   type Point,
   type Rect,
 } from "./geometry";
-import type { BracketInteractionTarget, PointerInteraction } from "./interactionController";
+import type {
+  BoxInteractionTarget,
+  BracketInteractionTarget,
+  PointerInteraction,
+} from "./interactionController";
 import { KeyedSvgRenderer } from "./keyedSvgRenderer";
 import type { CanvasViewport } from "./viewport";
 
@@ -24,6 +28,13 @@ const XHTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
 const GRID_EXTENT = 100_000;
 type BracketEndpoint = Exclude<BracketInteractionTarget, "body">;
 const BRACKET_ENDPOINTS = ["from", "to"] as const satisfies readonly BracketEndpoint[];
+type BoxResizeHandle = Exclude<BoxInteractionTarget, "body">;
+const BOX_RESIZE_HANDLES = [
+  "north-west",
+  "north-east",
+  "south-east",
+  "south-west",
+] as const satisfies readonly BoxResizeHandle[];
 
 export interface CanvasRendererProjection {
   readonly arrowMode: boolean;
@@ -51,7 +62,11 @@ export interface CanvasSvgRendererCallbacks {
   readonly onNodeMovePointerDown: (event: PointerEvent, nodeId: string) => void;
   readonly onResizePointerDown: (event: PointerEvent, nodeId: string) => void;
   readonly onBoxPointerDown: (event: PointerEvent, boxId: string) => void;
-  readonly onBoxResizePointerDown: (event: PointerEvent, boxId: string) => void;
+  readonly onBoxResizePointerDown: (
+    event: PointerEvent,
+    boxId: string,
+    handle: BoxResizeHandle,
+  ) => void;
   readonly onBracketPointerDown: (event: PointerEvent, bracketId: string) => void;
   readonly onBracketHandlePointerDown: (
     event: PointerEvent,
@@ -436,7 +451,7 @@ export class MindMapSvgRenderer {
       "is-resizing",
       interaction.kind === "adjusting-box"
         && interaction.boxId === box.id
-        && interaction.target === "resize"
+        && interaction.target !== "body"
         && interaction.moved,
     );
     group.setAttribute("transform", `translate(${box.x} ${box.y})`);
@@ -447,26 +462,41 @@ export class MindMapSvgRenderer {
       element.setAttribute("height", String(box.height));
     }
 
-    let resizeControl = group.querySelector<SVGGElement>(
-      ".mind-maps-canvas__box-resize-control",
-    );
-    if (!this.#shouldShowBoxResizeHandle(box.id)) {
-      resizeControl?.remove();
-    } else {
-      if (!resizeControl) {
-        resizeControl = this.#createBoxResizeHandle(box.id);
-        group.append(resizeControl);
+    if (!this.#shouldShowBoxResizeHandles(box.id)) {
+      for (const control of group.querySelectorAll(
+        ".mind-maps-canvas__box-resize-control",
+      )) {
+        control.remove();
       }
-      this.#updateResizeHandle(resizeControl, box);
+      return;
     }
+
+    const controls = new Map<BoxResizeHandle, SVGGElement>();
+    for (const control of group.querySelectorAll<SVGGElement>(
+      ".mind-maps-canvas__box-resize-control",
+    )) {
+      controls.set(control.dataset.handle as BoxResizeHandle, control);
+    }
+    for (const handle of BOX_RESIZE_HANDLES) {
+      let control = controls.get(handle);
+      if (!control) {
+        control = this.#createBoxResizeHandle(box.id, handle);
+        group.append(control);
+      }
+      this.#updateBoxResizeHandle(control, box, handle);
+      controls.delete(handle);
+    }
+    for (const control of controls.values()) control.remove();
   }
 
-  #createBoxResizeHandle(boxId: string): SVGGElement {
+  #createBoxResizeHandle(boxId: string, corner: BoxResizeHandle): SVGGElement {
     const control = createSvg(this.#ownerDocument, "g");
     control.classList.add(
       "mind-maps-canvas__resize-control",
       "mind-maps-canvas__box-resize-control",
+      `mind-maps-canvas__box-resize-control--${corner}`,
     );
+    control.dataset.handle = corner;
     const hit = createSvg(this.#ownerDocument, "rect");
     hit.classList.add("mind-maps-canvas__resize-hit");
     hit.dataset.boxId = boxId;
@@ -474,15 +504,25 @@ export class MindMapSvgRenderer {
     hit.setAttribute("height", "20");
     hit.setAttribute("fill", "transparent");
     hit.addEventListener("pointerdown", (event) => {
-      this.#callbacks.onBoxResizePointerDown(event, boxId);
+      this.#callbacks.onBoxResizePointerDown(event, boxId, corner);
     });
-    const handle = createSvg(this.#ownerDocument, "rect");
-    handle.classList.add("mind-maps-canvas__resize-handle");
-    handle.setAttribute("width", "8");
-    handle.setAttribute("height", "8");
-    handle.setAttribute("pointer-events", "none");
-    control.append(hit, handle);
+    const marker = createSvg(this.#ownerDocument, "rect");
+    marker.classList.add("mind-maps-canvas__resize-handle");
+    marker.setAttribute("width", "8");
+    marker.setAttribute("height", "8");
+    marker.setAttribute("pointer-events", "none");
+    control.append(hit, marker);
     return control;
+  }
+
+  #updateBoxResizeHandle(
+    control: SVGGElement,
+    box: MindMapBox,
+    handle: BoxResizeHandle,
+  ): void {
+    const x = handle === "north-east" || handle === "south-east" ? box.width : 0;
+    const y = handle === "south-east" || handle === "south-west" ? box.height : 0;
+    this.#updateResizeHandleAt(control, x, y);
   }
 
   #createBracketElement(id: string): SVGGElement {
@@ -747,12 +787,16 @@ export class MindMapSvgRenderer {
   }
 
   #updateResizeHandle(control: SVGGElement, frame: NodeFrame): void {
+    this.#updateResizeHandleAt(control, frame.width, frame.height);
+  }
+
+  #updateResizeHandleAt(control: SVGGElement, x: number, y: number): void {
     const hit = control.querySelector<SVGRectElement>(".mind-maps-canvas__resize-hit");
-    hit?.setAttribute("x", String(frame.width - 10));
-    hit?.setAttribute("y", String(frame.height - 10));
+    hit?.setAttribute("x", String(x - 10));
+    hit?.setAttribute("y", String(y - 10));
     const handle = control.querySelector<SVGRectElement>(".mind-maps-canvas__resize-handle");
-    handle?.setAttribute("x", String(frame.width - 4));
-    handle?.setAttribute("y", String(frame.height - 4));
+    handle?.setAttribute("x", String(x - 4));
+    handle?.setAttribute("y", String(y - 4));
   }
 
   #createOverlayElement(item: OverlayRenderItem): SVGElement {
@@ -774,6 +818,10 @@ export class MindMapSvgRenderer {
   #updateRootClasses(): void {
     const projection = this.#requireProjection();
     const interaction = projection.interaction;
+    const boxResizeTarget = interaction.kind === "adjusting-box"
+      && interaction.target !== "body"
+      ? interaction.target
+      : null;
     this.element.classList.toggle("is-arrow-mode", projection.arrowMode);
     for (const kind of [
       "marquee",
@@ -791,8 +839,12 @@ export class MindMapSvgRenderer {
       interaction.kind === "adjusting-box" && interaction.target === "body",
     );
     this.element.classList.toggle(
-      "is-resizing-box",
-      interaction.kind === "adjusting-box" && interaction.target === "resize",
+      "is-resizing-box-nwse",
+      boxResizeTarget === "north-west" || boxResizeTarget === "south-east",
+    );
+    this.element.classList.toggle(
+      "is-resizing-box-nesw",
+      boxResizeTarget === "north-east" || boxResizeTarget === "south-west",
     );
   }
 
@@ -836,7 +888,7 @@ export class MindMapSvgRenderer {
     );
   }
 
-  #shouldShowBoxResizeHandle(boxId: string): boolean {
+  #shouldShowBoxResizeHandles(boxId: string): boolean {
     const projection = this.#requireProjection();
     return (
       projection.selectedBoxIds.size === 1

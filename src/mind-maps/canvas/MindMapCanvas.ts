@@ -16,7 +16,7 @@ import {
   normalizeRect,
   rectFullyContainsLine,
   rectFullyContainsRect,
-  resizeFrameFromSouthEast,
+  resizeFrameFromCorner,
   squaredDistance,
   translateBracket,
   translateFrame,
@@ -144,8 +144,8 @@ export class MindMapCanvas {
       onBoxPointerDown: (event, boxId) => {
         this.#beginBoxAdjustment(event, boxId, "body");
       },
-      onBoxResizePointerDown: (event, boxId) => {
-        this.#beginBoxAdjustment(event, boxId, "resize");
+      onBoxResizePointerDown: (event, boxId, handle) => {
+        this.#beginBoxAdjustment(event, boxId, handle);
       },
       onBracketPointerDown: (event, bracketId) => {
         this.#beginBracketAdjustment(event, bracketId, "body");
@@ -833,9 +833,10 @@ export class MindMapCanvas {
       return;
     }
     if (interaction.kind === "resizing") {
-      interaction.currentFrame = resizeFrameFromSouthEast(
+      interaction.currentFrame = resizeFrameFromCorner(
         interaction.startFrame,
         world,
+        "south-east",
         RESIZE_PREVIEW_MINIMUM_SIZE,
         RESIZE_PREVIEW_MINIMUM_SIZE,
       );
@@ -859,8 +860,13 @@ export class MindMapCanvas {
       return;
     }
     if (interaction.kind === "adjusting-box") {
-      interaction.moved ||= squaredDistance(interaction.lastClient, interaction.startClient)
-        > MOVE_DRAG_THRESHOLD * MOVE_DRAG_THRESHOLD;
+      interaction.moved ||= interaction.target === "body"
+        ? squaredDistance(interaction.lastClient, interaction.startClient)
+          > MOVE_DRAG_THRESHOLD * MOVE_DRAG_THRESHOLD
+        : Math.abs(interaction.lastClient.x - interaction.startClient.x)
+            > RESIZE_PREVIEW_MOVE_EPSILON
+          || Math.abs(interaction.lastClient.y - interaction.startClient.y)
+            > RESIZE_PREVIEW_MOVE_EPSILON;
       if (!interaction.moved) return;
       const frame = interaction.target === "body"
         ? translateFrame(
@@ -868,9 +874,10 @@ export class MindMapCanvas {
             world.x - interaction.startWorld.x,
             world.y - interaction.startWorld.y,
           )
-        : resizeFrameFromSouthEast(
+        : resizeFrameFromCorner(
             interaction.startBox,
             world,
+            interaction.target,
             MINIMUM_BOX_SIZE,
             MINIMUM_BOX_SIZE,
           );
