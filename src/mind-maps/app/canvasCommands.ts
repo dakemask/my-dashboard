@@ -11,7 +11,7 @@ import {
 export const DEFAULT_NODE_WIDTH = 260;
 export const DEFAULT_NODE_HEIGHT = 92;
 export const DEFAULT_BRACKET_LENGTH = 300;
-const DEFAULT_BRACKET_AXIS_OFFSET = 30;
+const DEFAULT_BRACKET_AXIS_OFFSET = 24;
 
 export interface CanvasSelectionPlanInput {
   readonly nodeIds: readonly string[];

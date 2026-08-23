@@ -177,7 +177,7 @@
 .mind-maps-canvas__bracket-line {
   fill: none;
   stroke: #5f6c7d;
-  stroke-width: 4;
+  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
