@@ -125,6 +125,6 @@ Shared 在返回 `ready` 前完成 profile 选择、编辑租约、本地记录�
 2. 在 `vite.config.ts` 的 `build.rollupOptions.input` 中加入该 HTML 页面。
 3. 在 `src/home/modules.ts` 导入模块定义，并向 `dashboardModuleCatalog` 添加 `routeSlug`、标题、描述和 `definition: eraseDefinition(moduleDefinition)`。
 4. 在 `AGENTS.md` 中加入新模块概述。
-5. 编写对应的 `<module-id>.md` 模块文档，包含“概览”“核心模型”“事件模型”和“代码入口”。
+5. 编写对应的 `<module-id>.md` 模块文档，内须包含“概览”“核心模型”“事件模型”和“代码入口”，参考已有的持久化模块，不照抄具体内容和其他章节。
 
 带有 `definition` 的目录项会同时进入 `persistentDashboardDefinitions`，首页首次账户接入、profile 数据建立和清理流程会据此覆盖该模块。只加入页面链接而不加入 definition，不会形成完整的持久化模块接入。

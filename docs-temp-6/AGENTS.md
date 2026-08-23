@@ -20,36 +20,42 @@ My Dashboard 是一个使用 TypeScript 和 Vite 构建的多页面浏览器应�
 
 # Agent 能力范围
 
-Agent 可进行的修改与开发限制在以下内容中：
+Agent 可进行的修改当前限制在以下内容中：
 
-- 已有模块的普通修改。
-- 更新已有持久化模块 schema。
-- 创建新模块，包括持久化模块和非持久化模块。
-- 修改 shared 相关代码。
-- **根据代码变化更新文档中的信息**，此条只涉及代码信息压缩，不涉及约束内容。一般需要更新的文档是 `<module-id>.md`。也可能是`shared.md`、`home.md`、`AGENTS.md`。剩余文档的预期更改频率非常低。
-- 修改针对 Agent 行为的**约束内容**，或**重构当前文档体系**。
+    修改代码：
 
-# 文档路由与基本行为
+    - 已有模块的普通修改。
+    - 更新已有持久化模块 schema。
+    - 创建新模块，包括持久化模块和非持久化模块。
+    - 修改 shared 相关代码。
+    - 修改 home 相关代码。
 
-- 需要修改非持久化模块时，读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
-- 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。必要时更新对应 `<module-id>.md` 文档。
-- 需要修改首页时，读取 `home.md`。必要时更新 `home.md` 文档。
+    改动文档：
+
+    - 维护直接与项目代码相关的文档（也包含其他文档中直接与项目代码相关的部分）。包括 `<module-id>.md`、`home.md`、`shared.md`、`shared-for-modules.md`、`persistent-module-integration.md`、`schema-updates.md`，以及 `AGENTS.md` 的一些部分。
+    - 修改针对 Agent 其他行为的约束文档，或重构文档系统（删除或新增非 `<module-id>.md` 文档、大幅调整文档系统结构）。
+
+# 开发流程
+
+Agent 须根据该文档（`AGENTS.md`）的路由，在对应的节点阅读所需的文档；开发完成后，运行构建 `npm run build`。正常构建后依据 `AGENTS.md` 的说明和具体的开发内容，按需更新对应的文档。最后将修改提交到 Git。没有用户的要求，默认不做其他测试。即使测试，用于测试的文件也默认不保留。
+
+# 文档路由与文档更新范围
+
+- 需要修改非持久化模块时，读取对应的 `<module-id>.md`。按需更新对应 `<module-id>.md` 文档。
+- 需要普通修改持久化模块时，先读取 `shared-for-modules.md`，然后读取对应的 `<module-id>.md`。按需更新对应 `<module-id>.md` 文档。
+- 需要修改首页时，读取 `home.md`。按需更新 `home.md` 文档。
 - 需要新增非持久化模块时，读取 `module-integration.md`。之后按照 `module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
 - 需要新增持久化模块时，依次读取 `shared-for-modules.md` 和 `persistent-module-integration.md`。之后按照 `persistent-module-integration.md` 指引更新相关文档，并创建对应 `<module-id>.md` 文档。
 - 需要更新持久化模块 schema 时，依次读取 `shared-for-modules.md`、对应的 `<module-id>.md` 和 `schema-updates.md`。之后按照 `schema-updates.md` 指引更新相关文档。
-- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。必要时更新 `shared.md` 文档、`shared-for-modules.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
+- 修改 shared 自身时，先读取 `shared-for-modules.md`，然后读取 `shared.md`。按需更新 `shared.md` 文档、`shared-for-modules.md` 文档、`persistent-module-integration.md` 文档和 `schema-updates.md` 文档。
 
-- 根据代码变化更新文档信息前，请读取 `documentation-maintenance.md`。
-- 修改约束内容或重构文档体系前，请读取 `documentation-architecture.md`，然后读取 `documentation-maintenance.md`。
+- 更新文档前，请读取 `documentation-maintenance.md`。
+- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `documentation-system.md`，然后读取 `documentation-maintenance.md`。
 
-- 需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
+- 创建新模块或其他情况有需要修改 UI、样式或交互时，读取并遵守 `ui-guidelines.md`。
 
-- `special-development-notes.md` 中包含以下约束，请按需读取：
+- 每次开发流程前，查看 `special-development-notes.md`。（此文档的内容依开发环境和开发者的偏好而不同，可能不存在或内容为空）
 
-（暂无）
-
-- `things-you-must-not-do.md` 中包含以下约束，请按需读取：
-
-（暂无）
+- 每次开发流程前，查看 `universal-constraint.md`。
 
 **改动涉及多个目标时，取各目标路由文档的并集，并先读 `shared-for-modules.md`。**
