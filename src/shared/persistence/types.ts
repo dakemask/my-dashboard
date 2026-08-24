@@ -12,11 +12,10 @@ export interface PersistedConflict {
 }
 
 export interface PersistedMigration {
+  /** Legacy migration state consumed and cleared by the next runtime startup. */
   readonly fromVersion: number;
   readonly toVersion: number;
-  /** Hash of the current-version payload immediately after migration. */
   readonly migratedContentHash: string;
-  /** True when unsynchronized business edits existed before or after migration. */
   readonly businessChanged: boolean;
 }
 
@@ -33,6 +32,7 @@ export interface ModuleLocalEnvelope<T> {
   readonly lastSyncedRemoteUpdatedAt: string | null;
   readonly pendingUpload: PendingUpload | null;
   readonly conflict: PersistedConflict | null;
+  /** Legacy field kept only so existing IndexedDB records can be normalized once. */
   readonly migration: PersistedMigration | null;
 }
 

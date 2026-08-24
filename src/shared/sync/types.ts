@@ -3,6 +3,8 @@ import type {
   RemoteModuleOverwriteOptions,
   RemoteModulePushOptions,
   RemoteModulePushResult,
+  RemoteModuleSchemaUpdateOptions,
+  RemoteModuleSchemaUpdateResult,
   RemoteModuleSnapshot,
   RemoteRevisionSnapshot,
 } from "../github";
@@ -33,6 +35,10 @@ export interface RemoteModulePort<T> {
   pull(): Promise<RemoteModuleSnapshot<T> | null>;
   push(data: T, options: RemoteModulePushOptions): Promise<RemoteModulePushResult>;
   overwrite(data: T, options: RemoteModuleOverwriteOptions): Promise<RemoteModulePushResult>;
+  updateSchema(
+    data: T,
+    options: RemoteModuleSchemaUpdateOptions,
+  ): Promise<RemoteModuleSchemaUpdateResult>;
 }
 
 export type SettleReason =
@@ -57,7 +63,6 @@ export interface SyncCoordinatorSnapshot {
   sessionDirty: boolean;
   localChangedSinceSync: boolean;
   businessChangedSinceSync: boolean;
-  migrationChangedSinceSync: boolean;
   localSavedAt: string | null;
   knownRemoteRevision: string | null;
   knownRemoteUpdatedAt: string | null;

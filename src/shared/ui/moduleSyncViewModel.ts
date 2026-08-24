@@ -39,7 +39,6 @@ export const EMPTY_SYNC_SNAPSHOT: SyncCoordinatorSnapshot = {
   sessionDirty: false,
   localChangedSinceSync: false,
   businessChangedSinceSync: false,
-  migrationChangedSinceSync: false,
   localSavedAt: null,
   knownRemoteRevision: null,
   knownRemoteUpdatedAt: null,

@@ -6,7 +6,6 @@ import {
   type ModuleLocalEnvelope,
   type PendingUpload,
   type PersistedConflict,
-  type PersistedMigration,
 } from "../persistence";
 import {
   getModuleContentKey,
@@ -15,7 +14,6 @@ import {
   type PreparedModulePayload,
 } from "./modulePayload";
 import {
-  ModuleMigrationError,
   SyncCoordinatorNotInitializedError,
   type ModuleDefinition,
   type SyncCoordinatorSnapshot,
@@ -24,7 +22,6 @@ import {
 export interface ObservedRemoteVersion {
   readonly revision: string | null;
   readonly updatedAt: string | null;
-  readonly schemaVersion?: number | null;
 }
 
 interface SyncSessionStateOptions<TPayload, TEvent> {
@@ -104,20 +101,32 @@ export class SyncSessionState<TPayload, TEvent> {
     contentHash: string,
   ): Promise<void> {
     let activated: ModuleLocalEnvelope<TPayload>;
-    if (prepared.migrated) {
-      const migration = this.#createPersistedMigration(
-        prepared,
-        contentHash,
-        local.contentHash !== local.lastSyncedContentHash || local.conflict !== null,
-      );
+    const legacyMigration = local.migration;
+    if (prepared.migrated || legacyMigration !== null) {
+      const businessChanged = legacyMigration
+        ? legacyMigration.businessChanged
+          || local.contentHash !== legacyMigration.migratedContentHash
+        : local.contentHash !== local.lastSyncedContentHash;
+      const nextLocalRevision = createLocalRevision();
+      const pendingUpload = legacyMigration && !businessChanged
+        ? null
+        : prepared.migrated
+            && local.pendingUpload?.contentHash === local.contentHash
+          ? {
+              ...local.pendingUpload,
+              localRevision: nextLocalRevision,
+              contentHash,
+            }
+          : local.pendingUpload;
       activated = await this.#localStore.compareAndSwap(local.localRevision, {
         ...local,
         payload: prepared.payload,
         schemaVersion: prepared.toVersion,
         contentHash,
-        localRevision: createLocalRevision(),
-        localSavedAt: this.#now().toISOString(),
-        migration,
+        localRevision: nextLocalRevision,
+        lastSyncedContentHash: businessChanged ? null : contentHash,
+        pendingUpload,
+        migration: null,
       });
     } else {
       activated = { ...local, payload: structuredClone(prepared.payload) };
@@ -142,9 +151,6 @@ export class SyncSessionState<TPayload, TEvent> {
       lastSyncedContentHash: contentHash,
       lastSyncedRemoteRevision: remote.revision,
       lastSyncedRemoteUpdatedAt: remote.updatedAt,
-      migration: prepared.migrated
-        ? this.#createPersistedMigration(prepared, contentHash, false)
-        : null,
     };
     this.#activate(await this.#localStore.initialize(initial));
   }
@@ -167,7 +173,6 @@ export class SyncSessionState<TPayload, TEvent> {
         sessionDirty: false,
         localChangedSinceSync: false,
         businessChangedSinceSync: false,
-        migrationChangedSinceSync: false,
         localSavedAt: null,
         knownRemoteRevision: null,
         knownRemoteUpdatedAt: null,
@@ -184,13 +189,11 @@ export class SyncSessionState<TPayload, TEvent> {
       ? this.#local.conflict.observedRemoteUpdatedAt
       : this.#local.lastSyncedRemoteUpdatedAt;
     const businessChangedSinceSync = this.hasBusinessChanges();
-    const migrationChangedSinceSync = this.#local.migration !== null;
     return {
       initialized: true,
       sessionDirty: this.#history.dirty,
-      localChangedSinceSync: businessChangedSinceSync || migrationChangedSinceSync,
+      localChangedSinceSync: businessChangedSinceSync,
       businessChangedSinceSync,
-      migrationChangedSinceSync,
       localSavedAt: this.#local.localSavedAt,
       knownRemoteRevision,
       knownRemoteUpdatedAt,
@@ -202,7 +205,7 @@ export class SyncSessionState<TPayload, TEvent> {
 
   hasLocalChanges(): boolean {
     this.#assertInitialized();
-    return this.hasBusinessChanges() || this.#local!.migration !== null;
+    return this.hasBusinessChanges();
   }
 
   hasBusinessChanges(): boolean {
@@ -210,25 +213,12 @@ export class SyncSessionState<TPayload, TEvent> {
     if (this.history.dirty) {
       return true;
     }
-    const migration = this.#local!.migration;
-    if (migration) {
-      return migration.businessChanged
-        || this.#local!.contentHash !== migration.migratedContentHash;
-    }
     return this.#local!.contentHash !== this.#local!.lastSyncedContentHash;
-  }
-
-  hasOnlyMigrationChanges(): boolean {
-    this.#assertInitialized();
-    return this.#local!.migration !== null
-      && !this.hasBusinessChanges()
-      && this.#local!.conflict === null;
   }
 
   isContentSynced(): boolean {
     this.#assertInitialized();
-    return this.#local!.contentHash === this.#local!.lastSyncedContentHash
-      && this.#local!.migration === null;
+    return this.#local!.contentHash === this.#local!.lastSyncedContentHash;
   }
 
   async saveCurrent(): Promise<boolean> {
@@ -244,14 +234,6 @@ export class SyncSessionState<TPayload, TEvent> {
       contentHash,
       localRevision: nextLocalRevision,
       localSavedAt: this.#now().toISOString(),
-      migration: local.migration
-        ? {
-            ...local.migration,
-            businessChanged:
-              local.migration.businessChanged
-              || contentHash !== local.migration.migratedContentHash,
-          }
-        : null,
     }));
     this.history.updateBaseline(payload);
     return true;
@@ -296,8 +278,6 @@ export class SyncSessionState<TPayload, TEvent> {
     if (!pending) {
       return;
     }
-    const retainMigration = this.#local!.migration !== null
-      && (remote.schemaVersion ?? null) !== this.#local!.schemaVersion;
 
     await this.#writeLocal((local, nextLocalRevision) => ({
       ...local,
@@ -307,26 +287,13 @@ export class SyncSessionState<TPayload, TEvent> {
       lastSyncedRemoteUpdatedAt: remote.updatedAt ?? pending.updatedAt,
       pendingUpload: null,
       conflict: null,
-      migration: retainMigration ? local.migration : null,
     }));
   }
 
   async recordConflict(remote: ObservedRemoteVersion): Promise<PersistedConflict> {
     const existing = this.#local!.conflict;
     if (existing?.observedRemoteRevision === remote.revision) {
-      const observedRemoteUpdatedAt = remote.updatedAt ?? existing.observedRemoteUpdatedAt;
-      if (existing.observedRemoteUpdatedAt === observedRemoteUpdatedAt) {
-        return structuredClone(existing);
-      }
-
-      const updatedConflict = { ...existing, observedRemoteUpdatedAt };
-      await this.#writeLocal((local, nextLocalRevision) => ({
-        ...local,
-        localRevision: nextLocalRevision,
-        conflict: updatedConflict,
-      }));
-      this.#onConflict?.(structuredClone(updatedConflict));
-      return structuredClone(updatedConflict);
+      return structuredClone(existing);
     }
 
     const conflict: PersistedConflict = {
@@ -387,26 +354,9 @@ export class SyncSessionState<TPayload, TEvent> {
       lastSyncedRemoteUpdatedAt: remote.updatedAt,
       pendingUpload: null,
       conflict: null,
-      migration: prepared.migrated
-        ? this.#createPersistedMigration(prepared, contentHash, false)
-        : null,
-    }));
-    this.#history = this.#createHistory(prepared.payload);
-  }
-
-  async confirmEquivalentRemoteMigration(
-    remote: ObservedRemoteVersion,
-  ): Promise<void> {
-    await this.#writeLocal((local, nextLocalRevision) => ({
-      ...local,
-      localRevision: nextLocalRevision,
-      lastSyncedContentHash: local.contentHash,
-      lastSyncedRemoteRevision: remote.revision,
-      lastSyncedRemoteUpdatedAt: remote.updatedAt,
-      pendingUpload: null,
-      conflict: null,
       migration: null,
     }));
+    this.#history = this.#createHistory(prepared.payload);
   }
 
   close(): void {
@@ -434,28 +384,6 @@ export class SyncSessionState<TPayload, TEvent> {
         ),
       },
     });
-  }
-
-  #createPersistedMigration(
-    prepared: PreparedModulePayload<TPayload>,
-    migratedContentHash: string,
-    businessChanged: boolean,
-  ): PersistedMigration {
-    if (
-      !prepared.migrated
-      || prepared.fromVersion === null
-      || prepared.toVersion === null
-    ) {
-      throw new ModuleMigrationError(
-        "Cannot persist migration metadata for an unchanged payload.",
-      );
-    }
-    return {
-      fromVersion: prepared.fromVersion,
-      toVersion: prepared.toVersion,
-      migratedContentHash,
-      businessChanged,
-    };
   }
 
   async #writeLocal(

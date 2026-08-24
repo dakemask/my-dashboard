@@ -13,6 +13,8 @@ import {
   type RemoteModulePushOptions,
   type RemoteModulePushResult,
   type RemoteModuleRevision,
+  type RemoteModuleSchemaUpdateOptions,
+  type RemoteModuleSchemaUpdateResult,
   type RemoteModuleSnapshot,
   type RemoteRevisionSnapshot,
 } from "./types";
@@ -199,6 +201,111 @@ export class RemoteModuleRepository<T> {
       ...options,
       expectedRevision: current?.revision ?? null,
     });
+  }
+
+  /** Re-encodes only the current cloud snapshot while preserving its logical revision and time. */
+  async updateSchema(
+    data: T,
+    options: RemoteModuleSchemaUpdateOptions,
+  ): Promise<RemoteModuleSchemaUpdateResult> {
+    validateRevisionToken(options.expectedRevision, "expectedRevision", false);
+    validateRemoteSchemaVersion(options.expectedSchemaVersion);
+    validateRemoteSchemaVersion(options.schemaVersion);
+    if (options.schemaVersion <= options.expectedSchemaVersion) {
+      throw new TypeError("schemaVersion must be newer than expectedSchemaVersion.");
+    }
+
+    const encoded = await this.#codec.encode(data);
+    const desiredFiles = validateEncodedFiles(encoded);
+
+    for (let retryCount = 0; retryCount <= this.#maxRefRetries; retryCount += 1) {
+      const head = await this.#loadHead();
+      const actualRevision = head.revision?.revision ?? null;
+      const actualSchemaVersion = head.revision?.schemaVersion ?? null;
+
+      if (actualSchemaVersion === options.schemaVersion && head.revision) {
+        return {
+          ...toRemoteRevisionSnapshot(head.revision, head.snapshot.commitSha),
+          status: "already-current",
+        };
+      }
+
+      if (
+        !head.revision
+        || actualRevision !== options.expectedRevision
+        || actualSchemaVersion !== options.expectedSchemaVersion
+      ) {
+        throw new RemoteModuleConflictError(
+          options.expectedRevision,
+          actualRevision,
+          head.revision?.updatedAt ?? null,
+        );
+      }
+
+      const updatedRevision: RemoteModuleRevision = {
+        ...head.revision,
+        schemaVersion: options.schemaVersion,
+        managedFiles: [...desiredFiles.keys()].sort(compareRemoteModulePaths),
+      };
+      this.#assertUnknownFilesArePreserved(
+        head,
+        desiredFiles,
+        head.revision.managedFiles,
+      );
+      const treeEntries = await this.#createTreeEntries(
+        head,
+        desiredFiles,
+        updatedRevision,
+      );
+      const treeSha = await this.#client.createTree(head.snapshot.treeSha, treeEntries);
+      const commitSha = await this.#client.createCommit(
+        options.message ?? `Migrate ${this.moduleId} schema to ${options.schemaVersion}`,
+        treeSha,
+        head.snapshot.commitSha,
+      );
+
+      try {
+        await this.#client.updateBranchHead(commitSha);
+        return {
+          ...toRemoteRevisionSnapshot(updatedRevision, commitSha),
+          status: "committed",
+        };
+      } catch (error) {
+        if (!isPotentialRefRace(error)) {
+          throw error;
+        }
+
+        let latest: LoadedHead;
+        try {
+          latest = await this.#loadHead();
+        } catch {
+          throw error;
+        }
+        const latestRevision = latest.revision?.revision ?? null;
+        const latestSchemaVersion = latest.revision?.schemaVersion ?? null;
+        if (latestSchemaVersion === options.schemaVersion && latest.revision) {
+          return {
+            ...toRemoteRevisionSnapshot(latest.revision, latest.snapshot.commitSha),
+            status: "already-current",
+          };
+        }
+        if (
+          latestRevision !== options.expectedRevision
+          || latestSchemaVersion !== options.expectedSchemaVersion
+        ) {
+          throw new RemoteModuleConflictError(
+            options.expectedRevision,
+            latestRevision,
+            latest.revision?.updatedAt ?? null,
+          );
+        }
+        if (retryCount >= this.#maxRefRetries) {
+          throw new GitHubRefUpdateRaceError(this.#maxRefRetries);
+        }
+      }
+    }
+
+    throw new GitHubRefUpdateRaceError(this.#maxRefRetries);
   }
 
   async #resolveRefUpdateFailure(

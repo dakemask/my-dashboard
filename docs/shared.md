@@ -59,36 +59,35 @@ Shared 对 payload 使用语义内容键，而不是对象引用或普通序列�
 
 - 当前本地数据：`payload`、`schemaVersion`、`contentHash`、`localRevision` 和本地保存时间。
 - 最近确认的同步基线：已同步内容哈希、远端 revision 和远端更新时间。
-- 可跨刷新恢复的过程状态：`pendingUpload`、`conflict` 和 `migration`。
+- 可跨刷新恢复的过程状态：`pendingUpload` 和 `conflict`。
 
-`SyncSessionState` 是这份记录在当前页面中的唯一状态所有者。它把本地 CAS、历史基线、迁移标记、待确认上传和冲突记录组合成 `SyncCoordinatorSnapshot`。其中几个容易混淆的状态含义如下：
+`SyncSessionState` 是这份记录在当前页面中的唯一状态所有者。它把本地 CAS、历史基线、待确认上传和冲突记录组合成 `SyncCoordinatorSnapshot`。其中几个容易混淆的状态含义如下：
 
 - `sessionDirty`：页面当前 payload 尚未保存到 IndexedDB。
 - `businessChangedSinceSync`：存在未保存业务变化，或已保存 payload 与最近同步内容不同。
-- `migrationChangedSinceSync`：本地已经迁移到当前 schema，但该格式变化尚未在云端确认。
-- `localChangedSinceSync`：前两类待同步变化的合并结果。
+- `localChangedSinceSync`：与 `businessChangedSinceSync` 相同，用于同步决策和界面状态。
 - `pendingUpload`：上传意图已写入本地，但远端结果尚未被确认。
 - `conflict`：本地有变化时观察到了不同的远端 revision；其中保存的是已观察到的远端版本，而不是一份远端 payload。
 
-初始化优先读取现有本地记录。记录存在时会完成迁移和完整性校验；本地模式会先建立空记录，账户 profile 没有记录时才从远端拉取，远端也不存在则使用模块的空 payload。初始化完成后，Shared 建立历史并通过 `project(..., "initialize")` 交给模块页面。
+初始化优先读取现有本地记录。记录存在时会先原子迁移并校验 payload，同时保留最近同步的远端 revision、未上传业务状态和已有冲突。账户模式随后读取云端 revision；云端 schema 较旧时，只从该云端快照生成当前格式并提交，完成后才建立页面历史。账户 profile 没有记录时再拉取已经升级的远端数据，远端也不存在则使用模块的空 payload。全部初始化完成后，Shared 才通过 `project(..., "initialize")` 交给模块页面并开放运行时。
 
 ## 四、远端数据协议与同步决策
 
 每个模块在数据仓库中占用 `data/<moduleId>/`。业务文件由模块 codec 决定；Shared 另外维护 `revision.json`，其中记录逻辑 revision、更新时间、schema 版本和本次受管文件清单。Git commit SHA 表示读取时的仓库快照，逻辑 revision 才是模块同步比较和幂等确认使用的版本标识。
 
-`RemoteModuleRepository` 基于 GitHub Git Data API 读取仓库树并按清单加载模块文件。上传时，它先把业务文件与新 manifest 建成 blobs 和 tree，再创建非强制 commit 并移动分支引用。写入同时使用两层并发判断：模块逻辑 revision 用于判断业务冲突，Git 分支引用用于处理仓库中其他模块或其他写入造成的 head 竞争。
+`RemoteModuleRepository` 基于 GitHub Git Data API 读取仓库树并按清单加载模块文件。业务上传会生成新的逻辑 revision 和更新时间；schema 升级则保留当前云端的逻辑 revision 与更新时间，只更新当前云端快照的格式、schema 版本和受管文件清单。两类写入都使用 Git 分支引用处理仓库 head 竞争；schema 升级还以读取到的 revision 与旧 schema 版本做 compare-and-swap，并发设备中任意一台成功后，其余设备读取到目标版本即可结束。
 
 同步协调器的主要决策顺序是：
 
 1. `save` 先调用 `settle`，把返回事件写入历史，再把当前 payload 原子保存到本地；它不访问云端。
 2. `upload` 先结算并保存页面变化，再核对远端 revision。远端仍是最近同步版本时才执行普通推送；远端已经变化且本地也有变化时记录冲突；远端变化而本地没有变化时直接拉取。
 3. `pull` 先核对远端 revision。本地没有变化时以远端完整替换本地记录并刷新页面；本地也有变化时记录冲突。
-4. 轮询只读取 revision 元数据而不解码业务 payload。它确认自己的待定上传、更新已有冲突，或在无本地变化时触发拉取；持久化操作正忙时本轮观察返回 `busy`。
+4. 轮询只读取 revision 元数据而不解码业务 payload。它确认自己的待定上传、在观察到新 revision 时更新已有冲突，或在无本地变化时触发拉取；持久化操作正忙时本轮观察返回 `busy`。
 5. 冲突只有两个完整数据方向：`local-wins` 以本地 payload 覆盖当前云端版本，`cloud-wins` 以云端 payload 替换本地。Shared 不做字段级合并。
 
 上传开始前会先持久化 `pendingUpload`，其中包含本次内容哈希、将要写入的远端 revision 和时间。即使网络响应丢失，后续上传或轮询仍可通过远端是否出现这个 revision 判断上次提交是否成功；这使上传重试不依赖页面内存。
 
-迁移状态与业务变化分开记录。只有 schema 变化而没有业务编辑时，账户模式会尝试自动发布迁移；如果另一端已经发布了内容等价的当前 schema，Shared 会直接更新同步基线，而不制造冲突或重复提交。
+同步冲突只比较模块的逻辑 revision。schema 升级不产生新的逻辑 revision，也不清理或改写已有冲突；本地和云端已有的业务分歧会在升级后保持原状。
 
 ## 五、账户、profile 与执行隔离
 

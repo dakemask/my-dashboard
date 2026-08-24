@@ -343,14 +343,6 @@ async function bindPreflightedModule<TPayload, TEvent>(
         lastSyncedContentHash: preflight.remote.contentHash,
         lastSyncedRemoteRevision: revision.revision,
         lastSyncedRemoteUpdatedAt: revision.updatedAt,
-        migration: prepared.migrated
-          ? {
-              fromVersion: prepared.fromVersion!,
-              toVersion: prepared.toVersion!,
-              migratedContentHash: preflight.remote.contentHash,
-              businessChanged: false,
-            }
-          : null,
       });
     }
 

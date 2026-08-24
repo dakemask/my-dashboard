@@ -98,9 +98,13 @@ export class SyncCoordinator<T, E> {
         throw new LocalDataIntegrityError();
       }
       await this.#session.openLoaded(local, prepared, contentHash);
-    } else {
-      await this.#operationGate.runCloud(async () => {
-        const remote = await this.#remoteRepository.pull();
+    }
+
+    await this.#operationGate.runCloud(async () => {
+      if (local) {
+        await this.#ensureRemoteSchemaCurrent();
+      } else {
+        const remote = await this.#pullCurrentRemoteSnapshot();
         const prepared = prepareStoredModulePayload(
           this.#definition,
           remote?.data ?? this.#definition.createEmpty(),
@@ -115,8 +119,8 @@ export class SyncCoordinator<T, E> {
           contentHash,
           toObservedRemoteVersion(remote),
         );
-      });
-    }
+      }
+    });
 
     this.#hooks.project(this.history.current, "initialize");
     this.#session.notifyPersistedConflict();
@@ -158,8 +162,7 @@ export class SyncCoordinator<T, E> {
         await this.#saveCurrentInsideGate();
       }
 
-      let observed = await this.#remoteRepository.readRevision();
-      this.#assertRemoteSchemaVersion(observed);
+      let observed = await this.#ensureRemoteSchemaCurrent();
       observed = await this.#reconcilePendingUpload(observed);
 
       const conflict = this.#session.conflict;
@@ -169,9 +172,6 @@ export class SyncCoordinator<T, E> {
 
       if ((observed?.revision ?? null) !== this.#session.lastSyncedRemoteRevision) {
         if (this.#session.hasLocalChanges()) {
-          if (await this.#confirmEquivalentRemoteMigration()) {
-            return "unchanged";
-          }
           await this.#session.recordConflict(toObservedRemoteVersion(observed));
           throw new SyncConflictPendingError(observed?.revision ?? null);
         }
@@ -195,8 +195,7 @@ export class SyncCoordinator<T, E> {
         return "conflict";
       }
 
-      let remote = await this.#remoteRepository.readRevision();
-      this.#assertRemoteSchemaVersion(remote);
+      let remote = await this.#ensureRemoteSchemaCurrent();
       try {
         remote = await this.#reconcilePendingUpload(remote);
       } catch (error) {
@@ -213,9 +212,6 @@ export class SyncCoordinator<T, E> {
 
       await this.#settleAndDispatch("pull");
       if (this.#session.hasLocalChanges()) {
-        if (await this.#confirmEquivalentRemoteMigration()) {
-          return "unchanged";
-        }
         await this.#session.recordConflict(toObservedRemoteVersion(remote));
         return "conflict";
       }
@@ -226,6 +222,7 @@ export class SyncCoordinator<T, E> {
   async resolveConflict(strategy: ConflictResolution): Promise<SyncActionResult> {
     this.#assertInitialized();
     return this.#operationGate.runCloud(async () => {
+      await this.#ensureRemoteSchemaCurrent();
       if (strategy === "cloud-wins") {
         return this.#pullInsideGate();
       }
@@ -247,6 +244,13 @@ export class SyncCoordinator<T, E> {
       return "busy";
     }
 
+    if (this.#needsRemoteSchemaUpdate(observed)) {
+      const current = await this.#operationGate.runCloud(
+        () => this.#ensureRemoteSchemaCurrent(),
+      );
+      return this.handleObservedRemoteRevision(current);
+    }
+
     const remoteRevision = observed?.revision ?? null;
     if (this.#session.pendingUpload?.nextRemoteRevision === remoteRevision) {
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
@@ -259,14 +263,8 @@ export class SyncCoordinator<T, E> {
     if (conflict) {
       const remoteVersion = toObservedRemoteVersion(observed);
       const revisionChanged = conflict.observedRemoteRevision !== remoteVersion.revision;
-      if (
-        revisionChanged
-        || (
-          remoteVersion.updatedAt !== null
-          && conflict.observedRemoteUpdatedAt !== remoteVersion.updatedAt
-        )
-      ) {
-        if (revisionChanged) await this.#settleAndDispatch("remote-change");
+      if (revisionChanged) {
+        await this.#settleAndDispatch("remote-change");
         return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
           await this.#session.recordConflict(remoteVersion);
           return "conflict";
@@ -276,9 +274,6 @@ export class SyncCoordinator<T, E> {
     }
 
     if (remoteRevision === this.#session.lastSyncedRemoteRevision) {
-      if (this.#session.hasOnlyMigrationChanges()) {
-        return this.publishMigrationIfSafe();
-      }
       if (this.#session.needsSyncedRemoteTimestampBackfill(observed)) {
         return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
           await this.#session.backfillSyncedRemoteUpdatedAt(observed);
@@ -290,15 +285,6 @@ export class SyncCoordinator<T, E> {
 
     await this.#settleAndDispatch("remote-change");
     if (this.#session.hasLocalChanges()) {
-      if (this.#session.hasOnlyMigrationChanges()) {
-        return this.#operationGate.runCloud(async (): Promise<SyncActionResult> => {
-          if (await this.#confirmEquivalentRemoteMigration()) {
-            return "unchanged";
-          }
-          await this.#session.recordConflict(toObservedRemoteVersion(observed));
-          return "conflict";
-        });
-      }
       return this.#operationGate.runLocal<SyncActionResult>(async (): Promise<SyncActionResult> => {
         await this.#session.recordConflict(toObservedRemoteVersion(observed));
         return "conflict";
@@ -310,34 +296,6 @@ export class SyncCoordinator<T, E> {
 
   close(): void {
     this.#session.close();
-  }
-
-  /**
-   * Best-effort automatic publication for a pure local schema migration. It
-   * never settles UI state and therefore stops as soon as business edits exist.
-   */
-  async publishMigrationIfSafe(): Promise<SyncActionResult> {
-    this.#assertInitialized();
-    if (!this.#session.hasOnlyMigrationChanges()) {
-      return "unchanged";
-    }
-
-    return this.#operationGate.runCloud(async () => {
-      let observed = await this.#remoteRepository.readRevision();
-      this.#assertRemoteSchemaVersion(observed);
-      observed = await this.#reconcilePendingUpload(observed);
-      if (!this.#session.hasOnlyMigrationChanges()) {
-        return "unchanged";
-      }
-      if ((observed?.revision ?? null) !== this.#session.lastSyncedRemoteRevision) {
-        if (await this.#confirmEquivalentRemoteMigration()) {
-          return "unchanged";
-        }
-        await this.#session.recordConflict(toObservedRemoteVersion(observed));
-        return "conflict";
-      }
-      return this.#pushInsideGate(false);
-    });
   }
 
   async #saveCurrentInsideGate(): Promise<SyncActionResult> {
@@ -374,12 +332,6 @@ export class SyncCoordinator<T, E> {
       return "uploaded";
     } catch (error) {
       if (error instanceof RemoteModuleConflictError) {
-        if (
-          this.#session.hasOnlyMigrationChanges()
-          && await this.#confirmEquivalentRemoteMigration()
-        ) {
-          return "unchanged";
-        }
         await this.#session.recordConflict({
           revision: error.actualRevision,
           updatedAt: error.actualUpdatedAt,
@@ -404,9 +356,6 @@ export class SyncCoordinator<T, E> {
     }
 
     if ((observed?.revision ?? null) !== this.#session.lastSyncedRemoteRevision) {
-      if (this.#session.hasOnlyMigrationChanges()) {
-        return observed;
-      }
       await this.#session.recordConflict(toObservedRemoteVersion(observed));
       throw new SyncConflictPendingError(observed?.revision ?? null);
     }
@@ -416,7 +365,7 @@ export class SyncCoordinator<T, E> {
   }
 
   async #pullInsideGate(): Promise<SyncActionResult> {
-    const remote = await this.#remoteRepository.pull();
+    const remote = await this.#pullCurrentRemoteSnapshot();
     const prepared = prepareStoredModulePayload(
       this.#definition,
       remote?.data ?? this.#definition.createEmpty(),
@@ -433,6 +382,85 @@ export class SyncCoordinator<T, E> {
     );
     this.#hooks.reload();
     return "reloaded";
+  }
+
+  async #pullCurrentRemoteSnapshot() {
+    while (true) {
+      await this.#ensureRemoteSchemaCurrent();
+      const remote = await this.#remoteRepository.pull();
+      this.#assertRemoteSchemaVersion(remote);
+      if (!this.#needsRemoteSchemaUpdate(remote)) {
+        return remote;
+      }
+    }
+  }
+
+  async #ensureRemoteSchemaCurrent(): Promise<RemoteRevisionSnapshot | null> {
+    const policy = this.#definition.migration;
+    if (!policy) {
+      return this.#remoteRepository.readRevision();
+    }
+
+    while (true) {
+      const observed = await this.#remoteRepository.readRevision();
+      this.#assertRemoteSchemaVersion(observed);
+      if (!this.#needsRemoteSchemaUpdate(observed)) {
+        return observed;
+      }
+
+      let sourceRevision = observed!;
+      let sourceData: unknown = this.#definition.createEmpty();
+      if (sourceRevision.managedFiles.length > 0) {
+        const remote = await this.#remoteRepository.pull();
+        if (!remote) {
+          continue;
+        }
+        this.#assertRemoteSchemaVersion(remote);
+        if (!this.#needsRemoteSchemaUpdate(remote)) {
+          return remote;
+        }
+        sourceRevision = remote;
+        sourceData = remote.data;
+      }
+
+      const sourceVersion = sourceRevision.schemaVersion;
+      if (sourceVersion === null || sourceVersion === undefined) {
+        throw new MissingModuleSchemaVersionError("remote");
+      }
+      const prepared = prepareStoredModulePayload(
+        this.#definition,
+        sourceData,
+        sourceVersion,
+        "remote",
+      );
+
+      try {
+        const updated = await this.#remoteRepository.updateSchema(
+          prepared.payload,
+          {
+            expectedRevision: sourceRevision.revision,
+            expectedSchemaVersion: sourceVersion,
+            schemaVersion: policy.currentVersion,
+          },
+        );
+        this.#assertRemoteSchemaVersion(updated);
+        return updated;
+      } catch (error) {
+        if (error instanceof RemoteModuleConflictError) {
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  #needsRemoteSchemaUpdate(
+    observed: RemoteRevisionSnapshot | null,
+  ): boolean {
+    const currentVersion = this.#definition.migration?.currentVersion;
+    return observed !== null
+      && currentVersion !== undefined
+      && observed.schemaVersion !== currentVersion;
   }
 
   #assertRemoteSchemaVersion(observed: RemoteRevisionSnapshot | null): void {
@@ -457,36 +485,6 @@ export class SyncCoordinator<T, E> {
     }
   }
 
-  async #confirmEquivalentRemoteMigration(): Promise<boolean> {
-    if (!this.#session.hasOnlyMigrationChanges()) {
-      return false;
-    }
-
-    const remote = await this.#remoteRepository.pull();
-    const prepared = prepareStoredModulePayload(
-      this.#definition,
-      remote?.data ?? this.#definition.createEmpty(),
-      remote
-        ? remote.schemaVersion ?? null
-        : this.#definition.migration?.currentVersion ?? null,
-      "remote",
-    );
-    // The cloud must already contain the current schema. If it is also old,
-    // another device has not actually published the format upgrade yet.
-    if (prepared.migrated) {
-      return false;
-    }
-    const remoteHash = await hashModulePayload(this.#definition, prepared.payload);
-    if (remoteHash !== this.#session.contentHash) {
-      return false;
-    }
-
-    await this.#session.confirmEquivalentRemoteMigration(
-      toObservedRemoteVersion(remote),
-    );
-    return true;
-  }
-
   async #settleAndDispatch(reason: SettleReason): Promise<void> {
     this.#assertInitialized();
     const pendingEvent = await this.#hooks.settle(reason);
@@ -505,12 +503,11 @@ export class SyncCoordinator<T, E> {
 function toObservedRemoteVersion(
   snapshot: Pick<
     RemoteRevisionSnapshot,
-    "revision" | "updatedAt" | "schemaVersion"
+    "revision" | "updatedAt"
   > | null,
 ): ObservedRemoteVersion {
   return {
     revision: snapshot?.revision ?? null,
     updatedAt: snapshot?.updatedAt ?? null,
-    schemaVersion: snapshot?.schemaVersion ?? null,
   };
 }

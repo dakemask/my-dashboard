@@ -129,10 +129,6 @@ export class DefaultModuleRuntime<TPayload, TEvent>
     return this.#enqueue((coordinator) => coordinator.handleObservedRemoteRevision(revision));
   }
 
-  publishMigrationIfSafe(): Promise<SyncActionResult> {
-    return this.#enqueue((coordinator) => coordinator.publishMigrationIfSafe());
-  }
-
   getSnapshot(): SyncCoordinatorSnapshot {
     return this.#requireReadyCoordinator().getSnapshot();
   }

@@ -185,17 +185,6 @@ export async function startModuleRuntime<TPayload, TEvent>(
     if (poller && environment.autoStartPolling !== false) {
       poller.start();
     }
-    const snapshot = coordinator.getSnapshot();
-    if (
-      mode === "account"
-      && snapshot.migrationChangedSinceSync
-      && !snapshot.businessChangedSinceSync
-      && snapshot.conflict === null
-    ) {
-      pageWindow.setTimeout(() => {
-        void createdRuntime.publishMigrationIfSafe().catch(() => undefined);
-      }, 0);
-    }
     return { status: "ready", initialPayload, runtime: createdRuntime };
   } catch (error) {
     if (runtimeOwnsLifecycle && runtime) {
@@ -224,6 +213,7 @@ function createLocalRemotePort<T>(moduleId: string): RemoteModulePort<T> {
     pull: async () => null,
     push: async () => unavailable(),
     overwrite: async () => unavailable(),
+    updateSchema: async () => unavailable(),
   };
 }
 

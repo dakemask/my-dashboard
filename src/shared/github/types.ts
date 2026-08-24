@@ -87,8 +87,19 @@ export interface RemoteModuleOverwriteOptions {
   message?: string;
 }
 
+export interface RemoteModuleSchemaUpdateOptions {
+  expectedRevision: string;
+  expectedSchemaVersion: number;
+  schemaVersion: number;
+  message?: string;
+}
+
 export interface RemoteModulePushResult extends RemoteRevisionSnapshot {
   status: "committed" | "already-committed";
+}
+
+export interface RemoteModuleSchemaUpdateResult extends RemoteRevisionSnapshot {
+  status: "committed" | "already-current";
 }
 
 export class GitHubApiError extends Error {

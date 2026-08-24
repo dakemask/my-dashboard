@@ -57,7 +57,6 @@ const EMPTY_SNAPSHOT: ModuleRuntimeSnapshot = {
   sessionDirty: false,
   localChangedSinceSync: false,
   businessChangedSinceSync: false,
-  migrationChangedSinceSync: false,
   localSavedAt: null,
   knownRemoteRevision: null,
   knownRemoteUpdatedAt: null,
