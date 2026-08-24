@@ -49,8 +49,8 @@ Agent 须根据该文档（`AGENTS.md`）的路由，在对应的节点阅读所
 - 需要更新持久化模块 schema 时，依次读取 `docs/shared-for-modules.md`、对应的 `docs/<module-id>.md` 和 `docs/schema-updates.md`。之后按照 `docs/schema-updates.md` 指引更新相关文档。
 - 修改 shared 自身时，先读取 `docs/shared-for-modules.md`，然后读取 `docs/shared.md`。按需更新 `docs/shared.md` 文档、`docs/shared-for-modules.md` 文档、`docs/persistent-module-integration.md` 文档和 `docs/schema-updates.md` 文档。
 
-- 更新文档前，请读取 `docs/documentation-maintenance.md`。
-- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `docs/documentation-system.md`，然后读取 `docs/documentation-maintenance.md`。
+- 更新文档前，请读取 `docs/documentation-maintenance.md`，该文档应在代码完成后读取。
+- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `docs/documentation-system.md`，然后读取 `docs/documentation-maintenance.md`，这些文档应在代码完成后读取。
 
 - 创建新模块或其他情况有需要修改 UI、样式或交互时，读取并遵守 `docs/ui-guidelines.md`。
 
