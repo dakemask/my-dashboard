@@ -126,6 +126,10 @@ export class DefaultModuleRuntime<TPayload, TEvent>
   observeRemoteRevision(
     revision: RemoteRevisionSnapshot | null,
   ): Promise<SyncActionResult> {
+    this.#requireReadyCoordinator();
+    if (this.#queuedCommands > 0 || this.#operationGate!.busy) {
+      return Promise.resolve("busy");
+    }
     return this.#enqueue((coordinator) => coordinator.handleObservedRemoteRevision(revision));
   }
 

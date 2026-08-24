@@ -175,7 +175,7 @@ export class SyncCoordinator<T, E> {
           await this.#session.recordConflict(toObservedRemoteVersion(observed));
           throw new SyncConflictPendingError(observed?.revision ?? null);
         }
-        return this.#pullInsideGate();
+        return this.#pullInsideGate(true);
       }
 
       await this.#session.backfillSyncedRemoteUpdatedAt(observed);
@@ -215,16 +215,16 @@ export class SyncCoordinator<T, E> {
         await this.#session.recordConflict(toObservedRemoteVersion(remote));
         return "conflict";
       }
-      return this.#pullInsideGate();
+      return this.#pullInsideGate(true);
     });
   }
 
   async resolveConflict(strategy: ConflictResolution): Promise<SyncActionResult> {
     this.#assertInitialized();
     return this.#operationGate.runCloud(async () => {
-      await this.#ensureRemoteSchemaCurrent();
       if (strategy === "cloud-wins") {
-        return this.#pullInsideGate();
+        await this.#ensureRemoteSchemaCurrent();
+        return this.#pullInsideGate(true);
       }
 
       await this.#settleAndDispatch("upload");
@@ -246,7 +246,7 @@ export class SyncCoordinator<T, E> {
 
     if (this.#needsRemoteSchemaUpdate(observed)) {
       const current = await this.#operationGate.runCloud(
-        () => this.#ensureRemoteSchemaCurrent(),
+        () => this.#ensureRemoteSchemaCurrent(observed),
       );
       return this.handleObservedRemoteRevision(current);
     }
@@ -291,7 +291,7 @@ export class SyncCoordinator<T, E> {
       });
     }
 
-    return this.#operationGate.runCloud(() => this.#pullInsideGate());
+    return this.#operationGate.runCloud(() => this.#pullInsideGate(true));
   }
 
   close(): void {
@@ -364,8 +364,10 @@ export class SyncCoordinator<T, E> {
     return observed;
   }
 
-  async #pullInsideGate(): Promise<SyncActionResult> {
-    const remote = await this.#pullCurrentRemoteSnapshot();
+  async #pullInsideGate(
+    remoteSchemaChecked = false,
+  ): Promise<SyncActionResult> {
+    const remote = await this.#pullCurrentRemoteSnapshot(remoteSchemaChecked);
     const prepared = prepareStoredModulePayload(
       this.#definition,
       remote?.data ?? this.#definition.createEmpty(),
@@ -384,25 +386,34 @@ export class SyncCoordinator<T, E> {
     return "reloaded";
   }
 
-  async #pullCurrentRemoteSnapshot() {
+  async #pullCurrentRemoteSnapshot(remoteSchemaChecked = false) {
     while (true) {
-      await this.#ensureRemoteSchemaCurrent();
+      if (!remoteSchemaChecked) {
+        await this.#ensureRemoteSchemaCurrent();
+      }
       const remote = await this.#remoteRepository.pull();
       this.#assertRemoteSchemaVersion(remote);
       if (!this.#needsRemoteSchemaUpdate(remote)) {
         return remote;
       }
+      remoteSchemaChecked = false;
     }
   }
 
-  async #ensureRemoteSchemaCurrent(): Promise<RemoteRevisionSnapshot | null> {
+  async #ensureRemoteSchemaCurrent(
+    initialObserved?: RemoteRevisionSnapshot | null,
+  ): Promise<RemoteRevisionSnapshot | null> {
     const policy = this.#definition.migration;
     if (!policy) {
-      return this.#remoteRepository.readRevision();
+      return initialObserved === undefined
+        ? this.#remoteRepository.readRevision()
+        : initialObserved;
     }
 
+    let observed = initialObserved === undefined
+      ? await this.#remoteRepository.readRevision()
+      : initialObserved;
     while (true) {
-      const observed = await this.#remoteRepository.readRevision();
       this.#assertRemoteSchemaVersion(observed);
       if (!this.#needsRemoteSchemaUpdate(observed)) {
         return observed;
@@ -447,6 +458,7 @@ export class SyncCoordinator<T, E> {
         return updated;
       } catch (error) {
         if (error instanceof RemoteModuleConflictError) {
+          observed = await this.#remoteRepository.readRevision();
           continue;
         }
         throw error;
