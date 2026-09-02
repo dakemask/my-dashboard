@@ -37,25 +37,44 @@ Agent 可进行的修改当前限制在以下内容中：
 
 # 开发流程
 
-Agent 须根据该文档（`AGENTS.md`）的路由，在对应的节点阅读所需的文档；开发完成后，运行构建 `npm run build`。正常构建后依据 `AGENTS.md` 的说明和具体的开发内容，按需更新对应的文档。最后将修改提交到 Git。没有用户的要求，默认不做其他测试。即使测试，用于测试的文件也默认不保留。
+Agent 须根据该文档（`AGENTS.md`）的路由，按需阅读所需的文档与代码；了解完所需信息后进行开发；开发完成后，按需进行构建、复核与测试。然后依据 `AGENTS.md` 的说明和具体的开发内容，按需更新对应的文档。
 
-# 文档路由与文档更新范围
+# 文档路由
 
-- 需要修改非持久化模块时，读取对应的 `docs/<module-id>.md`。按需更新对应 `docs/<module-id>.md` 文档。
-- 需要普通修改持久化模块时，先读取 `docs/shared-for-modules.md`，然后读取对应的 `docs/<module-id>.md`。按需更新对应 `docs/<module-id>.md` 文档。
-- 需要修改首页时，读取 `docs/home.md`。按需更新 `docs/home.md` 文档。
-- 需要新增非持久化模块时，读取 `docs/module-integration.md`。之后按照 `docs/module-integration.md` 指引更新相关文档，并创建对应 `docs/<module-id>.md` 文档。
-- 需要新增持久化模块时，依次读取 `docs/shared-for-modules.md` 和 `docs/persistent-module-integration.md`。之后按照 `docs/persistent-module-integration.md` 指引更新相关文档，并创建对应 `docs/<module-id>.md` 文档。
-- 需要更新持久化模块 schema 时，依次读取 `docs/shared-for-modules.md`、对应的 `docs/<module-id>.md` 和 `docs/schema-updates.md`。之后按照 `docs/schema-updates.md` 指引更新相关文档。
-- 修改 shared 自身时，先读取 `docs/shared-for-modules.md`，然后读取 `docs/shared.md`。按需更新 `docs/shared.md` 文档、`docs/shared-for-modules.md` 文档、`docs/persistent-module-integration.md` 文档和 `docs/schema-updates.md` 文档。
+按照以下的说明，自行读取相关文档。
 
-- 更新文档前，请读取 `docs/documentation-maintenance.md`，该文档应在代码完成后读取。
-- 修改与代码非直接相关的约束内容或重构文档系统前，请读取 `docs/documentation-system.md`，然后读取 `docs/documentation-maintenance.md`，这些文档应在代码完成后读取。
+## 模块文档
 
-- 创建新模块或其他情况有需要修改 UI、样式或交互时，读取并遵守 `docs/ui-guidelines.md`。
+- `docs/shared-for-modules.md`：修改和创建持久化模块时需要了解的信息。为那些需要修改持久化模块而又无需修改底层 shared 的需求提供轻量说明。
 
-- 每次开发流程前，查看 `docs/special-development-notes.md`。（此文档的内容依开发环境和开发者的偏好而不同，可能不存在或内容为空）
+- `docs/<module-id>.md`：修改对应模块时需要了解的信息。
 
-- 每次开发流程前，查看 `docs/universal-constraint.md`。
+- `docs/shared.md`：修改底层 shared 本身时需要了解的信息。阅读前需要先阅读 `shared-for-modules.md`。
 
-**改动涉及多个目标时，取各目标路由文档的并集，并先读 `docs/shared-for-modules.md`。**
+- `docs/home.md`：修改首页时需要了解的信息。
+
+## 任务文档
+
+- `docs/module-integration.md`：以步骤形式指引 Agent 完成非持久化新模块的创建和接入。
+
+- `docs/persistent-module-integration.md`：以步骤形式指引 Agent 完成持久化新模块的创建和接入。
+
+- `docs/schema-updates.md`：以步骤形式指引 Agent 完成涉及 schema 变动的持久化模块修改。
+
+## 元文档
+
+- `docs/documentation-maintenance.md`：介绍更新文档信息时需要了解的方法论与约束。在代码改动完毕后，更新文档前读取。
+
+- `docs/documentation-system.md`：介绍修改约束文档、重构文档体系时需要了解的方法论与约束。非这两点需求，不进行读取。
+
+## 其他文档
+
+- `docs/ui-guidelines.md`：介绍 UI 设计的方法论与约束。
+
+- `docs/special-development-notes.md`：介绍 Agent 执行指令、使用工具时的技巧。（此文档的内容依开发环境和开发者的偏好而不同，可能不存在或内容为空）
+
+# 文档更新
+
+每次文档更新前，必须读取 `docs/documentation-maintenance.md`。
+
+只更新阅读过的文档。一般只更新模块文档与任务文档。是否更新需在阅读过 `docs/documentation-maintenance.md` 后做出决定。
